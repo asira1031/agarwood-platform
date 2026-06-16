@@ -2,11 +2,14 @@
 
 import { useMemo, useState } from "react";
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "registerOtp" | "forgot" | "forgotOtp" | "reset";
 
 export default function LoginPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
+
+  const [registerEmail, setRegisterEmail] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
 
   const eyeMove = useMemo(() => {
     const x = Math.max(-4, Math.min(4, mouse.x / 95));
@@ -23,9 +26,11 @@ export default function LoginPage() {
     });
   }
 
+  const isRightMode = mode !== "login";
+
   return (
     <main className="page" onMouseMove={handleMouseMove}>
-      <section className={`shell ${mode === "register" ? "registerMode" : ""}`}>
+      <section className={`shell ${isRightMode ? "registerMode" : ""}`}>
         <div className="world">
           <div className="badge">🌿 AGARWOOD PLATFORM</div>
 
@@ -90,16 +95,16 @@ export default function LoginPage() {
             <p className="sub">Login to enter your agarwood ownership portal.</p>
 
             <label>Email address</label>
-            <input type="email" defaultValue="jans103174@gmail.com" />
+            <input type="email" placeholder="you@email.com" />
 
             <label>Password</label>
-            <input type="password" defaultValue="123456" />
+            <input type="password" placeholder="Your password" />
 
             <button className="primary">Login</button>
 
             <div className="cardLinks">
               <button onClick={() => setMode("register")}>Create account</button>
-              <button>Forgot password?</button>
+              <button onClick={() => setMode("forgot")}>Forgot password?</button>
             </div>
 
             <div className="trustBox">
@@ -114,16 +119,18 @@ export default function LoginPage() {
           <div className={`card registerCard ${mode === "register" ? "show" : "hideRight"}`}>
             <p className="kicker">JOIN THE FOREST</p>
             <h2>Create account</h2>
-            <p className="sub">Begin your verified agarwood ownership experience.</p>
+            <p className="sub">Email verification is required before account access.</p>
 
             <label>Full name</label>
             <input type="text" placeholder="Your full name" />
 
             <label>Email address</label>
-            <input type="email" placeholder="you@email.com" />
-
-            <label>Phone number</label>
-            <input type="text" placeholder="+63" />
+            <input
+              type="email"
+              placeholder="you@email.com"
+              value={registerEmail}
+              onChange={(e) => setRegisterEmail(e.target.value)}
+            />
 
             <label>Password</label>
             <input type="password" placeholder="Create password" />
@@ -131,7 +138,99 @@ export default function LoginPage() {
             <label>Confirm password</label>
             <input type="password" placeholder="Confirm password" />
 
-            <button className="primary">Create Account</button>
+            <button className="primary" onClick={() => setMode("registerOtp")}>
+              Send Email OTP
+            </button>
+
+            <button className="backButton" onClick={() => setMode("login")}>
+              Back to Login
+            </button>
+          </div>
+
+          <div className={`card otpCard ${mode === "registerOtp" ? "show" : "hideRight"}`}>
+            <p className="kicker">EMAIL OTP</p>
+            <h2>Verify email</h2>
+            <p className="sub">
+              Enter the OTP sent to your email to continue registration.
+            </p>
+
+            <div className="notice">{registerEmail || "your email address"}</div>
+
+            <label>OTP Code</label>
+            <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+
+            <button className="primary">Verify & Create Account</button>
+
+            <button className="backButton" onClick={() => setMode("register")}>
+              Back to Register
+            </button>
+          </div>
+
+          <div className={`card forgotCard ${mode === "forgot" ? "show" : "hideRight"}`}>
+            <p className="kicker">ACCOUNT RECOVERY</p>
+            <h2>Forgot password</h2>
+            <p className="sub">
+              Enter your registered email. Password reset requires email OTP.
+            </p>
+
+            <label>Email address</label>
+            <input
+              type="email"
+              placeholder="you@email.com"
+              value={forgotEmail}
+              onChange={(e) => setForgotEmail(e.target.value)}
+            />
+
+            <button className="primary" onClick={() => setMode("forgotOtp")}>
+              Send Reset OTP
+            </button>
+
+            <button className="backButton" onClick={() => setMode("login")}>
+              Back to Login
+            </button>
+
+            <div className="trustBox small">
+              <strong>PHONE SECURITY</strong>
+              <p>
+                Phone reset will only be allowed after phone verification inside
+                Account Settings.
+              </p>
+            </div>
+          </div>
+
+          <div className={`card otpCard ${mode === "forgotOtp" ? "show" : "hideRight"}`}>
+            <p className="kicker">RESET OTP</p>
+            <h2>Verify reset</h2>
+            <p className="sub">
+              Enter the OTP sent to your registered email.
+            </p>
+
+            <div className="notice">{forgotEmail || "registered email address"}</div>
+
+            <label>OTP Code</label>
+            <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+
+            <button className="primary" onClick={() => setMode("reset")}>
+              Verify OTP
+            </button>
+
+            <button className="backButton" onClick={() => setMode("forgot")}>
+              Back
+            </button>
+          </div>
+
+          <div className={`card resetCard ${mode === "reset" ? "show" : "hideRight"}`}>
+            <p className="kicker">NEW PASSWORD</p>
+            <h2>Reset password</h2>
+            <p className="sub">Create a new password for your account.</p>
+
+            <label>New password</label>
+            <input type="password" placeholder="New password" />
+
+            <label>Confirm new password</label>
+            <input type="password" placeholder="Confirm new password" />
+
+            <button className="primary">Save New Password</button>
 
             <button className="backButton" onClick={() => setMode("login")}>
               Back to Login
@@ -194,6 +293,8 @@ export default function LoginPage() {
           font-weight: 900;
           letter-spacing: 0.5px;
           box-shadow: 0 10px 25px rgba(67, 94, 34, 0.12);
+          max-width: 100%;
+          overflow-wrap: break-word;
         }
 
         .copy {
@@ -209,6 +310,7 @@ export default function LoginPage() {
           font-size: clamp(48px, 6vw, 76px);
           line-height: 0.92;
           letter-spacing: -4px;
+          overflow-wrap: break-word;
         }
 
         .copy p {
@@ -217,6 +319,7 @@ export default function LoginPage() {
           line-height: 1.65;
           max-width: 520px;
           margin-top: 24px;
+          overflow-wrap: break-word;
         }
 
         .sun {
@@ -471,6 +574,7 @@ export default function LoginPage() {
           transition:
             transform 850ms cubic-bezier(0.22, 1, 0.36, 1),
             opacity 650ms ease;
+          overflow: hidden;
         }
 
         .show {
@@ -497,6 +601,7 @@ export default function LoginPage() {
           font-size: 13px;
           font-weight: 900;
           letter-spacing: 5px;
+          overflow-wrap: break-word;
         }
 
         h2 {
@@ -504,6 +609,7 @@ export default function LoginPage() {
           color: #153f19;
           font-size: 34px;
           letter-spacing: -1px;
+          overflow-wrap: break-word;
         }
 
         .sub {
@@ -511,6 +617,7 @@ export default function LoginPage() {
           font-size: 14px;
           margin: 12px 0 24px;
           line-height: 1.5;
+          overflow-wrap: break-word;
         }
 
         label {
@@ -519,6 +626,7 @@ export default function LoginPage() {
           font-size: 13px;
           font-weight: 900;
           margin: 14px 0 7px;
+          overflow-wrap: break-word;
         }
 
         input {
@@ -531,6 +639,8 @@ export default function LoginPage() {
           color: #183c19;
           font-size: 14px;
           outline: none;
+          min-width: 0;
+          text-overflow: ellipsis;
         }
 
         input:focus {
@@ -540,7 +650,7 @@ export default function LoginPage() {
 
         .primary {
           width: 100%;
-          height: 54px;
+          min-height: 54px;
           margin-top: 20px;
           border: 0;
           border-radius: 16px;
@@ -551,6 +661,8 @@ export default function LoginPage() {
           cursor: pointer;
           box-shadow: 0 12px 22px rgba(22, 75, 25, 0.24);
           transition: 250ms ease;
+          padding: 0 14px;
+          overflow-wrap: break-word;
         }
 
         .primary:hover {
@@ -562,6 +674,7 @@ export default function LoginPage() {
           display: flex;
           align-items: center;
           justify-content: space-between;
+          gap: 12px;
           margin: 18px 0 26px;
         }
 
@@ -572,20 +685,28 @@ export default function LoginPage() {
           color: #54733a;
           font-weight: 900;
           cursor: pointer;
+          overflow-wrap: break-word;
         }
 
         .backButton {
           width: 100%;
-          height: 42px;
+          min-height: 42px;
           margin-top: 12px;
         }
 
-        .trustBox {
+        .trustBox,
+        .notice {
           background: rgba(255, 250, 230, 0.84);
           border-radius: 22px;
           padding: 18px;
           color: #69775f;
           font-size: 13px;
+          overflow-wrap: break-word;
+          word-break: break-word;
+        }
+
+        .trustBox.small {
+          margin-top: 18px;
         }
 
         .trustBox strong {
@@ -597,6 +718,12 @@ export default function LoginPage() {
         .trustBox p {
           margin: 8px 0 0;
           line-height: 1.5;
+        }
+
+        .notice {
+          margin: 16px 0 20px;
+          color: #264b22;
+          font-weight: 900;
         }
 
         .registerCard {
@@ -775,6 +902,11 @@ export default function LoginPage() {
 
           .registerCard input {
             height: 44px;
+          }
+
+          .cardLinks {
+            flex-direction: column;
+            align-items: flex-start;
           }
         }
       `}</style>
