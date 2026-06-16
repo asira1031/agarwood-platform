@@ -9,7 +9,9 @@ export default function LoginPage() {
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
 
   const [registerEmail, setRegisterEmail] = useState("");
-  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotIdentity, setForgotIdentity] = useState("");
+  const [forgotNotice, setForgotNotice] = useState("");
+  const [otpNotice, setOtpNotice] = useState("");
 
   const eyeMove = useMemo(() => {
     const x = Math.max(-4, Math.min(4, mouse.x / 95));
@@ -24,6 +26,42 @@ export default function LoginPage() {
       x: e.clientX - rect.left - rect.width / 2,
       y: e.clientY - rect.top - rect.height / 2,
     });
+  }
+
+  function go(nextMode: Mode) {
+    setForgotNotice("");
+    setOtpNotice("");
+    setMode(nextMode);
+  }
+
+  function handleForgotRequest() {
+    const value = forgotIdentity.trim();
+
+    if (!value) {
+      setForgotNotice("Please enter your email or phone number.");
+      return;
+    }
+
+    const isEmail = value.includes("@");
+    const isPhone = /^[0-9+ ]+$/.test(value);
+
+    if (isEmail) {
+      if (!value.includes(".") || value.length < 6) {
+        setForgotNotice("Email address is not registered.");
+        return;
+      }
+
+      setForgotNotice("");
+      setMode("forgotOtp");
+      return;
+    }
+
+    if (isPhone) {
+      setForgotNotice("Phone number is not verified. Please use your registered email.");
+      return;
+    }
+
+    setForgotNotice("Email or phone number is not registered.");
   }
 
   const isRightMode = mode !== "login";
@@ -89,157 +127,191 @@ export default function LoginPage() {
         </div>
 
         <div className="cards">
-          <div className={`card loginCard ${mode === "login" ? "show" : "hideLeft"}`}>
-            <p className="kicker">SECURE ACCESS</p>
-            <h2>Welcome back</h2>
-            <p className="sub">Login to enter your agarwood ownership portal.</p>
+          {mode === "login" && (
+            <div className="card show">
+              <p className="kicker">SECURE ACCESS</p>
+              <h2>Welcome back</h2>
+              <p className="sub">Login to enter your agarwood ownership portal.</p>
 
-            <label>Email address</label>
-            <input type="email" placeholder="you@email.com" />
+              <label>Email address</label>
+              <input type="email" placeholder="you@email.com" />
 
-            <label>Password</label>
-            <input type="password" placeholder="Your password" />
+              <label>Password</label>
+              <input type="password" placeholder="Your password" />
 
-            <button className="primary">Login</button>
+              <button className="primary">Login</button>
 
-            <div className="cardLinks">
-              <button onClick={() => setMode("register")}>Create account</button>
-              <button onClick={() => setMode("forgot")}>Forgot password?</button>
+              <div className="cardLinks">
+                <button onClick={() => go("register")}>Create account</button>
+                <button onClick={() => go("forgot")}>Forgot password?</button>
+              </div>
+
+              <div className="trustBox">
+                <strong>TRUST FIRST</strong>
+                <p>
+                  Ownership access requires verified identity and active membership
+                  before portfolio actions are enabled.
+                </p>
+              </div>
             </div>
+          )}
 
-            <div className="trustBox">
-              <strong>TRUST FIRST</strong>
-              <p>
-                Ownership access requires verified identity and active membership
-                before portfolio actions are enabled.
+          {mode === "register" && (
+            <div className="card show">
+              <p className="kicker">JOIN THE FOREST</p>
+              <h2>Create account</h2>
+              <p className="sub">Email verification is required before account access.</p>
+
+              <label>Full name</label>
+              <input type="text" placeholder="Your full name" />
+
+              <label>Email address</label>
+              <input
+                type="email"
+                placeholder="you@email.com"
+                value={registerEmail}
+                onChange={(e) => setRegisterEmail(e.target.value)}
+              />
+
+              <label>Password</label>
+              <input type="password" placeholder="Create password" />
+
+              <label>Confirm password</label>
+              <input type="password" placeholder="Confirm password" />
+
+              <button className="primary" onClick={() => go("registerOtp")}>
+                Send Email OTP
+              </button>
+
+              <button className="backButton" onClick={() => go("login")}>
+                Back to Login
+              </button>
+            </div>
+          )}
+
+          {mode === "registerOtp" && (
+            <div className="card show">
+              <p className="kicker">EMAIL OTP</p>
+              <h2>Verify email</h2>
+              <p className="sub">Enter the OTP sent to your email to continue registration.</p>
+
+              <div className="notice info">{registerEmail || "your email address"}</div>
+
+              <label>OTP Code</label>
+              <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+
+              <button
+                className="primary"
+                onClick={() => setOtpNotice("Invalid OTP. Please try again.")}
+              >
+                Verify & Create Account
+              </button>
+
+              {otpNotice && <div className="notice error">{otpNotice}</div>}
+
+              <button className="backButton" onClick={() => go("register")}>
+                Back to Register
+              </button>
+            </div>
+          )}
+
+          {mode === "forgot" && (
+            <div className="card show">
+              <p className="kicker">ACCOUNT RECOVERY</p>
+              <h2>Forgot password</h2>
+              <p className="sub">
+                Enter your registered email or verified phone number to receive an OTP.
               </p>
+
+              <label>Email or phone number</label>
+              <input
+                type="text"
+                placeholder="you@email.com or +63 phone number"
+                value={forgotIdentity}
+                onChange={(e) => {
+                  setForgotIdentity(e.target.value);
+                  setForgotNotice("");
+                }}
+              />
+
+              {forgotNotice && <div className="notice error">{forgotNotice}</div>}
+
+              <button className="primary" onClick={handleForgotRequest}>
+                Send Reset OTP
+              </button>
+
+              <button className="backButton" onClick={() => go("login")}>
+                Back to Login
+              </button>
+
+              <div className="trustBox small">
+                <strong>TRUST & SECURITY</strong>
+                <p>
+                  Your ownership portfolio, memberships, and tree records are protected
+                  through multi-step account verification.
+                </p>
+                <p>
+                  Recovery options become available based on your verified account information.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className={`card registerCard ${mode === "register" ? "show" : "hideRight"}`}>
-            <p className="kicker">JOIN THE FOREST</p>
-            <h2>Create account</h2>
-            <p className="sub">Email verification is required before account access.</p>
+          {mode === "forgotOtp" && (
+            <div className="card show">
+              <p className="kicker">RESET OTP</p>
+              <h2>Verify reset</h2>
+              <p className="sub">Enter the OTP sent to your registered recovery method.</p>
 
-            <label>Full name</label>
-            <input type="text" placeholder="Your full name" />
+              <div className="notice info">
+                {forgotIdentity || "registered email or phone number"}
+              </div>
 
-            <label>Email address</label>
-            <input
-              type="email"
-              placeholder="you@email.com"
-              value={registerEmail}
-              onChange={(e) => setRegisterEmail(e.target.value)}
-            />
+              <label>OTP Code</label>
+              <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
 
-            <label>Password</label>
-            <input type="password" placeholder="Create password" />
+              <button className="primary" onClick={() => go("reset")}>
+                Verify OTP
+              </button>
 
-            <label>Confirm password</label>
-            <input type="password" placeholder="Confirm password" />
+              <button
+                className="backButton"
+                onClick={() => setOtpNotice("Invalid OTP. Please try again.")}
+              >
+                Test Wrong OTP
+              </button>
 
-            <button className="primary" onClick={() => setMode("registerOtp")}>
-              Send Email OTP
-            </button>
+              {otpNotice && <div className="notice error">{otpNotice}</div>}
 
-            <button className="backButton" onClick={() => setMode("login")}>
-              Back to Login
-            </button>
-          </div>
-
-          <div className={`card otpCard ${mode === "registerOtp" ? "show" : "hideRight"}`}>
-            <p className="kicker">EMAIL OTP</p>
-            <h2>Verify email</h2>
-            <p className="sub">
-              Enter the OTP sent to your email to continue registration.
-            </p>
-
-            <div className="notice">{registerEmail || "your email address"}</div>
-
-            <label>OTP Code</label>
-            <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
-
-            <button className="primary">Verify & Create Account</button>
-
-            <button className="backButton" onClick={() => setMode("register")}>
-              Back to Register
-            </button>
-          </div>
-
-          <div className={`card forgotCard ${mode === "forgot" ? "show" : "hideRight"}`}>
-            <p className="kicker">ACCOUNT RECOVERY</p>
-            <h2>Forgot password</h2>
-            <p className="sub">
-              Enter your registered email. Password reset requires email OTP.
-            </p>
-
-            <label>Email address</label>
-            <input
-              type="email"
-              placeholder="you@email.com"
-              value={forgotEmail}
-              onChange={(e) => setForgotEmail(e.target.value)}
-            />
-
-            <button className="primary" onClick={() => setMode("forgotOtp")}>
-              Send Reset OTP
-            </button>
-
-            <button className="backButton" onClick={() => setMode("login")}>
-              Back to Login
-            </button>
-
-            <div className="trustBox small">
-              <strong>PHONE SECURITY</strong>
-              <p>
-                Phone reset will only be allowed after phone verification inside
-                Account Settings.
-              </p>
+              <button className="backButton" onClick={() => go("forgot")}>
+                Back
+              </button>
             </div>
-          </div>
+          )}
 
-          <div className={`card otpCard ${mode === "forgotOtp" ? "show" : "hideRight"}`}>
-            <p className="kicker">RESET OTP</p>
-            <h2>Verify reset</h2>
-            <p className="sub">
-              Enter the OTP sent to your registered email.
-            </p>
+          {mode === "reset" && (
+            <div className="card show">
+              <p className="kicker">NEW PASSWORD</p>
+              <h2>Reset password</h2>
+              <p className="sub">Create a new password for your account.</p>
 
-            <div className="notice">{forgotEmail || "registered email address"}</div>
+              <label>New password</label>
+              <input type="password" placeholder="New password" />
 
-            <label>OTP Code</label>
-            <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+              <label>Confirm new password</label>
+              <input type="password" placeholder="Confirm new password" />
 
-            <button className="primary" onClick={() => setMode("reset")}>
-              Verify OTP
-            </button>
+              <button className="primary">Save New Password</button>
 
-            <button className="backButton" onClick={() => setMode("forgot")}>
-              Back
-            </button>
-          </div>
-
-          <div className={`card resetCard ${mode === "reset" ? "show" : "hideRight"}`}>
-            <p className="kicker">NEW PASSWORD</p>
-            <h2>Reset password</h2>
-            <p className="sub">Create a new password for your account.</p>
-
-            <label>New password</label>
-            <input type="password" placeholder="New password" />
-
-            <label>Confirm new password</label>
-            <input type="password" placeholder="Confirm new password" />
-
-            <button className="primary">Save New Password</button>
-
-            <button className="backButton" onClick={() => setMode("login")}>
-              Back to Login
-            </button>
-          </div>
+              <button className="backButton" onClick={() => go("login")}>
+                Back to Login
+              </button>
+            </div>
+          )}
         </div>
       </section>
 
-      <style jsx>{`
+      <style>{`
         .page {
           min-height: 100vh;
           background:
@@ -571,28 +643,14 @@ export default function LoginPage() {
           border: 1px solid rgba(255, 255, 255, 0.8);
           box-shadow: 0 28px 70px rgba(24, 75, 26, 0.22);
           padding: 34px 36px;
-          transition:
-            transform 850ms cubic-bezier(0.22, 1, 0.36, 1),
-            opacity 650ms ease;
           overflow: hidden;
+          animation: cardIn 520ms cubic-bezier(0.22, 1, 0.36, 1);
         }
 
         .show {
           opacity: 1;
           transform: translateX(0) scale(1);
           pointer-events: auto;
-        }
-
-        .hideLeft {
-          opacity: 0;
-          transform: translateX(-145px) scale(0.96);
-          pointer-events: none;
-        }
-
-        .hideRight {
-          opacity: 0;
-          transform: translateX(155px) scale(0.97);
-          pointer-events: none;
         }
 
         .kicker {
@@ -726,25 +784,29 @@ export default function LoginPage() {
           font-weight: 900;
         }
 
-        .registerCard {
-          padding-top: 30px;
+        .notice.info {
+          background: rgba(255, 250, 230, 0.84);
+          color: #264b22;
         }
 
-        .registerCard input {
-          height: 46px;
+        .notice.error {
+          background: rgba(255, 233, 225, 0.92);
+          color: #9a3412;
         }
 
-        .registerCard label {
-          margin-top: 10px;
-        }
-
-        .registerCard .primary {
-          margin-top: 18px;
+        @keyframes cardIn {
+          from {
+            opacity: 0;
+            transform: translateX(60px) scale(0.97);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+          }
         }
 
         @keyframes sunFloat {
-          0%,
-          100% {
+          0%, 100% {
             transform: translateY(0);
           }
 
@@ -754,8 +816,7 @@ export default function LoginPage() {
         }
 
         @keyframes leafFloat {
-          0%,
-          100% {
+          0%, 100% {
             transform: translateY(0) rotate(-8deg);
           }
 
@@ -765,8 +826,7 @@ export default function LoginPage() {
         }
 
         @keyframes twinkle {
-          0%,
-          100% {
+          0%, 100% {
             opacity: 0.35;
             transform: scale(0.9);
           }
@@ -898,10 +958,6 @@ export default function LoginPage() {
 
           input {
             height: 48px;
-          }
-
-          .registerCard input {
-            height: 44px;
           }
 
           .cardLinks {
