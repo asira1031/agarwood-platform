@@ -1,23 +1,50 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 type Mode = "login" | "register" | "registerOtp" | "forgot" | "forgotOtp" | "reset";
+type Notice = { type: "success" | "error" | "info"; text: string } | null;
 
 export default function LoginPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
+  const [notice, setNotice] = useState<Notice>(null);
+  const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
 
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  const [fullName, setFullName] = useState("");
   const [registerEmail, setRegisterEmail] = useState("");
+  const [registerPhone, setRegisterPhone] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [registerOtp, setRegisterOtp] = useState("");
+
   const [forgotIdentity, setForgotIdentity] = useState("");
-  const [forgotNotice, setForgotNotice] = useState("");
-  const [otpNotice, setOtpNotice] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [otpVerified, setOtpVerified] = useState(false);
 
   const eyeMove = useMemo(() => {
     const x = Math.max(-4, Math.min(4, mouse.x / 95));
     const y = Math.max(-3, Math.min(3, mouse.y / 95));
     return { transform: `translate(${x}px, ${y}px)` };
   }, [mouse]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+
+    const timer = setTimeout(() => {
+      setCooldown((current) => current - 1);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [cooldown]);
 
   function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -29,39 +56,361 @@ export default function LoginPage() {
   }
 
   function go(nextMode: Mode) {
-    setForgotNotice("");
-    setOtpNotice("");
+    setNotice(null);
+    setLoading(false);
     setMode(nextMode);
   }
 
-  function handleForgotRequest() {
-    const value = forgotIdentity.trim();
+  function maskEmail(email: string) {
+    const [name, domain] = email.split("@");
+    if (!name || !domain) return email;
+    return `${name.slice(0, 1)}***@${domain}`;
+  }
+
+  async function sendRegisterOtp() {
+    setNotice(null);
+
+    const email = registerEmail.trim().toLowerCase();
+    const phone = registerPhone.trim();
+
+    if (!fullName.trim() || !email || !phone || !registerPassword || !confirmPassword) {
+      setNotice({ type: "error", text: "Please complete all registration fields." });
+      return;
+    }
+
+    if (!email.includes("@") || !email.includes(".")) {
+      setNotice({ type: "error", text: "Please enter a valid email address." });
+      return;
+    }
+
+    if (registerPassword.length < 6) {
+      setNotice({ type: "error", text: "Password must be at least 6 characters." });
+      return;
+    }
+
+    if (registerPassword !== confirmPassword) {
+      setNotice({ type: "error", text: "Passwords do not match." });
+      return;
+    }
+
+    setLoading(true);
+
+    const { data: emailExists } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (emailExists) {
+      setLoading(false);
+      setNotice({ type: "error", text: "Email address is already registered." });
+      return;
+    }
+
+    const { data: phoneExists } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("phone", phone)
+      .maybeSingle();
+
+    if (phoneExists) {
+      setLoading(false);
+      setNotice({ type: "error", text: "Phone number is already registered." });
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: true,
+      },
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setNotice({ type: "error", text: error.message });
+      return;
+    }
+
+    setCooldown(10);
+    setNotice({ type: "success", text: "OTP sent to your email." });
+    setMode("registerOtp");
+  }
+
+  async function verifyRegisterOtp() {
+    setNotice(null);
+
+    const email = registerEmail.trim().toLowerCase();
+
+    if (!registerOtp.trim()) {
+      setNotice({ type: "error", text: "Please enter the OTP code." });
+      return;
+    }
+
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: registerOtp.trim(),
+      type: "email",
+    });
+
+    if (error || !data.user) {
+      setLoading(false);
+      setNotice({ type: "error", text: "Invalid OTP. Please try again." });
+      return;
+    }
+
+    const passwordResult = await supabase.auth.updateUser({
+      password: registerPassword,
+    });
+
+    if (passwordResult.error) {
+      setLoading(false);
+      setNotice({ type: "error", text: passwordResult.error.message });
+      return;
+    }
+
+    const profileResult = await supabase.from("profiles").insert({
+      id: data.user.id,
+      full_name: fullName.trim(),
+      email,
+      phone: registerPhone.trim(),
+      phone_verified: false,
+    });
+
+    setLoading(false);
+
+    if (profileResult.error) {
+      setNotice({ type: "error", text: profileResult.error.message });
+      return;
+    }
+
+    setNotice({ type: "success", text: "Account created successfully. You may now login." });
+    setMode("login");
+  }
+
+  async function resendRegisterOtp() {
+    if (cooldown > 0) return;
+    await sendRegisterOtp();
+  }
+
+  async function login() {
+    setNotice(null);
+
+    if (!loginEmail.trim() || !loginPassword) {
+      setNotice({ type: "error", text: "Please enter your email and password." });
+      return;
+    }
+
+    setLoading(true);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim().toLowerCase(),
+      password: loginPassword,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setNotice({ type: "error", text: "Invalid email or password." });
+      return;
+    }
+
+    setNotice({ type: "success", text: "Login successful." });
+  }
+
+  async function sendForgotOtp() {
+    setNotice(null);
+    setOtpVerified(false);
+
+    const value = forgotIdentity.trim().toLowerCase();
 
     if (!value) {
-      setForgotNotice("Please enter your email or phone number.");
+      setNotice({ type: "error", text: "Please enter your email or phone number." });
       return;
     }
 
     const isEmail = value.includes("@");
     const isPhone = /^[0-9+ ]+$/.test(value);
 
+    setLoading(true);
+
     if (isEmail) {
-      if (!value.includes(".") || value.length < 6) {
-        setForgotNotice("Email address is not registered.");
+      const { data } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("email", value)
+        .maybeSingle();
+
+      if (!data?.email) {
+        setLoading(false);
+        setNotice({ type: "error", text: "Email address is not registered." });
         return;
       }
 
-      setForgotNotice("");
+      const { error } = await supabase.auth.signInWithOtp({
+        email: data.email,
+        options: {
+          shouldCreateUser: false,
+        },
+      });
+
+      setLoading(false);
+
+      if (error) {
+        setNotice({ type: "error", text: error.message });
+        return;
+      }
+
+      setForgotEmail(data.email);
+      setCooldown(10);
+      setNotice({ type: "success", text: "OTP sent to your registered email." });
       setMode("forgotOtp");
       return;
     }
 
     if (isPhone) {
-      setForgotNotice("Phone number is not verified. Please use your registered email.");
+      const { data } = await supabase
+        .from("profiles")
+        .select("email, phone_verified")
+        .eq("phone", value)
+        .maybeSingle();
+
+      if (!data) {
+        setLoading(false);
+        setNotice({ type: "error", text: "Phone number is not registered." });
+        return;
+      }
+
+      if (!data.phone_verified) {
+        setLoading(false);
+        setNotice({
+          type: "error",
+          text: "Phone number is not verified. Please use your registered email.",
+        });
+        return;
+      }
+
+      const { error } = await supabase.auth.signInWithOtp({
+        email: data.email,
+        options: {
+          shouldCreateUser: false,
+        },
+      });
+
+      setLoading(false);
+
+      if (error) {
+        setNotice({ type: "error", text: error.message });
+        return;
+      }
+
+      setForgotEmail(data.email);
+      setCooldown(10);
+      setNotice({ type: "success", text: "OTP sent to your verified recovery account." });
+      setMode("forgotOtp");
       return;
     }
 
-    setForgotNotice("Email or phone number is not registered.");
+    setLoading(false);
+    setNotice({ type: "error", text: "Email or phone number is not registered." });
+  }
+
+  async function verifyForgotOtp() {
+    setNotice(null);
+
+    if (!forgotEmail || !forgotOtp.trim()) {
+      setNotice({ type: "error", text: "Please enter the OTP code." });
+      return;
+    }
+
+    setLoading(true);
+
+    const { error } = await supabase.auth.verifyOtp({
+      email: forgotEmail,
+      token: forgotOtp.trim(),
+      type: "email",
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setNotice({ type: "error", text: "Invalid OTP. Please try again." });
+      return;
+    }
+
+    setOtpVerified(true);
+    setNotice({ type: "success", text: "OTP verified. You may now reset your password." });
+    setMode("reset");
+  }
+
+  async function resendForgotOtp() {
+    if (cooldown > 0 || !forgotEmail) return;
+
+    setLoading(true);
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: forgotEmail,
+      options: {
+        shouldCreateUser: false,
+      },
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setNotice({ type: "error", text: error.message });
+      return;
+    }
+
+    setCooldown(10);
+    setNotice({ type: "success", text: "New OTP sent." });
+  }
+
+  async function resetPassword() {
+    setNotice(null);
+
+    if (!otpVerified) {
+      setNotice({ type: "error", text: "OTP verification is required first." });
+      return;
+    }
+
+    if (!newPassword || !confirmNewPassword) {
+      setNotice({ type: "error", text: "Please complete the password fields." });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setNotice({ type: "error", text: "Password must be at least 6 characters." });
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setNotice({ type: "error", text: "Passwords do not match." });
+      return;
+    }
+
+    setLoading(true);
+
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setNotice({ type: "error", text: error.message });
+      return;
+    }
+
+    setNotice({ type: "success", text: "Password updated successfully. Please login." });
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setForgotOtp("");
+    setOtpVerified(false);
+    setMode("login");
   }
 
   const isRightMode = mode !== "login";
@@ -134,12 +483,26 @@ export default function LoginPage() {
               <p className="sub">Login to enter your agarwood ownership portal.</p>
 
               <label>Email address</label>
-              <input type="email" placeholder="you@email.com" />
+              <input
+                type="email"
+                placeholder="you@email.com"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+              />
 
               <label>Password</label>
-              <input type="password" placeholder="Your password" />
+              <input
+                type="password"
+                placeholder="Your password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+              />
 
-              <button className="primary">Login</button>
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
+
+              <button className="primary" onClick={login} disabled={loading}>
+                {loading ? "Checking..." : "Login"}
+              </button>
 
               <div className="cardLinks">
                 <button onClick={() => go("register")}>Create account</button>
@@ -163,7 +526,12 @@ export default function LoginPage() {
               <p className="sub">Email verification is required before account access.</p>
 
               <label>Full name</label>
-              <input type="text" placeholder="Your full name" />
+              <input
+                type="text"
+                placeholder="Your full name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+              />
 
               <label>Email address</label>
               <input
@@ -173,14 +541,34 @@ export default function LoginPage() {
                 onChange={(e) => setRegisterEmail(e.target.value)}
               />
 
+              <label>Phone number</label>
+              <input
+                type="text"
+                placeholder="+63 phone number"
+                value={registerPhone}
+                onChange={(e) => setRegisterPhone(e.target.value)}
+              />
+
               <label>Password</label>
-              <input type="password" placeholder="Create password" />
+              <input
+                type="password"
+                placeholder="Create password"
+                value={registerPassword}
+                onChange={(e) => setRegisterPassword(e.target.value)}
+              />
 
               <label>Confirm password</label>
-              <input type="password" placeholder="Confirm password" />
+              <input
+                type="password"
+                placeholder="Confirm password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
 
-              <button className="primary" onClick={() => go("registerOtp")}>
-                Send Email OTP
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
+
+              <button className="primary" onClick={sendRegisterOtp} disabled={loading}>
+                {loading ? "Checking..." : "Send Email OTP"}
               </button>
 
               <button className="backButton" onClick={() => go("login")}>
@@ -195,19 +583,27 @@ export default function LoginPage() {
               <h2>Verify email</h2>
               <p className="sub">Enter the OTP sent to your email to continue registration.</p>
 
-              <div className="notice info">{registerEmail || "your email address"}</div>
+              <div className="notice info">{maskEmail(registerEmail)}</div>
 
               <label>OTP Code</label>
-              <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit OTP"
+                value={registerOtp}
+                onChange={(e) => setRegisterOtp(e.target.value)}
+              />
 
-              <button
-                className="primary"
-                onClick={() => setOtpNotice("Invalid OTP. Please try again.")}
-              >
-                Verify & Create Account
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
+
+              <button className="primary" onClick={verifyRegisterOtp} disabled={loading}>
+                {loading ? "Verifying..." : "Verify & Create Account"}
               </button>
 
-              {otpNotice && <div className="notice error">{otpNotice}</div>}
+              <button className="backButton" onClick={resendRegisterOtp} disabled={cooldown > 0}>
+                {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend Code"}
+              </button>
 
               <button className="backButton" onClick={() => go("register")}>
                 Back to Register
@@ -228,16 +624,13 @@ export default function LoginPage() {
                 type="text"
                 placeholder="you@email.com or +63 phone number"
                 value={forgotIdentity}
-                onChange={(e) => {
-                  setForgotIdentity(e.target.value);
-                  setForgotNotice("");
-                }}
+                onChange={(e) => setForgotIdentity(e.target.value)}
               />
 
-              {forgotNotice && <div className="notice error">{forgotNotice}</div>}
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
-              <button className="primary" onClick={handleForgotRequest}>
-                Send Reset OTP
+              <button className="primary" onClick={sendForgotOtp} disabled={loading}>
+                {loading ? "Checking..." : "Send Reset OTP"}
               </button>
 
               <button className="backButton" onClick={() => go("login")}>
@@ -263,25 +656,27 @@ export default function LoginPage() {
               <h2>Verify reset</h2>
               <p className="sub">Enter the OTP sent to your registered recovery method.</p>
 
-              <div className="notice info">
-                {forgotIdentity || "registered email or phone number"}
-              </div>
+              <div className="notice info">{maskEmail(forgotEmail)}</div>
 
               <label>OTP Code</label>
-              <input type="text" inputMode="numeric" maxLength={6} placeholder="6-digit OTP" />
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit OTP"
+                value={forgotOtp}
+                onChange={(e) => setForgotOtp(e.target.value)}
+              />
 
-              <button className="primary" onClick={() => go("reset")}>
-                Verify OTP
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
+
+              <button className="primary" onClick={verifyForgotOtp} disabled={loading}>
+                {loading ? "Verifying..." : "Verify OTP"}
               </button>
 
-              <button
-                className="backButton"
-                onClick={() => setOtpNotice("Invalid OTP. Please try again.")}
-              >
-                Test Wrong OTP
+              <button className="backButton" onClick={resendForgotOtp} disabled={cooldown > 0}>
+                {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend Code"}
               </button>
-
-              {otpNotice && <div className="notice error">{otpNotice}</div>}
 
               <button className="backButton" onClick={() => go("forgot")}>
                 Back
@@ -296,12 +691,26 @@ export default function LoginPage() {
               <p className="sub">Create a new password for your account.</p>
 
               <label>New password</label>
-              <input type="password" placeholder="New password" />
+              <input
+                type="password"
+                placeholder="New password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
 
               <label>Confirm new password</label>
-              <input type="password" placeholder="Confirm new password" />
+              <input
+                type="password"
+                placeholder="Confirm new password"
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+              />
 
-              <button className="primary">Save New Password</button>
+              {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
+
+              <button className="primary" onClick={resetPassword} disabled={loading}>
+                {loading ? "Saving..." : "Save New Password"}
+              </button>
 
               <button className="backButton" onClick={() => go("login")}>
                 Back to Login
@@ -365,8 +774,6 @@ export default function LoginPage() {
           font-weight: 900;
           letter-spacing: 0.5px;
           box-shadow: 0 10px 25px rgba(67, 94, 34, 0.12);
-          max-width: 100%;
-          overflow-wrap: break-word;
         }
 
         .copy {
@@ -382,7 +789,6 @@ export default function LoginPage() {
           font-size: clamp(48px, 6vw, 76px);
           line-height: 0.92;
           letter-spacing: -4px;
-          overflow-wrap: break-word;
         }
 
         .copy p {
@@ -391,7 +797,6 @@ export default function LoginPage() {
           line-height: 1.65;
           max-width: 520px;
           margin-top: 24px;
-          overflow-wrap: break-word;
         }
 
         .sun {
@@ -432,13 +837,8 @@ export default function LoginPage() {
           place-items: center;
         }
 
-        .eyeLeft {
-          left: 24px;
-        }
-
-        .eyeRight {
-          right: 24px;
-        }
+        .eyeLeft { left: 24px; }
+        .eyeRight { right: 24px; }
 
         .eye span {
           display: block;
@@ -467,23 +867,9 @@ export default function LoginPage() {
           animation: leafFloat 6.5s ease-in-out infinite;
         }
 
-        .leafOne {
-          left: 145px;
-          top: 338px;
-        }
-
-        .leafTwo {
-          left: 405px;
-          top: 315px;
-          animation-delay: 1.2s;
-        }
-
-        .leafThree {
-          left: 520px;
-          top: 250px;
-          font-size: 23px;
-          animation-delay: 2.1s;
-        }
+        .leafOne { left: 145px; top: 338px; }
+        .leafTwo { left: 405px; top: 315px; animation-delay: 1.2s; }
+        .leafThree { left: 520px; top: 250px; font-size: 23px; animation-delay: 2.1s; }
 
         .spark {
           position: absolute;
@@ -508,26 +894,9 @@ export default function LoginPage() {
           border-radius: 180px 180px 0 0;
         }
 
-        .hillBack {
-          left: 0;
-          width: 300px;
-          height: 190px;
-          background: #bddd7b;
-        }
-
-        .hillMid {
-          left: 50px;
-          width: 510px;
-          height: 106px;
-          background: #78aa4c;
-        }
-
-        .hillFront {
-          left: 128px;
-          width: 280px;
-          height: 64px;
-          background: #608e3f;
-        }
+        .hillBack { left: 0; width: 300px; height: 190px; background: #bddd7b; }
+        .hillMid { left: 50px; width: 510px; height: 106px; background: #78aa4c; }
+        .hillFront { left: 128px; width: 280px; height: 64px; background: #608e3f; }
 
         .mainTree {
           position: absolute;
@@ -555,33 +924,10 @@ export default function LoginPage() {
           z-index: 2;
         }
 
-        .crownOne {
-          width: 88px;
-          height: 88px;
-          left: 56px;
-          top: 0;
-        }
-
-        .crownTwo {
-          width: 114px;
-          height: 114px;
-          left: 20px;
-          top: 50px;
-        }
-
-        .crownThree {
-          width: 116px;
-          height: 116px;
-          right: 0;
-          top: 50px;
-        }
-
-        .crownFour {
-          width: 155px;
-          height: 105px;
-          left: 18px;
-          top: 86px;
-        }
+        .crownOne { width: 88px; height: 88px; left: 56px; top: 0; }
+        .crownTwo { width: 114px; height: 114px; left: 20px; top: 50px; }
+        .crownThree { width: 116px; height: 116px; right: 0; top: 50px; }
+        .crownFour { width: 155px; height: 105px; left: 18px; top: 86px; }
 
         .smallTree {
           position: absolute;
@@ -590,15 +936,8 @@ export default function LoginPage() {
           height: 90px;
         }
 
-        .smallTreeOne {
-          left: 72px;
-        }
-
-        .smallTreeTwo {
-          left: 180px;
-          transform: scale(0.78);
-          opacity: 0.85;
-        }
+        .smallTreeOne { left: 72px; }
+        .smallTreeTwo { left: 180px; transform: scale(0.78); opacity: 0.85; }
 
         .smallTree span {
           position: absolute;
@@ -647,12 +986,6 @@ export default function LoginPage() {
           animation: cardIn 520ms cubic-bezier(0.22, 1, 0.36, 1);
         }
 
-        .show {
-          opacity: 1;
-          transform: translateX(0) scale(1);
-          pointer-events: auto;
-        }
-
         .kicker {
           margin: 0 0 12px;
           color: #789947;
@@ -667,7 +1000,6 @@ export default function LoginPage() {
           color: #153f19;
           font-size: 34px;
           letter-spacing: -1px;
-          overflow-wrap: break-word;
         }
 
         .sub {
@@ -683,13 +1015,12 @@ export default function LoginPage() {
           color: #2c4f25;
           font-size: 13px;
           font-weight: 900;
-          margin: 14px 0 7px;
-          overflow-wrap: break-word;
+          margin: 10px 0 7px;
         }
 
         input {
           width: 100%;
-          height: 52px;
+          height: 46px;
           border-radius: 16px;
           border: 1px solid #c6d7b9;
           background: #edf4ff;
@@ -708,8 +1039,8 @@ export default function LoginPage() {
 
         .primary {
           width: 100%;
-          min-height: 54px;
-          margin-top: 20px;
+          min-height: 52px;
+          margin-top: 18px;
           border: 0;
           border-radius: 16px;
           background: #1f5b21;
@@ -720,10 +1051,15 @@ export default function LoginPage() {
           box-shadow: 0 12px 22px rgba(22, 75, 25, 0.24);
           transition: 250ms ease;
           padding: 0 14px;
-          overflow-wrap: break-word;
         }
 
-        .primary:hover {
+        .primary:disabled,
+        .backButton:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .primary:hover:not(:disabled) {
           transform: translateY(-2px);
           background: #174919;
         }
@@ -748,15 +1084,15 @@ export default function LoginPage() {
 
         .backButton {
           width: 100%;
-          min-height: 42px;
-          margin-top: 12px;
+          min-height: 38px;
+          margin-top: 10px;
         }
 
         .trustBox,
         .notice {
           background: rgba(255, 250, 230, 0.84);
           border-radius: 22px;
-          padding: 18px;
+          padding: 16px;
           color: #69775f;
           font-size: 13px;
           overflow-wrap: break-word;
@@ -764,7 +1100,7 @@ export default function LoginPage() {
         }
 
         .trustBox.small {
-          margin-top: 18px;
+          margin-top: 16px;
         }
 
         .trustBox strong {
@@ -779,8 +1115,7 @@ export default function LoginPage() {
         }
 
         .notice {
-          margin: 16px 0 20px;
-          color: #264b22;
+          margin: 14px 0 0;
           font-weight: 900;
         }
 
@@ -789,58 +1124,38 @@ export default function LoginPage() {
           color: #264b22;
         }
 
+        .notice.success {
+          background: rgba(224, 244, 214, 0.92);
+          color: #1f5b21;
+        }
+
         .notice.error {
           background: rgba(255, 233, 225, 0.92);
           color: #9a3412;
         }
 
         @keyframes cardIn {
-          from {
-            opacity: 0;
-            transform: translateX(60px) scale(0.97);
-          }
-          to {
-            opacity: 1;
-            transform: translateX(0) scale(1);
-          }
+          from { opacity: 0; transform: translateX(60px) scale(0.97); }
+          to { opacity: 1; transform: translateX(0) scale(1); }
         }
 
         @keyframes sunFloat {
-          0%, 100% {
-            transform: translateY(0);
-          }
-
-          50% {
-            transform: translateY(-10px);
-          }
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-10px); }
         }
 
         @keyframes leafFloat {
-          0%, 100% {
-            transform: translateY(0) rotate(-8deg);
-          }
-
-          50% {
-            transform: translateY(-17px) rotate(8deg);
-          }
+          0%, 100% { transform: translateY(0) rotate(-8deg); }
+          50% { transform: translateY(-17px) rotate(8deg); }
         }
 
         @keyframes twinkle {
-          0%, 100% {
-            opacity: 0.35;
-            transform: scale(0.9);
-          }
-
-          50% {
-            opacity: 1;
-            transform: scale(1.1);
-          }
+          0%, 100% { opacity: 0.35; transform: scale(0.9); }
+          50% { opacity: 1; transform: scale(1.1); }
         }
 
         @media (max-width: 980px) {
-          .shell {
-            min-height: 980px;
-          }
+          .shell { min-height: 980px; }
 
           .world {
             width: 100%;
@@ -876,13 +1191,8 @@ export default function LoginPage() {
             height: 16px;
           }
 
-          .eyeLeft {
-            left: 20px;
-          }
-
-          .eyeRight {
-            right: 20px;
-          }
+          .eyeLeft { left: 20px; }
+          .eyeRight { right: 20px; }
 
           .smile {
             left: 29px;
@@ -908,31 +1218,23 @@ export default function LoginPage() {
         }
 
         @media (max-width: 560px) {
-          .page {
-            padding: 14px;
-          }
+          .page { padding: 14px; }
 
           .shell {
             border-radius: 24px;
             min-height: 1010px;
           }
 
-          .world {
-            padding: 22px;
-          }
+          .world { padding: 22px; }
 
           .badge {
             font-size: 11px;
             padding: 9px 16px;
           }
 
-          .copy {
-            margin-top: 34px;
-          }
+          .copy { margin-top: 34px; }
 
-          .copy h1 {
-            font-size: 42px;
-          }
+          .copy h1 { font-size: 42px; }
 
           .sun {
             right: 30px;
@@ -952,13 +1254,9 @@ export default function LoginPage() {
             border-radius: 26px;
           }
 
-          h2 {
-            font-size: 30px;
-          }
+          h2 { font-size: 30px; }
 
-          input {
-            height: 48px;
-          }
+          input { height: 44px; }
 
           .cardLinks {
             flex-direction: column;
