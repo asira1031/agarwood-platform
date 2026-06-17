@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-export default function DashboardLayout({
+export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -27,8 +27,8 @@ export default function DashboardLayout({
         .eq("email", user.email?.toLowerCase())
         .maybeSingle();
 
-      if (profile?.role === "ADMIN") {
-        window.location.href = "/admin/dashboard";
+      if (profile?.role !== "ADMIN") {
+        window.location.href = "/dashboard";
         return;
       }
 
@@ -41,7 +41,7 @@ export default function DashboardLayout({
   if (!allowed) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#071f16] text-white">
-        Checking access...
+        Checking admin access...
       </div>
     );
   }
