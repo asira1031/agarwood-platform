@@ -17,18 +17,28 @@ export default function DashboardLayout({
       } = await supabase.auth.getUser();
 
       if (!user) {
-        window.location.href = "/login";
+        window.location.replace("/login");
         return;
       }
 
-      const { data: profile } = await supabase
+      const { data: profileById } = await supabase
         .from("profiles")
-        .select("role")
-        .eq("email", user.email?.toLowerCase())
+        .select("role,email")
+        .eq("id", user.id)
         .maybeSingle();
 
-      if (profile?.role === "ADMIN") {
-        window.location.href = "/admin/dashboard";
+      const profile =
+        profileById ||
+        (
+          await supabase
+            .from("profiles")
+            .select("role,email")
+            .eq("email", user.email?.toLowerCase())
+            .maybeSingle()
+        ).data;
+
+      if (profile?.role?.toUpperCase() === "ADMIN") {
+        window.location.replace("/admin/dashboard");
         return;
       }
 
