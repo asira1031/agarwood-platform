@@ -286,18 +286,16 @@ export default function LoginPage() {
     });
 
     setLoading(false);
+if (error) {
+  console.error("SUPABASE LOGIN ERROR:", error);
 
-    if (error) {
-      console.error("SUPABASE LOGIN ERROR:", error);
+  setNotice({
+    type: "error",
+    text: error.message,
+  });
 
-      setNotice({
-        type: "error",
-        text: error.message,
-      });
-
-      return;
-    }
-
+  return;
+}
     if (data.user) {
       await ensureProfile(data.user);
       setNotice({ type: "success", text: "Login successful. Redirecting..." });
