@@ -21,6 +21,8 @@ export default function LoginPage() {
   const [registerPhone, setRegisterPhone] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordFocused, setPasswordFocused] = useState(false);
+  const [confirmFocused, setConfirmFocused] = useState(false);
 
   const [forgotIdentity, setForgotIdentity] = useState("");
   const [forgotEmail, setForgotEmail] = useState("");
@@ -33,6 +35,27 @@ export default function LoginPage() {
     const y = Math.max(-3, Math.min(3, mouse.y / 95));
     return { transform: `translate(${x}px, ${y}px)` };
   }, [mouse]);
+
+  const passwordChecks = useMemo(
+    () => [
+      { label: "Minimum 8 characters", ok: registerPassword.length >= 8 },
+      { label: "1 uppercase letter", ok: /[A-Z]/.test(registerPassword) },
+      { label: "1 lowercase letter", ok: /[a-z]/.test(registerPassword) },
+      { label: "1 number", ok: /\d/.test(registerPassword) },
+      {
+        label: "1 special character",
+        ok: /[@$!%*?&^#()[\]{}\-_=+;:'",.<>/\\|]/.test(registerPassword),
+      },
+    ],
+    [registerPassword]
+  );
+
+  const showPasswordGuide = passwordFocused || registerPassword.length > 0;
+  const showConfirmGuide = confirmFocused || confirmPassword.length > 0;
+  const passwordsMatch =
+    registerPassword.length > 0 &&
+    confirmPassword.length > 0 &&
+    registerPassword === confirmPassword;
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -511,30 +534,46 @@ export default function LoginPage() {
                 type="password"
                 placeholder="Create password"
                 value={registerPassword}
+                onFocus={() => setPasswordFocused(true)}
+                onBlur={() => setPasswordFocused(false)}
                 onChange={(e) => setRegisterPassword(e.target.value)}
               />
 
+              {showPasswordGuide && (
+                <div className="passwordGuide">
+                  <strong>Password requirements</strong>
+                  {passwordChecks.map((rule) => (
+                    <div className={`rule ${rule.ok ? "ok" : "bad"}`} key={rule.label}>
+                      <span>{rule.ok ? "✓" : "×"}</span>
+                      {rule.label}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <label>Confirm password</label>
               <input
+                className={
+                  confirmPassword.length > 0
+                    ? passwordsMatch
+                      ? "matchInput"
+                      : "errorInput"
+                    : ""
+                }
                 type="password"
                 placeholder="Confirm password"
                 value={confirmPassword}
+                onFocus={() => setConfirmFocused(true)}
+                onBlur={() => setConfirmFocused(false)}
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />
 
-              <div className="notice info passwordRules">
-                Password must contain:
-                <br />
-                • Minimum 8 characters
-                <br />
-                • 1 uppercase letter
-                <br />
-                • 1 lowercase letter
-                <br />
-                • 1 number
-                <br />
-                • 1 special character
-              </div>
+              {showConfirmGuide && (
+                <div className={`confirmGuide ${passwordsMatch ? "ok" : "bad"}`}>
+                  <span>{passwordsMatch ? "✓" : "×"}</span>
+                  {passwordsMatch ? "Passwords match" : "Passwords do not match yet"}
+                </div>
+              )}
 
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
@@ -738,7 +777,7 @@ export default function LoginPage() {
         .shell {
           position: relative;
           width: min(1160px, 100%);
-          min-height: 730px;
+          min-height: 790px;
           border-radius: 34px;
           overflow: hidden;
           background:
@@ -969,7 +1008,7 @@ export default function LoginPage() {
           top: 50%;
           transform: translateY(-50%);
           width: 430px;
-          height: 690px;
+          height: 740px;
           z-index: 20;
         }
 
@@ -1125,12 +1164,70 @@ export default function LoginPage() {
           font-weight: 900;
         }
 
-        .passwordRules {
-          font-size: 11px;
-          line-height: 1.35;
-          font-weight: 800;
+        .passwordGuide,
+        .confirmGuide {
           margin-top: 10px;
+          border-radius: 18px;
           padding: 12px 14px;
+          font-size: 12px;
+          line-height: 1.35;
+          font-weight: 900;
+          background: rgba(255, 250, 230, 0.9);
+          color: #264b22;
+        }
+
+        .passwordGuide strong {
+          display: block;
+          margin-bottom: 7px;
+          color: #264b22;
+        }
+
+        .rule,
+        .confirmGuide {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .rule span,
+        .confirmGuide span {
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          display: inline-grid;
+          place-items: center;
+          font-size: 13px;
+          flex: 0 0 auto;
+        }
+
+        .rule.ok,
+        .confirmGuide.ok {
+          color: #1f5b21;
+        }
+
+        .rule.ok span,
+        .confirmGuide.ok span {
+          background: rgba(224, 244, 214, 0.96);
+        }
+
+        .rule.bad,
+        .confirmGuide.bad {
+          color: #9a3412;
+        }
+
+        .rule.bad span,
+        .confirmGuide.bad span {
+          background: rgba(255, 233, 225, 0.95);
+        }
+
+        input.matchInput {
+          border-color: #5c9a3a;
+          box-shadow: 0 0 0 4px rgba(92, 154, 58, 0.16);
+        }
+
+        input.errorInput {
+          border-color: #d97706;
+          box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.13);
         }
 
         .notice.info {
@@ -1295,7 +1392,7 @@ export default function LoginPage() {
             top: auto;
             bottom: 24px;
             width: auto;
-            height: 700px;
+            height: 760px;
             transform: none;
           }
         }
@@ -1329,7 +1426,7 @@ export default function LoginPage() {
             left: 14px;
             right: 14px;
             bottom: 14px;
-            height: 720px;
+            height: 780px;
           }
 
           .card {
