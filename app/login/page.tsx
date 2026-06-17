@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Mode = "login" | "register" | "registerOtp" | "forgot" | "forgotOtp" | "reset";
+type Mode = "login" | "register" | "confirm" | "forgot" | "forgotSent" | "reset";
 type Notice = { type: "success" | "error" | "info"; text: string } | null;
 
 export default function LoginPage() {
@@ -21,11 +21,9 @@ export default function LoginPage() {
   const [registerPhone, setRegisterPhone] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [registerOtp, setRegisterOtp] = useState("");
 
   const [forgotIdentity, setForgotIdentity] = useState("");
   const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotOtp, setForgotOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [otpVerified, setOtpVerified] = useState(false);
@@ -67,6 +65,59 @@ export default function LoginPage() {
     return `${name.slice(0, 1)}***@${domain}`;
   }
 
+  async function ensureProfile(user: any) {
+    const email = user?.email?.trim().toLowerCase();
+    if (!user?.id || !email) return;
+
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (existing) return;
+
+    await supabase.from("profiles").insert({
+      id: user.id,
+      full_name: user.user_metadata?.full_name || fullName.trim() || "Agarwood Member",
+      email,
+      phone: user.user_metadata?.phone || registerPhone.trim() || null,
+      phone_verified: false,
+      membership_status: "INACTIVE",
+      verification_status: "UNVERIFIED",
+    });
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("verified") === "1") {
+      setNotice({ type: "success", text: "Email confirmed. Redirecting to your dashboard..." });
+    }
+
+    if (params.get("reset") === "1") {
+      setOtpVerified(true);
+      setMode("reset");
+      setNotice({ type: "success", text: "Create a new password to restore access." });
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session?.user && params.get("reset") !== "1") {
+        await ensureProfile(data.session.user);
+        window.location.href = "/dashboard";
+      }
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_IN" && session?.user && params.get("reset") !== "1") {
+        await ensureProfile(session.user);
+        window.location.href = "/dashboard";
+      }
+    });
+
+    return () => authListener.subscription.unsubscribe();
+  }, []);
+
   async function sendRegisterOtp() {
     setNotice(null);
 
@@ -83,8 +134,14 @@ export default function LoginPage() {
       return;
     }
 
-    if (registerPassword.length < 6) {
-      setNotice({ type: "error", text: "Password must be at least 6 characters." });
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&^#()[\]{}\-_=+;:'",.<>/\\|]).{8,}$/;
+
+    if (!passwordRegex.test(registerPassword)) {
+      setNotice({
+        type: "error",
+        text: "Password must contain at least 8 characters, 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.",
+      });
       return;
     }
 
@@ -119,10 +176,15 @@ export default function LoginPage() {
       return;
     }
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signUp({
       email,
+      password: registerPassword,
       options: {
-        shouldCreateUser: true,
+        emailRedirectTo: `${window.location.origin}/login?verified=1`,
+        data: {
+          full_name: fullName.trim(),
+          phone,
+        },
       },
     });
 
@@ -134,66 +196,32 @@ export default function LoginPage() {
     }
 
     setCooldown(10);
-    setNotice({ type: "success", text: "OTP sent to your email." });
-    setMode("registerOtp");
+    setNotice({ type: "success", text: "Confirmation email sent." });
+    setMode("confirm");
   }
 
-  async function verifyRegisterOtp() {
-    setNotice(null);
-
-    const email = registerEmail.trim().toLowerCase();
-
-    if (!registerOtp.trim()) {
-      setNotice({ type: "error", text: "Please enter the OTP code." });
-      return;
-    }
+  async function resendRegisterOtp() {
+    if (cooldown > 0 || !registerEmail.trim()) return;
 
     setLoading(true);
 
-    const { data, error } = await supabase.auth.verifyOtp({
-      email,
-      token: registerOtp.trim(),
-      type: "email",
-    });
-
-    if (error || !data.user) {
-      setLoading(false);
-      setNotice({ type: "error", text: "Invalid OTP. Please try again." });
-      return;
-    }
-
-    const passwordResult = await supabase.auth.updateUser({
-      password: registerPassword,
-    });
-
-    if (passwordResult.error) {
-      setLoading(false);
-      setNotice({ type: "error", text: passwordResult.error.message });
-      return;
-    }
-
-    const profileResult = await supabase.from("profiles").insert({
-      id: data.user.id,
-      full_name: fullName.trim(),
-      email,
-      phone: registerPhone.trim(),
-      phone_verified: false,
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: registerEmail.trim().toLowerCase(),
+      options: {
+        emailRedirectTo: `${window.location.origin}/login?verified=1`,
+      },
     });
 
     setLoading(false);
 
-    if (profileResult.error) {
-      setNotice({ type: "error", text: profileResult.error.message });
+    if (error) {
+      setNotice({ type: "error", text: error.message });
       return;
     }
 
-    setNotice({ type: "success", text: "Account created successfully. You may now login." });
-    setMode("login");
-  }
-
-  async function resendRegisterOtp() {
-    if (cooldown > 0) return;
-    await sendRegisterOtp();
+    setCooldown(10);
+    setNotice({ type: "success", text: "New confirmation email sent." });
   }
 
   async function login() {
@@ -206,7 +234,7 @@ export default function LoginPage() {
 
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: loginEmail.trim().toLowerCase(),
       password: loginPassword,
     });
@@ -214,136 +242,63 @@ export default function LoginPage() {
     setLoading(false);
 
     if (error) {
-      setNotice({ type: "error", text: "Invalid email or password." });
+      setNotice({ type: "error", text: "Invalid email or password. Please confirm your email before logging in." });
       return;
     }
 
-    setNotice({ type: "success", text: "Login successful." });
+    if (data.user) {
+      await ensureProfile(data.user);
+    }
+
+    setNotice({ type: "success", text: "Login successful. Redirecting..." });
+    window.location.href = "/dashboard";
   }
 
   async function sendForgotOtp() {
     setNotice(null);
     setOtpVerified(false);
 
-    const value = forgotIdentity.trim().toLowerCase();
+    const email = forgotIdentity.trim().toLowerCase();
 
-    if (!value) {
-      setNotice({ type: "error", text: "Please enter your email or phone number." });
+    if (!email) {
+      setNotice({ type: "error", text: "Please enter your registered email address." });
       return;
     }
 
-    const isEmail = value.includes("@");
-    const isPhone = /^[0-9+ ]+$/.test(value);
-
-    setLoading(true);
-
-    if (isEmail) {
-      const { data } = await supabase
-        .from("profiles")
-        .select("email")
-        .eq("email", value)
-        .maybeSingle();
-
-      if (!data?.email) {
-        setLoading(false);
-        setNotice({ type: "error", text: "Email address is not registered." });
-        return;
-      }
-
-      const { error } = await supabase.auth.signInWithOtp({
-        email: data.email,
-        options: {
-          shouldCreateUser: false,
-        },
-      });
-
-      setLoading(false);
-
-      if (error) {
-        setNotice({ type: "error", text: error.message });
-        return;
-      }
-
-      setForgotEmail(data.email);
-      setCooldown(10);
-      setNotice({ type: "success", text: "OTP sent to your registered email." });
-      setMode("forgotOtp");
-      return;
-    }
-
-    if (isPhone) {
-      const { data } = await supabase
-        .from("profiles")
-        .select("email, phone_verified")
-        .eq("phone", value)
-        .maybeSingle();
-
-      if (!data) {
-        setLoading(false);
-        setNotice({ type: "error", text: "Phone number is not registered." });
-        return;
-      }
-
-      if (!data.phone_verified) {
-        setLoading(false);
-        setNotice({
-          type: "error",
-          text: "Phone number is not verified. Please use your registered email.",
-        });
-        return;
-      }
-
-      const { error } = await supabase.auth.signInWithOtp({
-        email: data.email,
-        options: {
-          shouldCreateUser: false,
-        },
-      });
-
-      setLoading(false);
-
-      if (error) {
-        setNotice({ type: "error", text: error.message });
-        return;
-      }
-
-      setForgotEmail(data.email);
-      setCooldown(10);
-      setNotice({ type: "success", text: "OTP sent to your verified recovery account." });
-      setMode("forgotOtp");
-      return;
-    }
-
-    setLoading(false);
-    setNotice({ type: "error", text: "Email or phone number is not registered." });
-  }
-
-  async function verifyForgotOtp() {
-    setNotice(null);
-
-    if (!forgotEmail || !forgotOtp.trim()) {
-      setNotice({ type: "error", text: "Please enter the OTP code." });
+    if (!email.includes("@") || !email.includes(".")) {
+      setNotice({ type: "error", text: "Please enter a valid email address." });
       return;
     }
 
     setLoading(true);
 
-    const { error } = await supabase.auth.verifyOtp({
-      email: forgotEmail,
-      token: forgotOtp.trim(),
-      type: "email",
+    const { data } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (!data?.email) {
+      setLoading(false);
+      setNotice({ type: "error", text: "Email address is not registered." });
+      return;
+    }
+
+    const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
+      redirectTo: `${window.location.origin}/login?reset=1`,
     });
 
     setLoading(false);
 
     if (error) {
-      setNotice({ type: "error", text: "Invalid OTP. Please try again." });
+      setNotice({ type: "error", text: error.message });
       return;
     }
 
-    setOtpVerified(true);
-    setNotice({ type: "success", text: "OTP verified. You may now reset your password." });
-    setMode("reset");
+    setForgotEmail(data.email);
+    setCooldown(10);
+    setNotice({ type: "success", text: "Recovery instructions sent." });
+    setMode("forgotSent");
   }
 
   async function resendForgotOtp() {
@@ -351,11 +306,8 @@ export default function LoginPage() {
 
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email: forgotEmail,
-      options: {
-        shouldCreateUser: false,
-      },
+    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: `${window.location.origin}/login?reset=1`,
     });
 
     setLoading(false);
@@ -366,7 +318,7 @@ export default function LoginPage() {
     }
 
     setCooldown(10);
-    setNotice({ type: "success", text: "New OTP sent." });
+    setNotice({ type: "success", text: "New recovery instructions sent." });
   }
 
   async function resetPassword() {
@@ -382,8 +334,14 @@ export default function LoginPage() {
       return;
     }
 
-    if (newPassword.length < 6) {
-      setNotice({ type: "error", text: "Password must be at least 6 characters." });
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&^#()[\]{}\-_=+;:'",.<>/\\|]).{8,}$/;
+
+    if (!passwordRegex.test(newPassword)) {
+      setNotice({
+        type: "error",
+        text: "Password must contain at least 8 characters, 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.",
+      });
       return;
     }
 
@@ -408,7 +366,6 @@ export default function LoginPage() {
     setNotice({ type: "success", text: "Password updated successfully. Please login." });
     setNewPassword("");
     setConfirmNewPassword("");
-    setForgotOtp("");
     setOtpVerified(false);
     setMode("login");
   }
@@ -523,7 +480,7 @@ export default function LoginPage() {
             <div className="card show">
               <p className="kicker">JOIN THE FOREST</p>
               <h2>Create account</h2>
-              <p className="sub">Email verification is required before account access.</p>
+              <p className="sub">Join a platform built on trust, ownership, and transparency. Verify your email to activate your account.</p>
 
               <label>Full name</label>
               <input
@@ -565,10 +522,24 @@ export default function LoginPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />
 
+              <div className="notice info passwordRules">
+                Password must contain:
+                <br />
+                • Minimum 8 characters
+                <br />
+                • 1 uppercase letter
+                <br />
+                • 1 lowercase letter
+                <br />
+                • 1 number
+                <br />
+                • 1 special character
+              </div>
+
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
               <button className="primary" onClick={sendRegisterOtp} disabled={loading}>
-                {loading ? "Checking..." : "Send Email OTP"}
+                {loading ? "Creating..." : "Create Account"}
               </button>
 
               <button className="backButton" onClick={() => go("login")}>
@@ -577,36 +548,44 @@ export default function LoginPage() {
             </div>
           )}
 
-          {mode === "registerOtp" && (
-            <div className="card show">
-              <p className="kicker">EMAIL OTP</p>
-              <h2>Verify email</h2>
-              <p className="sub">Enter the OTP sent to your email to continue registration.</p>
+          {mode === "confirm" && (
+            <div className="card show waitingCard">
+              <div className="waitingForest">
+                <div className="seedPulse">🌱</div>
+                <span className="orbitLeaf leafA">🍃</span>
+                <span className="orbitLeaf leafB">🍃</span>
+                <span className="orbitLeaf leafC">🍃</span>
+              </div>
+
+              <p className="kicker">CHECK YOUR EMAIL</p>
+              <h2>Confirm your email</h2>
+              <p className="sub">
+                We sent a confirmation link to your email. Open your inbox and click
+                <strong> Confirm email address </strong>to activate your Agarwood account.
+              </p>
 
               <div className="notice info">{maskEmail(registerEmail)}</div>
 
-              <label>OTP Code</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="6-digit OTP"
-                value={registerOtp}
-                onChange={(e) => setRegisterOtp(e.target.value)}
-              />
-
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
-              <button className="primary" onClick={verifyRegisterOtp} disabled={loading}>
-                {loading ? "Verifying..." : "Verify & Create Account"}
+              <div className="waitingBox">
+                <strong>WAITING FOR VERIFICATION</strong>
+                <p>
+                  After confirming your email, you will be redirected to your dashboard.
+                  Your digital forest access will open automatically once verification is complete.
+                </p>
+              </div>
+
+              <button className="primary" onClick={() => go("login")}>
+                Back to Login
               </button>
 
-              <button className="backButton" onClick={resendRegisterOtp} disabled={cooldown > 0}>
-                {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend Code"}
+              <button className="backButton" onClick={resendRegisterOtp} disabled={cooldown > 0 || loading}>
+                {cooldown > 0 ? `Resend email in ${cooldown}s` : "Resend Confirmation Email"}
               </button>
 
               <button className="backButton" onClick={() => go("register")}>
-                Back to Register
+                Use Another Email
               </button>
             </div>
           )}
@@ -616,13 +595,13 @@ export default function LoginPage() {
               <p className="kicker">ACCOUNT RECOVERY</p>
               <h2>Forgot password</h2>
               <p className="sub">
-                Enter your registered email or verified phone number to receive an OTP.
+                Enter your registered email address to begin the account recovery process.
               </p>
 
-              <label>Email or phone number</label>
+              <label>Email address</label>
               <input
                 type="text"
-                placeholder="you@email.com or +63 phone number"
+                placeholder="you@email.com"
                 value={forgotIdentity}
                 onChange={(e) => setForgotIdentity(e.target.value)}
               />
@@ -630,7 +609,7 @@ export default function LoginPage() {
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
               <button className="primary" onClick={sendForgotOtp} disabled={loading}>
-                {loading ? "Checking..." : "Send Reset OTP"}
+                {loading ? "Sending..." : "Send Recovery Instructions"}
               </button>
 
               <button className="backButton" onClick={() => go("login")}>
@@ -650,36 +629,43 @@ export default function LoginPage() {
             </div>
           )}
 
-          {mode === "forgotOtp" && (
-            <div className="card show">
-              <p className="kicker">RESET OTP</p>
-              <h2>Verify reset</h2>
-              <p className="sub">Enter the OTP sent to your registered recovery method.</p>
+          {mode === "forgotSent" && (
+            <div className="card show waitingCard">
+              <div className="waitingForest">
+                <div className="seedPulse">🔐</div>
+                <span className="orbitLeaf leafA">🍃</span>
+                <span className="orbitLeaf leafB">🍃</span>
+                <span className="orbitLeaf leafC">🍃</span>
+              </div>
+
+              <p className="kicker">CHECK YOUR EMAIL</p>
+              <h2>Recovery sent</h2>
+              <p className="sub">
+                Recovery instructions were sent to your registered email address.
+                Open your inbox and follow the secure link to restore access.
+              </p>
 
               <div className="notice info">{maskEmail(forgotEmail)}</div>
 
-              <label>OTP Code</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="6-digit OTP"
-                value={forgotOtp}
-                onChange={(e) => setForgotOtp(e.target.value)}
-              />
-
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
-              <button className="primary" onClick={verifyForgotOtp} disabled={loading}>
-                {loading ? "Verifying..." : "Verify OTP"}
+              <div className="waitingBox">
+                <strong>ACCOUNT RECOVERY</strong>
+                <p>
+                  For your protection, the recovery link expires shortly and can only be used once.
+                </p>
+              </div>
+
+              <button className="primary" onClick={() => go("login")}>
+                Back to Login
               </button>
 
-              <button className="backButton" onClick={resendForgotOtp} disabled={cooldown > 0}>
-                {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend Code"}
+              <button className="backButton" onClick={resendForgotOtp} disabled={cooldown > 0 || loading}>
+                {cooldown > 0 ? `Resend email in ${cooldown}s` : "Resend Recovery Email"}
               </button>
 
               <button className="backButton" onClick={() => go("forgot")}>
-                Back
+                Use Another Email
               </button>
             </div>
           )}
@@ -705,6 +691,20 @@ export default function LoginPage() {
                 value={confirmNewPassword}
                 onChange={(e) => setConfirmNewPassword(e.target.value)}
               />
+
+              <div className="notice info passwordRules">
+                Password must contain:
+                <br />
+                • Minimum 8 characters
+                <br />
+                • 1 uppercase letter
+                <br />
+                • 1 lowercase letter
+                <br />
+                • 1 number
+                <br />
+                • 1 special character
+              </div>
 
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
@@ -1119,6 +1119,13 @@ export default function LoginPage() {
           font-weight: 900;
         }
 
+        .passwordRules {
+          font-size: 12px;
+          line-height: 1.45;
+          font-weight: 800;
+          margin-top: 12px;
+        }
+
         .notice.info {
           background: rgba(255, 250, 230, 0.84);
           color: #264b22;
@@ -1132,6 +1139,75 @@ export default function LoginPage() {
         .notice.error {
           background: rgba(255, 233, 225, 0.92);
           color: #9a3412;
+        }
+
+
+        .waitingCard {
+          text-align: left;
+        }
+
+        .waitingForest {
+          position: relative;
+          width: 112px;
+          height: 112px;
+          margin: 0 auto 18px;
+          display: grid;
+          place-items: center;
+        }
+
+        .seedPulse {
+          width: 76px;
+          height: 76px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          font-size: 36px;
+          background: rgba(224, 244, 214, 0.96);
+          box-shadow: 0 0 0 0 rgba(31, 91, 33, 0.26);
+          animation: pulseSeed 2.2s ease-in-out infinite;
+        }
+
+        .orbitLeaf {
+          position: absolute;
+          left: 44px;
+          top: 44px;
+          font-size: 20px;
+          transform-origin: 12px 12px;
+          animation: orbitLeaf 4.5s linear infinite;
+        }
+
+        .orbitLeaf.leafB { animation-delay: -1.5s; }
+        .orbitLeaf.leafC { animation-delay: -3s; }
+
+        .waitingBox {
+          margin-top: 16px;
+          padding: 16px;
+          border-radius: 22px;
+          background: rgba(255, 250, 230, 0.84);
+          color: #69775f;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .waitingBox strong {
+          color: #8d9c4e;
+          letter-spacing: 3px;
+          font-size: 13px;
+        }
+
+        .waitingBox p {
+          margin: 8px 0 0;
+        }
+
+
+        @keyframes pulseSeed {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(31, 91, 33, 0.24); transform: scale(1); }
+          50% { box-shadow: 0 0 0 18px rgba(31, 91, 33, 0); transform: scale(1.05); }
+        }
+
+        @keyframes orbitLeaf {
+          from { transform: rotate(0deg) translateX(44px) rotate(0deg); }
+          to { transform: rotate(360deg) translateX(44px) rotate(-360deg); }
         }
 
         @keyframes cardIn {
