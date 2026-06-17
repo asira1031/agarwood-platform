@@ -106,9 +106,32 @@ export default function LoginPage() {
       email,
       phone: user.user_metadata?.phone || registerPhone.trim() || null,
       phone_verified: false,
+      role: "CUSTOMER",
       membership_status: "INACTIVE",
       verification_status: "UNVERIFIED",
+      kyc_status: "PENDING",
     });
+  }
+
+  async function redirectByRole(user: any) {
+    const email = user?.email?.trim().toLowerCase();
+
+    if (!email) {
+      window.location.href = "/dashboard";
+      return;
+    }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("email", email)
+      .single();
+
+    if (profile?.role === "ADMIN") {
+      window.location.href = "/admin/dashboard";
+    } else {
+      window.location.href = "/dashboard";
+    }
   }
 
   useEffect(() => {
@@ -127,14 +150,14 @@ export default function LoginPage() {
     supabase.auth.getSession().then(async ({ data }) => {
       if (data.session?.user && params.get("reset") !== "1") {
         await ensureProfile(data.session.user);
-        window.location.href = "/dashboard";
+        await redirectByRole(data.session.user);
       }
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_IN" && session?.user && params.get("reset") !== "1") {
         await ensureProfile(session.user);
-        window.location.href = "/dashboard";
+        await redirectByRole(session.user);
       }
     });
 
@@ -265,16 +288,22 @@ export default function LoginPage() {
     setLoading(false);
 
     if (error) {
-      setNotice({ type: "error", text: "Invalid email or password. Please confirm your email before logging in." });
+      console.error("SUPABASE LOGIN ERROR:", error);
+
+      setNotice({
+        type: "error",
+        text: error.message,
+      });
+
       return;
     }
 
     if (data.user) {
       await ensureProfile(data.user);
+      setNotice({ type: "success", text: "Login successful. Redirecting..." });
+      await redirectByRole(data.user);
+      return;
     }
-
-    setNotice({ type: "success", text: "Login successful. Redirecting..." });
-    window.location.href = "/dashboard";
   }
 
   async function sendForgotOtp() {
