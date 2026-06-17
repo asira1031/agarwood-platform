@@ -609,7 +609,7 @@ export default function LoginPage() {
               {notice && <div className={`notice ${notice.type}`}>{notice.text}</div>}
 
               <button className="primary" onClick={sendForgotOtp} disabled={loading}>
-                {loading ? "Sending..." : "Send Recovery Instructions"}
+                {loading ? "Sending..." : "Send Recovery Email"}
               </button>
 
               <button className="backButton" onClick={() => go("login")}>
@@ -969,7 +969,7 @@ export default function LoginPage() {
           top: 50%;
           transform: translateY(-50%);
           width: 430px;
-          height: 650px;
+          height: 690px;
           z-index: 20;
         }
 
@@ -981,9 +981,15 @@ export default function LoginPage() {
           backdrop-filter: blur(18px);
           border: 1px solid rgba(255, 255, 255, 0.8);
           box-shadow: 0 28px 70px rgba(24, 75, 26, 0.22);
-          padding: 34px 36px;
-          overflow: hidden;
+          padding: 30px 36px;
+          overflow-y: auto;
+          overflow-x: hidden;
           animation: cardIn 520ms cubic-bezier(0.22, 1, 0.36, 1);
+          scrollbar-width: none;
+        }
+
+        .card::-webkit-scrollbar {
+          display: none;
         }
 
         .kicker {
@@ -1120,10 +1126,11 @@ export default function LoginPage() {
         }
 
         .passwordRules {
-          font-size: 12px;
-          line-height: 1.45;
+          font-size: 11px;
+          line-height: 1.35;
           font-weight: 800;
-          margin-top: 12px;
+          margin-top: 10px;
+          padding: 12px 14px;
         }
 
         .notice.info {
@@ -1288,7 +1295,7 @@ export default function LoginPage() {
             top: auto;
             bottom: 24px;
             width: auto;
-            height: 650px;
+            height: 700px;
             transform: none;
           }
         }
@@ -1322,11 +1329,11 @@ export default function LoginPage() {
             left: 14px;
             right: 14px;
             bottom: 14px;
-            height: 665px;
+            height: 720px;
           }
 
           .card {
-            padding: 28px 22px;
+            padding: 26px 22px;
             border-radius: 26px;
           }
 
