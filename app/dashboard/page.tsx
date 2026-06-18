@@ -1,16 +1,65 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
+type Profile = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  membership_status: string | null;
+  kyc_status: string | null;
+  account_status: string | null;
+};
 
 export default function DashboardPage() {
-  const [stage, setStage] = useState(2);
+  const [stage, setStage] = useState(3);
+  const [profile, setProfile] = useState<Profile | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => {
-      setStage((s) => (s >= 4 ? 1 : s + 1));
+      setStage((s) => (s >= 5 ? 1 : s + 1));
     }, 2400);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    async function loadProfile() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const email = user.email?.trim().toLowerCase() || "";
+
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select(
+          "id, full_name, email, membership_status, kyc_status, account_status"
+        )
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const { data: profileByEmail } = await supabase
+        .from("profiles")
+        .select(
+          "id, full_name, email, membership_status, kyc_status, account_status"
+        )
+        .eq("email", email)
+        .maybeSingle();
+
+      setProfile(profileById || profileByEmail);
+    }
+
+    loadProfile();
+  }, []);
+
+  const displayName = profile?.full_name || "Agarwood Investor";
+  const initials = getInitials(displayName);
 
   return (
     <main className="page">
@@ -42,7 +91,11 @@ export default function DashboardPage() {
         </nav>
 
         <div className="promo">
-          <h3>Grow Wealth.<br />Grow Legacy.</h3>
+          <h3>
+            Grow Wealth.
+            <br />
+            Grow Legacy.
+          </h3>
           <p>Sustainable future, lasting returns.</p>
           <div className="promoPlant">
             <span>🌱</span>
@@ -50,9 +103,9 @@ export default function DashboardPage() {
         </div>
 
         <div className="userBox">
-          <div className="avatar">DU</div>
+          <div className="avatar">{initials}</div>
           <div>
-            <strong>Demo User</strong>
+            <strong>{displayName}</strong>
             <p>Client</p>
           </div>
           <span>⌄</span>
@@ -63,41 +116,74 @@ export default function DashboardPage() {
         <header className="header">
           <div>
             <p>Welcome back,</p>
-            <h2>Demo User <span>🍃</span></h2>
-            <small>Let's grow your future together.</small>
+            <h2>
+              {displayName} <span>🍃</span>
+            </h2>
+            <small>
+              Monitor your agarwood ownership, care updates, and market movement.
+            </small>
           </div>
 
           <div className="headerActions">
-            <button>🔔<i>3</i></button>
-            <button>✉️<i>2</i></button>
-            <div className="topAvatar">DU</div>
+            <button>
+              🔔<i>5</i>
+            </button>
+            <button>
+              ✉️<i>2</i>
+            </button>
+            <div className="topAvatar">{initials}</div>
           </div>
         </header>
 
         <section className="stats">
-          <Card icon="🌳" title="Total Trees" value="128" sub="↑ 12 this month" />
-          <Card icon="💰" title="Active Investments" value="₱ 285,000" sub="↑ 8.6% vs last month" />
-          <Card icon="🏆" title="Total Earnings" value="₱ 48,750" sub="↑ 15.4% vs last month" gold />
-          <Card icon="💳" title="Wallet Balance" value="₱ 12,340" sub="Available Balance" />
+          <Card
+            icon="🌳"
+            title="Owned Trees"
+            value="128"
+            sub="78 individual • 50 package"
+          />
+          <Card
+            icon="🔔"
+            title="Care Tasks Due"
+            value="5"
+            sub="Needs attention today"
+          />
+          <Card
+            icon="🛡️"
+            title="Care Subscription"
+            value="ACTIVE"
+            sub="Covered until Jul 18"
+            gold
+          />
+          <Card
+            icon="💳"
+            title="Wallet Balance"
+            value="₱ 12,340"
+            sub="Available balance"
+          />
         </section>
 
         <section className="mainGrid">
           <div className="journey">
-            <h3>Tree Growth Journey</h3>
-            <h4>Agarwood Tree 🍃</h4>
+            <h3>Agarwood Growth Guide</h3>
+            <h4>How agarwood develops 🍃</h4>
 
             {[
-              ["Seedling", "1 - 3 Months", true],
-              ["Sapling", "3 - 12 Months", true],
-              ["Young Tree", "1 - 3 Years", true],
-              ["Mature Tree", "3 - 7 Years", false],
-              ["Harvest Ready", "7+ Years", false],
+              ["Seedling", "0 - 6 Months", "Early root stage; photo may be limited", true],
+              ["Sapling", "6 - 18 Months", "Visible stem and leaves begin", true],
+              ["Young Tree", "1.5 - 3 Years", "Active growth and care monitoring", true],
+              ["Mature Tree", "3 - 7 Years", "Trunk mass and value development", false],
+              ["Harvest Ready", "7+ Years", "Eligible for sell or harvest review", false],
             ].map((x, i) => (
-              <div className={`step ${i === 2 ? "current" : ""}`} key={x[0] as string}>
-                <span>{x[2] ? "✓" : "🔒"}</span>
+              <div
+                className={`step ${i === 2 ? "current" : ""}`}
+                key={x[0] as string}
+              >
+                <span>{x[3] ? "✓" : "🔒"}</span>
                 <div>
                   <strong>{x[0]}</strong>
                   <p>{x[1]}</p>
+                  <small>{x[2]}</small>
                 </div>
                 {i === 2 && <b />}
               </div>
@@ -105,8 +191,10 @@ export default function DashboardPage() {
           </div>
 
           <div className="growthCard">
-            <div className="pill">🍃 Young Tree Stage</div>
-            <p className="growthText">You're growing! Keep going.</p>
+            <div className="pill">🍃 Agarwood Tree Visualization</div>
+            <p className="growthText">
+              Demo growth cycle: seedling to harvest-ready agarwood.
+            </p>
 
             <div className="forestScene">
               <div className="glowCircle" />
@@ -116,13 +204,19 @@ export default function DashboardPage() {
 
               <div className={`treeStage stage${stage}`}>
                 <div className="soil" />
-                <div className="trunk" />
+                <div className="trunk">
+                  <i />
+                  <em />
+                </div>
                 <div className="branch b1" />
                 <div className="branch b2" />
+                <div className="branch b3" />
+                <div className="branch b4" />
                 <div className="crown c1" />
                 <div className="crown c2" />
                 <div className="crown c3" />
                 <div className="crown c4" />
+                <div className="resinGlow" />
               </div>
             </div>
 
@@ -131,62 +225,96 @@ export default function DashboardPage() {
                 <strong>Growth Progress</strong>
                 <span>42%</span>
               </div>
-              <div className="bar"><i /></div>
-              <p><b>Time Remaining</b><span>1 Year, 8 Months</span></p>
+              <div className="bar">
+                <i />
+              </div>
+              <p>
+                <b>Estimated Harvest</b>
+                <span>1 Year, 8 Months</span>
+              </p>
             </div>
           </div>
 
           <div className="portfolio">
             <div className="panelHead">
-              <h3>Your Portfolio</h3>
-              <button>View all ›</button>
+              <h3>My Trees Overview</h3>
+              <button>View My Trees ›</button>
             </div>
 
-            <div className="donut">
+            <div className="treeOverviewHero">
               <div>
                 <strong>128</strong>
-                <span>Total Trees</span>
+                <span>Owned Trees</span>
               </div>
             </div>
 
-            <ul>
-              <li><i className="green" /> Mature Trees <b>35 (27%)</b></li>
-              <li><i className="lime" /> Young Trees <b>63 (49%)</b></li>
-              <li><i className="gold" /> Saplings <b>20 (16%)</b></li>
-              <li><i className="cream" /> Seedlings <b>10 (8%)</b></li>
-            </ul>
+            <div className="overviewRows">
+              <OverviewRow label="Individual Trees" value="78" />
+              <OverviewRow label="Package Trees" value="50" />
+              <OverviewRow label="Latest Photo Update" value="Jun 18" />
+              <OverviewRow label="GPS Verification" value="Verified" />
+              <OverviewRow label="Care Subscription" value="Active" />
+              <OverviewRow label="Trees Needing Attention" value="5" alert />
+            </div>
           </div>
 
           <div className="actions darkPanel">
             <h3>Quick Actions</h3>
             <div>
-              <button>🍃<span>Invest Now</span></button>
-              <button>💼<span>Add Funds</span></button>
-              <button>↑<span>Withdraw</span></button>
-              <button>🌳<span>My Trees</span></button>
+              <button>
+                🍃<span>Invest</span>
+              </button>
+              <button>
+                💼<span>Add Funds</span>
+              </button>
+              <button>
+                ↑<span>Withdraw</span>
+              </button>
+              <button>
+                🌳<span>My Trees</span>
+              </button>
             </div>
           </div>
 
-          <div className="summary panel">
+          <div className="inventory panel">
             <div className="panelHead">
-              <h3>Investment Summary</h3>
-              <button>This Month⌄</button>
+              <h3>Inventory</h3>
+              <button>Buy More ›</button>
             </div>
-            <p>Total Invested</p>
-            <h2>₱ 285,000</h2>
-            <div className="miniChart">
-              <span /><span /><span /><span /><span /><span />
+
+            <div className="inventoryList">
+              <InventoryRow icon="🌱" name="Organic Fertilizer" qty="18 Bags" />
+              <InventoryRow icon="🧪" name="Growth Booster" qty="12 Bottles" />
+              <InventoryRow icon="🪲" name="Insecticide" qty="6 Bottles" warning />
+              <InventoryRow icon="🌿" name="Fungicide" qty="8 Bottles" />
+              <InventoryRow icon="📍" name="GPS Tags" qty="128 Active" />
+              <InventoryRow icon="📸" name="Photo Credits" qty="42 Left" />
             </div>
-            <small>↑ 8.6% vs last month</small>
+
+            <small>
+              ⚠ Insecticide is near low stock. Buy from marketplace when needed.
+            </small>
           </div>
 
-          <div className="earnings panel">
+          <div className="market panel">
             <div className="panelHead">
-              <h3>Earnings Overview</h3>
-              <button>This Month⌄</button>
+              <h3>Agarwood Market</h3>
+              <button>Live Style⌄</button>
             </div>
-            <h2>₱ 48,750</h2>
-            <small>↑ 15.4% vs last month</small>
+
+            <div className="marketTop">
+              <div>
+                <p>Agarwood Oil</p>
+                <h2>₱ 148,500</h2>
+                <small>↑ 4.2% this month</small>
+              </div>
+
+              <div className="marketPills">
+                <span>Chips ↑ 8.7%</span>
+                <span>Resin ↓ 1.4%</span>
+              </div>
+            </div>
+
             <div className="lineChart">
               <svg viewBox="0 0 400 130" preserveAspectRatio="none">
                 <path d="M0 95 C40 40, 80 110, 120 70 C170 20, 200 110, 250 55 C300 5, 330 65, 400 20" />
@@ -196,29 +324,34 @@ export default function DashboardPage() {
 
           <div className="activity panel">
             <div className="panelHead">
-              <h3>Recent Activity</h3>
+              <h3>Notifications</h3>
               <button>View all ›</button>
             </div>
 
             {[
-              ["🎁", "Investment Package Purchased", "Premium Bundle", "+ ₱ 50,000"],
-              ["🌳", "Earnings Credited", "Tree #AG-1287", "+ ₱ 1,250"],
-              ["👥", "Referral Bonus", "From Juan D.", "+ ₱ 750"],
-              ["⬇", "Withdrawal", "To GCash **** 1234", "- ₱ 2,000"],
+              ["💧", "Tree AG-001", "Watering missed", "2 days ago"],
+              ["🌱", "Tree AG-003", "Fertilizer due", "Jun 20"],
+              ["📸", "Tree AG-005", "Photo update available", "Today"],
+              ["📍", "Tree AG-002", "GPS verified", "Completed"],
+              ["🛡️", "Care Subscription", "Expires in 3 days", "Renew soon"],
+              ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750"],
             ].map((a) => (
-              <div className="activityRow" key={a[1]}>
+              <div className="activityRow" key={`${a[1]}-${a[2]}`}>
                 <span>{a[0]}</span>
                 <div>
                   <strong>{a[1]}</strong>
                   <p>{a[2]}</p>
                 </div>
-                <b className={a[3].includes("-") ? "red" : ""}>{a[3]}</b>
+                <b>{a[3]}</b>
               </div>
             ))}
           </div>
         </section>
 
-        <footer>🍃 Thank you for being part of a greener tomorrow. <span>|</span> Agarwood Investments © 2026</footer>
+        <footer>
+          🍃 Thank you for being part of a greener tomorrow. <span>|</span>{" "}
+          Agarwood Investments © 2026
+        </footer>
       </section>
 
       <style>{`
@@ -480,7 +613,7 @@ export default function DashboardPage() {
           display: flex;
           align-items: center;
           gap: 14px;
-          padding: 14px 10px;
+          padding: 13px 10px;
           margin-top: 10px;
           border-radius: 14px;
         }
@@ -507,6 +640,7 @@ export default function DashboardPage() {
           color: white;
           font-size: 12px;
           z-index: 2;
+          flex: 0 0 auto;
         }
         .step div strong {
           font-size: 14px;
@@ -515,6 +649,12 @@ export default function DashboardPage() {
           margin: 5px 0 0;
           font-size: 13px;
           color: #596056;
+        }
+        .step div small {
+          display: block;
+          margin-top: 3px;
+          font-size: 11px;
+          color: #7c8378;
         }
         .step b {
           width: 8px;
@@ -544,6 +684,7 @@ export default function DashboardPage() {
           color: white;
           font-weight: 900;
           z-index: 5;
+          white-space: nowrap;
         }
         .growthText {
           position: absolute;
@@ -563,8 +704,8 @@ export default function DashboardPage() {
         }
         .glowCircle {
           position: absolute;
-          width: 420px;
-          height: 420px;
+          width: 440px;
+          height: 440px;
           border-radius: 50%;
           border: 4px solid rgba(110, 255, 123, .75);
           border-left-color: rgba(255,255,255,.25);
@@ -575,57 +716,121 @@ export default function DashboardPage() {
 
         .treeStage {
           position: relative;
-          width: 240px;
-          height: 270px;
+          width: 260px;
+          height: 315px;
           transform-origin: bottom center;
           animation: treeBreath 3s ease-in-out infinite;
           z-index: 3;
         }
         .soil {
           position: absolute;
-          left: 35px;
+          left: 32px;
           bottom: 0;
-          width: 170px;
-          height: 35px;
+          width: 196px;
+          height: 38px;
           border-radius: 50%;
           background: #2b1b0c;
           box-shadow: 0 15px 28px rgba(0,0,0,.35);
         }
         .trunk {
           position: absolute;
-          left: 105px;
-          bottom: 20px;
-          width: 30px;
-          height: 150px;
-          border-radius: 18px;
-          background: linear-gradient(90deg, #6a3d15, #b26a20, #5a2c0f);
+          left: 112px;
+          bottom: 22px;
+          width: 35px;
+          height: 190px;
+          border-radius: 20px;
+          background: linear-gradient(90deg, #5a2c0f, #b26a20 45%, #6a3d15);
+          overflow: hidden;
+          box-shadow: inset -7px 0 10px rgba(0,0,0,.18);
         }
+        .trunk i,
+        .trunk em {
+          position: absolute;
+          display: block;
+          width: 7px;
+          border-radius: 999px;
+          background: rgba(54, 22, 7, .55);
+        }
+        .trunk i {
+          height: 150px;
+          left: 9px;
+          top: 24px;
+          transform: rotate(4deg);
+        }
+        .trunk em {
+          height: 105px;
+          right: 7px;
+          top: 62px;
+          transform: rotate(-5deg);
+        }
+
+        .resinGlow {
+          position: absolute;
+          left: 122px;
+          bottom: 98px;
+          width: 16px;
+          height: 70px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, rgba(255, 220, 99, .8), rgba(129, 75, 23, .1));
+          filter: blur(.2px);
+          opacity: .82;
+          animation: resinPulse 3.5s ease-in-out infinite;
+        }
+
         .branch {
           position: absolute;
-          bottom: 120px;
-          width: 85px;
           height: 13px;
           border-radius: 20px;
           background: #7b4418;
         }
-        .b1 { left: 50px; transform: rotate(-30deg); }
-        .b2 { right: 52px; transform: rotate(32deg); }
+        .b1 { left: 52px; bottom: 145px; width: 90px; transform: rotate(-32deg); }
+        .b2 { right: 54px; bottom: 148px; width: 92px; transform: rotate(34deg); }
+        .b3 { left: 72px; bottom: 192px; width: 70px; transform: rotate(-24deg); }
+        .b4 { right: 75px; bottom: 197px; width: 72px; transform: rotate(25deg); }
 
         .crown {
           position: absolute;
           border-radius: 50%;
           background: radial-gradient(circle at 35% 30%, #a4d85d, #1f6c21 70%);
           box-shadow: inset -12px -16px 26px rgba(0,0,0,.12);
+          transition: opacity .6s ease, transform .6s ease;
         }
-        .c1 { width: 110px; height: 110px; left: 65px; top: 20px; }
-        .c2 { width: 125px; height: 125px; left: 15px; top: 70px; }
-        .c3 { width: 135px; height: 135px; right: 5px; top: 67px; }
-        .c4 { width: 170px; height: 115px; left: 35px; top: 116px; }
+        .c1 { width: 120px; height: 118px; left: 68px; top: 0; }
+        .c2 { width: 140px; height: 136px; left: 13px; top: 74px; }
+        .c3 { width: 148px; height: 142px; right: 5px; top: 70px; }
+        .c4 { width: 190px; height: 128px; left: 34px; top: 126px; }
 
-        .stage1 { transform: scale(.45); }
-        .stage2 { transform: scale(.65); }
-        .stage3 { transform: scale(.86); }
+        .stage1 { transform: scale(.42); }
+        .stage1 .branch,
+        .stage1 .crown,
+        .stage1 .resinGlow {
+          opacity: 0;
+        }
+        .stage1 .trunk {
+          height: 75px;
+          bottom: 18px;
+        }
+
+        .stage2 { transform: scale(.62); }
+        .stage2 .b3,
+        .stage2 .b4,
+        .stage2 .c2,
+        .stage2 .c3,
+        .stage2 .c4,
+        .stage2 .resinGlow {
+          opacity: 0;
+        }
+        .stage2 .trunk {
+          height: 115px;
+        }
+
+        .stage3 { transform: scale(.84); }
+        .stage3 .resinGlow {
+          opacity: .25;
+        }
+
         .stage4 { transform: scale(1); }
+        .stage5 { transform: scale(1.12); }
 
         .leaf {
           position: absolute;
@@ -689,7 +894,7 @@ export default function DashboardPage() {
           padding: 24px;
         }
         .portfolio {
-          min-height: 300px;
+          min-height: 520px;
         }
         .panelHead {
           display: flex;
@@ -708,59 +913,50 @@ export default function DashboardPage() {
           font-weight: 800;
         }
 
-        .donut {
-          margin: 26px auto 0;
+        .treeOverviewHero {
+          margin: 26px auto 20px;
           width: 170px;
           height: 170px;
           border-radius: 50%;
-          background: conic-gradient(#4cc35c 0 49%, #ffd166 49% 65%, #edf3ca 65% 73%, #9bd67e 73% 100%);
+          background:
+            radial-gradient(circle at 35% 35%, #a7ef84, #2a8d37 70%);
           display: grid;
           place-items: center;
-          position: relative;
+          box-shadow: inset -20px -25px 35px rgba(0,0,0,.18), 0 20px 50px rgba(0,0,0,.22);
         }
-        .donut:before {
-          content: "";
-          position: absolute;
-          width: 100px;
-          height: 100px;
-          border-radius: 50%;
-          background: #07351f;
-        }
-        .donut div {
-          position: relative;
+        .treeOverviewHero div {
           text-align: center;
         }
-        .donut strong {
+        .treeOverviewHero strong {
           display: block;
-          font-size: 28px;
+          font-size: 38px;
         }
-        .donut span {
+        .treeOverviewHero span {
           font-size: 13px;
         }
-        .portfolio ul {
-          list-style: none;
-          padding: 0;
-          margin: 22px 0 0;
+
+        .overviewRows {
           display: grid;
-          gap: 14px;
+          gap: 12px;
         }
-        .portfolio li {
+        .overviewRow {
           display: flex;
+          justify-content: space-between;
           align-items: center;
-          gap: 10px;
+          gap: 12px;
+          padding: 12px 0;
+          border-bottom: 1px solid rgba(255,255,255,.12);
         }
-        .portfolio li b {
-          margin-left: auto;
+        .overviewRow p {
+          margin: 0;
+          color: rgba(255,255,255,.75);
         }
-        .portfolio li i {
-          width: 13px;
-          height: 13px;
-          border-radius: 50%;
+        .overviewRow b {
+          color: white;
         }
-        .green { background: #4cc35c; }
-        .lime { background: #9bd67e; }
-        .gold { background: #ffd166; }
-        .cream { background: #edf3ca; }
+        .overviewRow.alert b {
+          color: #ffd166;
+        }
 
         .actions {
           min-height: 210px;
@@ -782,9 +978,6 @@ export default function DashboardPage() {
           cursor: pointer;
           font-weight: 900;
         }
-        .actions button:first-line {
-          font-size: 24px;
-        }
         .actions button span {
           display: block;
           font-size: 13px;
@@ -795,48 +988,88 @@ export default function DashboardPage() {
           padding: 22px;
           min-height: 255px;
         }
-        .summary {
+        .inventory {
           grid-column: 1 / 2;
         }
-        .earnings {
+        .market {
           grid-column: 2 / 3;
         }
         .activity {
           grid-column: 3 / 4;
           grid-row: 3 / 5;
         }
-        .panel h2 {
-          font-size: 29px;
-          margin: 12px 0;
+
+        .inventoryList {
+          margin-top: 18px;
+          display: grid;
+          gap: 10px;
         }
-        .summary p {
-          margin: 24px 0 6px;
+        .inventoryRow {
+          display: grid;
+          grid-template-columns: 36px 1fr auto;
+          align-items: center;
+          gap: 10px;
+          padding: 9px 0;
+          border-bottom: 1px solid rgba(0,0,0,.08);
+        }
+        .inventoryRow .icon {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background: #e3f1d6;
+        }
+        .inventoryRow strong {
+          font-size: 13px;
+        }
+        .inventoryRow p {
+          margin: 3px 0 0;
+          font-size: 11px;
+          color: #666;
+        }
+        .inventoryRow.warn b {
+          color: #c56a00;
+        }
+        .inventory small {
+          display: block;
+          color: #08782e;
+          margin-top: 15px;
+          font-weight: 800;
+          line-height: 1.4;
+        }
+
+        .marketTop {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          margin-top: 16px;
+        }
+        .marketTop p {
+          margin: 0 0 8px;
           color: #5c6259;
         }
-        .summary small,
-        .earnings small {
+        .marketTop h2 {
+          margin: 0 0 8px;
+          font-size: 30px;
+        }
+        .marketTop small {
           color: #08782e;
           font-weight: 900;
         }
-
-        .miniChart {
-          height: 105px;
-          display: flex;
-          align-items: end;
-          gap: 7px;
-          margin: 12px 0;
+        .marketPills {
+          display: grid;
+          gap: 8px;
+          align-content: start;
         }
-        .miniChart span {
-          flex: 1;
-          border-radius: 999px 999px 0 0;
-          background: linear-gradient(#42b955, rgba(66,185,85,.05));
+        .marketPills span {
+          border-radius: 999px;
+          background: #e3f1d6;
+          padding: 8px 12px;
+          font-size: 12px;
+          font-weight: 800;
+          white-space: nowrap;
         }
-        .miniChart span:nth-child(1) { height: 45%; }
-        .miniChart span:nth-child(2) { height: 55%; }
-        .miniChart span:nth-child(3) { height: 64%; }
-        .miniChart span:nth-child(4) { height: 58%; }
-        .miniChart span:nth-child(5) { height: 72%; }
-        .miniChart span:nth-child(6) { height: 88%; }
 
         .lineChart {
           height: 125px;
@@ -881,9 +1114,7 @@ export default function DashboardPage() {
         .activityRow b {
           color: #0b8d37;
           font-size: 13px;
-        }
-        .activityRow b.red {
-          color: #d62121;
+          text-align: right;
         }
 
         footer {
@@ -903,6 +1134,10 @@ export default function DashboardPage() {
           0%, 100% { filter: saturate(1); }
           50% { filter: saturate(1.25) brightness(1.07); }
         }
+        @keyframes resinPulse {
+          0%, 100% { opacity: .45; transform: translateY(0); }
+          50% { opacity: 1; transform: translateY(-4px); }
+        }
         @keyframes leafFloat {
           0%, 100% { transform: translateY(0) rotate(-10deg); opacity: .8; }
           50% { transform: translateY(-22px) rotate(15deg); opacity: 1; }
@@ -920,8 +1155,8 @@ export default function DashboardPage() {
           .stats { grid-template-columns: repeat(2, 1fr); }
           .mainGrid { grid-template-columns: 220px 1fr; }
           .portfolio, .actions, .activity { grid-column: 1 / -1; }
-          .summary { grid-column: 1 / 2; }
-          .earnings { grid-column: 2 / 3; }
+          .inventory { grid-column: 1 / 2; }
+          .market { grid-column: 2 / 3; }
         }
 
         @media (max-width: 900px) {
@@ -929,7 +1164,7 @@ export default function DashboardPage() {
           .sidebar { width: 100%; min-height: auto; }
           nav { grid-template-columns: repeat(2, 1fr); }
           .mainGrid, .stats { grid-template-columns: 1fr; }
-          .summary, .earnings, .activity { grid-column: 1; }
+          .inventory, .market, .activity { grid-column: 1; }
           .header { flex-direction: column; gap: 20px; }
         }
       `}</style>
@@ -960,4 +1195,53 @@ function Card({
       </div>
     </div>
   );
+}
+
+function OverviewRow({
+  label,
+  value,
+  alert,
+}: {
+  label: string;
+  value: string;
+  alert?: boolean;
+}) {
+  return (
+    <div className={`overviewRow ${alert ? "alert" : ""}`}>
+      <p>{label}</p>
+      <b>{value}</b>
+    </div>
+  );
+}
+
+function InventoryRow({
+  icon,
+  name,
+  qty,
+  warning,
+}: {
+  icon: string;
+  name: string;
+  qty: string;
+  warning?: boolean;
+}) {
+  return (
+    <div className={`inventoryRow ${warning ? "warn" : ""}`}>
+      <span className="icon">{icon}</span>
+      <div>
+        <strong>{name}</strong>
+        <p>Marketplace supply</p>
+      </div>
+      <b>{qty}</b>
+    </div>
+  );
+}
+
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 }
