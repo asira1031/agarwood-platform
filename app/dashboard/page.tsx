@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -19,7 +20,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const t = setInterval(() => {
       setStage((s) => (s >= 5 ? 1 : s + 1));
-    }, 2400);
+    }, 2600);
 
     return () => clearInterval(t);
   }, []);
@@ -61,71 +62,21 @@ export default function DashboardPage() {
 
   const displayName = profile?.full_name || "Agarwood Investor";
   const initials = getInitials(displayName);
+  const membershipStatus = profile?.membership_status || "ACTIVE";
   const careSubscription = "ACTIVE";
 
   return (
-    <main className="page">
-      <aside className="sidebar">
-        <div className="logo">
-          <div className="logoMark">♧</div>
-          <h1>AGARWOOD</h1>
-          <p>INVESTMENTS</p>
-        </div>
-
-        <nav>
-          {[
-            ["🏠", "Dashboard"],
-            ["🌳", "My Trees"],
-            ["🛠️", "Tree Operations"],
-            ["🛒", "Marketplace"],
-            ["📈", "Investments"],
-            ["💹", "Earnings"],
-            ["💳", "Wallet"],
-            ["🧾", "Transactions"],
-            ["👥", "Referrals"],
-            ["👤", "Profile"],
-            ["⚙️", "Settings"],
-            ["?", "Support"],
-          ].map((item, i) => (
-            <button className={i === 0 ? "active" : ""} key={item[1]}>
-              <span>{item[0]}</span>
-              {item[1]}
-            </button>
-          ))}
-        </nav>
-
-        <div className="promo">
-          <h3>
-            Grow Wealth.
-            <br />
-            Grow Legacy.
-          </h3>
-          <p>Sustainable future, lasting returns.</p>
-          <div className="promoPlant">
-            <span>🌱</span>
-          </div>
-        </div>
-
-        <div className="userBox">
-          <div className="avatar">{initials}</div>
-          <div>
-            <strong>{displayName}</strong>
-            <p>Client</p>
-          </div>
-          <span>⌄</span>
-        </div>
-      </aside>
-
+    <main className="dashboardPage">
       <section className="content">
         <header className="header">
           <div>
-            <p>Welcome back,</p>
+            <p className="eyebrow">Welcome back,</p>
             <h2>
-              {displayName} <span>🍃</span>
+              {displayName} <span>🌿</span>
             </h2>
             <small>
-              Monitor your agarwood ownership, task orders, care subscription,
-              and tree updates.
+              Manage your agarwood investments, membership access, care services,
+              wallet activity, and tree updates.
             </small>
           </div>
 
@@ -148,17 +99,17 @@ export default function DashboardPage() {
             sub="78 individual • 50 package"
           />
           <Card
-            icon="📋"
-            title="Care Tasks Due"
-            value="5"
-            sub="Task orders scheduled"
+            icon="🎖️"
+            title="Membership"
+            value={membershipStatus}
+            sub="184 days remaining"
+            gold
           />
           <Card
             icon="🛡️"
             title="Care Subscription"
             value={careSubscription}
             sub="Covered until Jul 18"
-            gold
           />
           <Card
             icon="💳"
@@ -171,7 +122,7 @@ export default function DashboardPage() {
         <section className="mainGrid">
           <div className="journey">
             <h3>Agarwood Growth Guide</h3>
-            <h4>How agarwood develops 🍃</h4>
+            <h4>Educational development stages</h4>
 
             {[
               [
@@ -209,7 +160,7 @@ export default function DashboardPage() {
                 className={`step ${i === 2 ? "current" : ""}`}
                 key={x[0] as string}
               >
-                <span>{x[3] ? "✓" : "🔒"}</span>
+                <span>{x[3] ? "✓" : "•"}</span>
                 <div>
                   <strong>{x[0]}</strong>
                   <p>{x[1]}</p>
@@ -221,15 +172,21 @@ export default function DashboardPage() {
           </div>
 
           <div className="growthCard">
-            <div className="pill">🍃 Agarwood Tree Visualization</div>
+            <div className="sun" />
+            <div className="mist mistOne" />
+            <div className="mist mistTwo" />
+            <div className="hill hillOne" />
+            <div className="hill hillTwo" />
+
+            <div className="pill">☀️ Agarwood Tree Visualization</div>
             <p className="growthText">
-              Demo growth cycle: seedling to harvest-ready agarwood.
+              Morning growth guide only — not actual customer tree data.
             </p>
 
             <div className="forestScene">
               <div className="glowCircle" />
               <div className="leaf l1">🍃</div>
-              <div className="leaf l2">🍃</div>
+              <div className="leaf l2">🍂</div>
               <div className="leaf l3">🍃</div>
 
               <div className={`treeStage stage${stage}`}>
@@ -252,14 +209,14 @@ export default function DashboardPage() {
 
             <div className="progressGlass">
               <div>
-                <strong>Growth Progress</strong>
+                <strong>Guide Progress</strong>
                 <span>42%</span>
               </div>
               <div className="bar">
                 <i />
               </div>
               <p>
-                <b>Estimated Harvest</b>
+                <b>Estimated Harvest Stage</b>
                 <span>1 Year, 8 Months</span>
               </p>
             </div>
@@ -268,7 +225,7 @@ export default function DashboardPage() {
           <div className="portfolio">
             <div className="panelHead">
               <h3>My Trees Overview</h3>
-              <button>View My Trees ›</button>
+              <Link href="/dashboard/my-trees">View My Trees ›</Link>
             </div>
 
             <div className="treeOverviewHero">
@@ -291,7 +248,7 @@ export default function DashboardPage() {
           <div className="inventory panel">
             <div className="panelHead">
               <h3>Inventory</h3>
-              <button>Buy More ›</button>
+              <Link href="/dashboard/marketplace">Buy More ›</Link>
             </div>
 
             <div className="inventoryList">
@@ -303,20 +260,21 @@ export default function DashboardPage() {
             </div>
 
             <small>
-              ⚠ Insecticide is near low stock. Buy supplies from Marketplace
-              when needed.
+              Insecticide is near low stock. Buy supplies from Marketplace when
+              needed.
             </small>
           </div>
 
           <div className="taskOrders panel">
             <div className="panelHead">
               <h3>Task Orders</h3>
-              <button>Open Operations ›</button>
+              <Link href="/dashboard/tree-operations">Open Operations ›</Link>
             </div>
 
             <p className="taskIntro">
-              Scheduled care requirements for your trees. If subscribed, required
-              items and service handling are covered by your care plan.
+              Scheduled care requirements for your trees. If subscribed,
+              required items and service handling may be covered by your care
+              plan.
             </p>
 
             <div className="taskList">
@@ -361,25 +319,27 @@ export default function DashboardPage() {
                 <strong>Managed Care Subscription</strong>
                 <p>Care service status: {careSubscription}</p>
               </div>
-              <button>{careSubscription === "ACTIVE" ? "Renew" : "Subscribe"}</button>
+              <Link href="/dashboard/tree-operations">
+                {careSubscription === "ACTIVE" ? "Renew" : "Subscribe"}
+              </Link>
             </div>
           </div>
 
           <div className="activity panel">
             <div className="panelHead">
               <h3>Notifications</h3>
-              <button>View all ›</button>
+              <Link href="/dashboard/transactions">View all ›</Link>
             </div>
 
             {[
-              ["💧", "Tree AG-001", "Watering missed", "2 days ago"],
-              ["🌱", "Tree AG-003", "Fertilizer scheduled", "Jun 20"],
-              ["👨‍🌾", "Caretaker Report", "Care report uploaded", "Today"],
-              ["📍", "Tree AG-002", "GPS verified", "Completed"],
-              ["🛡️", "Care Subscription", "Expires in 3 days", "Renew soon"],
-              ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750"],
+              ["💧", "Tree AG-001", "Watering missed", "2 days ago", "danger"],
+              ["🌱", "Tree AG-003", "Fertilizer scheduled", "Jun 20", "warning"],
+              ["👨‍🌾", "Caretaker Report", "Care report uploaded", "Today", "ok"],
+              ["📍", "Tree AG-002", "GPS verified", "Completed", "ok"],
+              ["🎖️", "Membership", "Active membership access", "184 days", "ok"],
+              ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750", "ok"],
             ].map((a) => (
-              <div className="activityRow" key={`${a[1]}-${a[2]}`}>
+              <div className={`activityRow ${a[4]}`} key={`${a[1]}-${a[2]}`}>
                 <span>{a[0]}</span>
                 <div>
                   <strong>{a[1]}</strong>
@@ -392,143 +352,28 @@ export default function DashboardPage() {
         </section>
 
         <footer>
-          🍃 Thank you for being part of a greener tomorrow. <span>|</span>{" "}
-          Agarwood Investments © 2026
+          ☀️ Sustainable agarwood ownership with premium care operations.{" "}
+          <span>|</span> Agarwood Investments © 2026
         </footer>
       </section>
 
       <style>{`
         * { box-sizing: border-box; }
-        body { margin: 0; }
-        .page {
+
+        .dashboardPage {
           min-height: 100vh;
-          display: flex;
-          background: #f8f2e6;
-          color: #0c2118;
+          color: #18261d;
           font-family: Arial, Helvetica, sans-serif;
         }
 
-        .sidebar {
-          width: 280px;
-          background:
-            radial-gradient(circle at 70% 20%, rgba(74, 157, 74, .22), transparent 30%),
-            linear-gradient(180deg, #06281d, #03180f);
-          color: white;
-          padding: 30px 18px;
-          display: flex;
-          flex-direction: column;
-          gap: 22px;
-          box-shadow: 24px 0 50px rgba(0,0,0,.16);
-        }
-
-        .logo {
-          text-align: center;
-          margin-bottom: 10px;
-        }
-        .logoMark {
-          font-size: 58px;
-          color: #f0c458;
-          line-height: .8;
-        }
-        .logo h1 {
-          font-size: 22px;
-          letter-spacing: 5px;
-          margin: 10px 0 0;
-          color: #f3c75b;
-        }
-        .logo p {
-          margin: 5px 0 0;
-          font-size: 11px;
-          letter-spacing: 4px;
-          color: #e0b94f;
-        }
-
-        nav {
-          display: grid;
-          gap: 9px;
-        }
-        nav button {
-          min-height: 50px;
-          border: 0;
-          border-radius: 13px;
-          background: transparent;
-          color: #f6fff5;
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          padding: 0 20px;
-          font-size: 15px;
-          font-weight: 800;
-          cursor: pointer;
-          transition: .25s;
-        }
-        nav button span {
-          width: 25px;
-          text-align: center;
-        }
-        nav button.active,
-        nav button:hover {
-          background: linear-gradient(135deg, #2c8f41, #0e4d2e);
-          box-shadow: inset 0 0 18px rgba(153, 255, 140, .35), 0 12px 24px rgba(0,0,0,.22);
-          transform: translateX(4px);
-        }
-
-        .promo {
-          margin-top: auto;
-          border-radius: 18px;
-          padding: 20px;
-          min-height: 190px;
-          background:
-            linear-gradient(rgba(6, 40, 29, .25), rgba(6, 40, 29, .75)),
-            radial-gradient(circle at 80% 70%, #6fd148, transparent 32%);
-          border: 1px solid rgba(198, 255, 161, .25);
-          overflow: hidden;
-          position: relative;
-        }
-        .promo h3 {
-          margin: 0;
-          font-size: 20px;
-          line-height: 1.35;
-        }
-        .promo p {
-          font-size: 13px;
-          line-height: 1.6;
-        }
-        .promoPlant {
-          position: absolute;
-          right: 18px;
-          bottom: 14px;
-          font-size: 70px;
-          animation: floatPlant 4s ease-in-out infinite;
-        }
-
-        .userBox {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 8px 5px;
-        }
-        .avatar, .topAvatar {
-          width: 54px;
-          height: 54px;
-          border-radius: 50%;
-          background: #174c2f;
-          border: 1px solid rgba(255,255,255,.24);
-          display: grid;
-          place-items: center;
-          color: white;
-          font-weight: 900;
-        }
-        .userBox p {
-          margin: 3px 0 0;
-          opacity: .8;
-          font-size: 13px;
-        }
-
         .content {
-          flex: 1;
-          padding: 28px 30px 18px;
+          min-height: 100vh;
+          padding: 26px 28px 18px;
           overflow-x: hidden;
+          background:
+            radial-gradient(circle at 20% 4%, rgba(255, 226, 154, .55), transparent 24%),
+            radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .72), transparent 28%),
+            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
         }
 
         .header {
@@ -537,41 +382,50 @@ export default function DashboardPage() {
           align-items: start;
           margin-bottom: 20px;
         }
-        .header p {
+
+        .eyebrow {
           margin: 0;
-          font-weight: 800;
+          font-weight: 900;
+          color: #6e552d;
+          letter-spacing: .3px;
         }
+
         .header h2 {
-          margin: 4px 0 4px;
-          font-size: 36px;
+          margin: 4px 0 5px;
+          font-size: 34px;
           line-height: 1;
           letter-spacing: -1px;
+          color: #101a14;
         }
+
         .header small {
-          color: #536258;
-          font-size: 16px;
+          color: #5f665e;
+          font-size: 15px;
         }
+
         .headerActions {
           display: flex;
           align-items: center;
           gap: 14px;
         }
+
         .headerActions button {
           position: relative;
           width: 52px;
           height: 52px;
-          border: 0;
-          border-radius: 15px;
-          background: rgba(255,255,255,.65);
-          box-shadow: 0 10px 28px rgba(16, 37, 25, .08);
+          border: 1px solid rgba(92, 70, 35, .08);
+          border-radius: 16px;
+          background: rgba(255, 253, 246, .72);
+          box-shadow: 0 14px 32px rgba(82, 60, 27, .08);
           cursor: pointer;
           font-size: 20px;
         }
+
         .headerActions i {
           position: absolute;
           right: 8px;
           top: 5px;
-          background: #28a848;
+          background: #8a6a2f;
           color: white;
           width: 18px;
           height: 18px;
@@ -582,6 +436,19 @@ export default function DashboardPage() {
           font-style: normal;
         }
 
+        .topAvatar {
+          width: 54px;
+          height: 54px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #244536, #10281f);
+          border: 2px solid rgba(189, 167, 123, .55);
+          display: grid;
+          place-items: center;
+          color: white;
+          font-weight: 900;
+          box-shadow: 0 12px 28px rgba(33, 54, 39, .18);
+        }
+
         .stats {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -590,41 +457,49 @@ export default function DashboardPage() {
         }
 
         .stat {
-          min-height: 140px;
-          border-radius: 18px;
-          background: rgba(255, 253, 246, .8);
-          border: 1px solid rgba(55, 45, 22, .08);
+          min-height: 138px;
+          border-radius: 20px;
+          background: rgba(255, 253, 246, .82);
+          border: 1px solid rgba(92, 70, 35, .08);
           display: flex;
           align-items: center;
-          gap: 20px;
+          gap: 19px;
           padding: 20px;
-          box-shadow: 0 12px 35px rgba(22, 37, 20, .08);
+          box-shadow: 0 18px 40px rgba(82, 60, 27, .08);
         }
+
         .statIcon {
-          width: 70px;
-          height: 70px;
+          width: 68px;
+          height: 68px;
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: radial-gradient(circle, #dff4cb, #b8de9a);
-          font-size: 31px;
-          box-shadow: 0 10px 23px rgba(69, 132, 58, .18);
+          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
+          font-size: 29px;
+          box-shadow: inset -10px -12px 20px rgba(103, 78, 35, .12);
         }
+
         .statIcon.gold {
-          background: radial-gradient(circle, #fff5c7, #efbd43);
+          background: radial-gradient(circle, #fff2bc, #c9a34d);
         }
+
         .stat p {
           margin: 0 0 8px;
-          font-size: 14px;
+          font-size: 13px;
+          color: #5f665e;
+          font-weight: 800;
         }
+
         .stat h3 {
           margin: 0 0 8px;
-          font-size: 30px;
+          font-size: 29px;
           letter-spacing: -1px;
+          color: #101a14;
         }
+
         .stat small {
-          color: #08782e;
-          font-weight: 800;
+          color: #6e552d;
+          font-weight: 900;
         }
 
         .mainGrid {
@@ -634,23 +509,31 @@ export default function DashboardPage() {
         }
 
         .journey, .growthCard, .portfolio, .panel {
-          border-radius: 18px;
-          box-shadow: 0 13px 38px rgba(20, 29, 18, .09);
-          border: 1px solid rgba(45, 34, 13, .07);
+          border-radius: 20px;
+          box-shadow: 0 18px 42px rgba(82, 60, 27, .09);
+          border: 1px solid rgba(92, 70, 35, .08);
         }
 
         .journey {
-          background: rgba(255, 253, 246, .85);
+          background: rgba(255, 253, 246, .82);
           padding: 20px;
           min-height: 520px;
         }
+
         .journey h3, .journey h4 {
           margin: 0;
         }
+
+        .journey h3 {
+          color: #17271d;
+        }
+
         .journey h4 {
           margin-top: 12px;
-          color: #108131;
+          color: #8c6a3c;
+          font-size: 14px;
         }
+
         .step {
           position: relative;
           display: flex;
@@ -660,6 +543,7 @@ export default function DashboardPage() {
           margin-top: 10px;
           border-radius: 14px;
         }
+
         .step:before {
           content: "";
           position: absolute;
@@ -667,43 +551,52 @@ export default function DashboardPage() {
           top: -12px;
           width: 2px;
           height: 24px;
-          background: #c8d5bb;
+          background: #d9ccb0;
         }
+
         .step:first-of-type:before { display: none; }
+
         .step.current {
-          background: linear-gradient(90deg, #d9efc4, #c6e5ae);
+          background: linear-gradient(90deg, #f2e4c6, #e0cfaa);
+          box-shadow: inset 0 0 0 1px rgba(140, 106, 60, .12);
         }
+
         .step span {
           width: 24px;
           height: 24px;
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #2ba849;
+          background: #31553d;
           color: white;
           font-size: 12px;
           z-index: 2;
           flex: 0 0 auto;
         }
+
         .step div strong {
           font-size: 14px;
+          color: #17271d;
         }
+
         .step div p {
           margin: 5px 0 0;
           font-size: 13px;
-          color: #596056;
+          color: #6c675b;
         }
+
         .step div small {
           display: block;
           margin-top: 3px;
           font-size: 11px;
-          color: #7c8378;
+          color: #817866;
         }
+
         .step b {
           width: 8px;
           height: 8px;
           border-radius: 50%;
-          background: #168734;
+          background: #8c6a3c;
           margin-left: auto;
         }
 
@@ -712,10 +605,59 @@ export default function DashboardPage() {
           overflow: hidden;
           min-height: 520px;
           background:
-            linear-gradient(rgba(255, 249, 224, .30), rgba(6, 46, 22, .75)),
-            radial-gradient(circle at 72% 30%, rgba(255, 225, 117, .65), transparent 25%),
-            linear-gradient(135deg, #e6e2c6, #88a773 48%, #113a1f);
+            radial-gradient(circle at 16% 12%, rgba(255, 232, 161, .95), transparent 18%),
+            radial-gradient(circle at 30% 18%, rgba(255, 205, 94, .35), transparent 28%),
+            radial-gradient(circle at 78% 36%, rgba(255,255,255,.30), transparent 34%),
+            linear-gradient(180deg, #f6e3bb 0%, #e1d6ba 34%, #b9bea3 68%, #798b72 100%);
         }
+
+        .sun {
+          position: absolute;
+          width: 150px;
+          height: 150px;
+          left: 36px;
+          top: 24px;
+          border-radius: 50%;
+          background: radial-gradient(circle, rgba(255, 241, 184, .9), rgba(255, 197, 79, .35), transparent 70%);
+          filter: blur(2px);
+          z-index: 1;
+        }
+
+        .mist {
+          position: absolute;
+          left: -8%;
+          right: -8%;
+          height: 72px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.22);
+          filter: blur(18px);
+          z-index: 1;
+        }
+
+        .mistOne { top: 180px; animation: driftMist 9s ease-in-out infinite; }
+        .mistTwo { top: 250px; opacity: .7; animation: driftMist 12s ease-in-out infinite reverse; }
+
+        .hill {
+          position: absolute;
+          bottom: 0;
+          border-radius: 50% 50% 0 0;
+          background: rgba(49, 85, 61, .28);
+          z-index: 1;
+        }
+
+        .hillOne {
+          width: 78%;
+          height: 190px;
+          left: -12%;
+        }
+
+        .hillTwo {
+          width: 82%;
+          height: 230px;
+          right: -20%;
+          background: rgba(74, 93, 61, .22);
+        }
+
         .pill {
           position: absolute;
           top: 28px;
@@ -723,38 +665,45 @@ export default function DashboardPage() {
           transform: translateX(-50%);
           padding: 10px 22px;
           border-radius: 999px;
-          background: #0c5a30;
-          color: white;
+          background: rgba(49, 85, 61, .92);
+          color: #fff7df;
           font-weight: 900;
           z-index: 5;
           white-space: nowrap;
+          box-shadow: 0 14px 30px rgba(46, 53, 31, .18);
         }
+
         .growthText {
           position: absolute;
           top: 74px;
           left: 0;
           right: 0;
           text-align: center;
-          color: white;
+          color: #fffaf0;
           z-index: 5;
+          font-weight: 800;
+          text-shadow: 0 2px 8px rgba(80, 55, 24, .28);
         }
+
         .forestScene {
           position: absolute;
           inset: 0;
           display: grid;
           place-items: center;
           padding-top: 80px;
+          z-index: 3;
         }
+
         .glowCircle {
           position: absolute;
-          width: 440px;
-          height: 440px;
+          width: 430px;
+          height: 430px;
           border-radius: 50%;
-          border: 4px solid rgba(110, 255, 123, .75);
-          border-left-color: rgba(255,255,255,.25);
-          border-bottom-color: rgba(255,255,255,.18);
-          filter: drop-shadow(0 0 20px rgba(80, 255, 115, .6));
-          animation: rotateGlow 7s linear infinite;
+          border: 3px solid rgba(255, 236, 178, .52);
+          border-left-color: rgba(255,255,255,.20);
+          border-bottom-color: rgba(255,255,255,.12);
+          filter: drop-shadow(0 0 18px rgba(255, 213, 119, .38));
+          animation: rotateGlow 9s linear infinite;
         }
 
         .treeStage {
@@ -762,61 +711,68 @@ export default function DashboardPage() {
           width: 260px;
           height: 315px;
           transform-origin: bottom center;
-          animation: treeBreath 3s ease-in-out infinite;
+          animation: treeBreath 3.5s ease-in-out infinite;
           z-index: 3;
         }
+
         .soil {
           position: absolute;
-          left: 32px;
+          left: 30px;
           bottom: 0;
-          width: 196px;
+          width: 200px;
           height: 38px;
           border-radius: 50%;
           background: #2b1b0c;
-          box-shadow: 0 15px 28px rgba(0,0,0,.35);
+          box-shadow: 0 15px 28px rgba(0,0,0,.28);
         }
+
         .trunk {
           position: absolute;
-          left: 112px;
+          left: 108px;
           bottom: 22px;
-          width: 35px;
-          height: 190px;
-          border-radius: 20px;
-          background: linear-gradient(90deg, #5a2c0f, #b26a20 45%, #6a3d15);
+          width: 44px;
+          height: 195px;
+          border-radius: 24px;
+          background:
+            linear-gradient(90deg, #3c1e0d, #8b5620 42%, #4f2b12),
+            repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 7px);
           overflow: hidden;
-          box-shadow: inset -7px 0 10px rgba(0,0,0,.18);
+          box-shadow: inset -9px 0 12px rgba(0,0,0,.22);
         }
+
         .trunk i,
         .trunk em {
           position: absolute;
           display: block;
           width: 7px;
           border-radius: 999px;
-          background: rgba(54, 22, 7, .55);
+          background: rgba(38, 18, 8, .62);
         }
+
         .trunk i {
-          height: 150px;
-          left: 9px;
+          height: 155px;
+          left: 10px;
           top: 24px;
           transform: rotate(4deg);
         }
+
         .trunk em {
-          height: 105px;
-          right: 7px;
-          top: 62px;
+          height: 112px;
+          right: 8px;
+          top: 60px;
           transform: rotate(-5deg);
         }
 
         .resinGlow {
           position: absolute;
-          left: 122px;
-          bottom: 98px;
-          width: 16px;
-          height: 70px;
+          left: 124px;
+          bottom: 100px;
+          width: 15px;
+          height: 78px;
           border-radius: 999px;
-          background: linear-gradient(180deg, rgba(255, 220, 99, .8), rgba(129, 75, 23, .1));
-          filter: blur(.2px);
-          opacity: .82;
+          background: linear-gradient(180deg, rgba(255, 204, 76, .95), rgba(133, 75, 24, .12));
+          filter: drop-shadow(0 0 10px rgba(255, 190, 65, .7));
+          opacity: .86;
           animation: resinPulse 3.5s ease-in-out infinite;
         }
 
@@ -824,8 +780,9 @@ export default function DashboardPage() {
           position: absolute;
           height: 13px;
           border-radius: 20px;
-          background: #7b4418;
+          background: #5c3216;
         }
+
         .b1 { left: 52px; bottom: 145px; width: 90px; transform: rotate(-32deg); }
         .b2 { right: 54px; bottom: 148px; width: 92px; transform: rotate(34deg); }
         .b3 { left: 72px; bottom: 192px; width: 70px; transform: rotate(-24deg); }
@@ -834,10 +791,11 @@ export default function DashboardPage() {
         .crown {
           position: absolute;
           border-radius: 50%;
-          background: radial-gradient(circle at 35% 30%, #a4d85d, #1f6c21 70%);
-          box-shadow: inset -12px -16px 26px rgba(0,0,0,.12);
+          background: radial-gradient(circle at 35% 30%, #9ab268, #31553d 72%);
+          box-shadow: inset -14px -18px 30px rgba(0,0,0,.16);
           transition: opacity .6s ease, transform .6s ease;
         }
+
         .c1 { width: 120px; height: 118px; left: 68px; top: 0; }
         .c2 { width: 140px; height: 136px; left: 13px; top: 74px; }
         .c3 { width: 148px; height: 142px; right: 5px; top: 70px; }
@@ -849,6 +807,7 @@ export default function DashboardPage() {
         .stage1 .resinGlow {
           opacity: 0;
         }
+
         .stage1 .trunk {
           height: 75px;
           bottom: 18px;
@@ -863,13 +822,14 @@ export default function DashboardPage() {
         .stage2 .resinGlow {
           opacity: 0;
         }
+
         .stage2 .trunk {
           height: 115px;
         }
 
         .stage3 { transform: scale(.84); }
         .stage3 .resinGlow {
-          opacity: .25;
+          opacity: .35;
         }
 
         .stage4 { transform: scale(1); }
@@ -877,13 +837,15 @@ export default function DashboardPage() {
 
         .leaf {
           position: absolute;
-          font-size: 24px;
+          font-size: 22px;
           z-index: 2;
-          animation: leafFloat 5s ease-in-out infinite;
+          animation: leafFloat 5.5s ease-in-out infinite;
+          opacity: .72;
         }
-        .l1 { left: 18%; top: 30%; }
-        .l2 { right: 17%; top: 23%; animation-delay: 1s; }
-        .l3 { right: 25%; bottom: 38%; animation-delay: 1.8s; }
+
+        .l1 { left: 18%; top: 32%; }
+        .l2 { right: 17%; top: 25%; animation-delay: 1s; }
+        .l3 { right: 25%; bottom: 39%; animation-delay: 1.8s; }
 
         .progressGlass {
           position: absolute;
@@ -891,30 +853,35 @@ export default function DashboardPage() {
           right: 26px;
           bottom: 24px;
           padding: 18px;
-          border-radius: 17px;
-          color: white;
-          background: rgba(1, 31, 17, .55);
-          border: 1px solid rgba(255,255,255,.16);
-          backdrop-filter: blur(12px);
+          border-radius: 18px;
+          color: #fff8e6;
+          background: rgba(36, 69, 54, .62);
+          border: 1px solid rgba(255,255,255,.18);
+          backdrop-filter: blur(13px);
           z-index: 6;
         }
+
         .progressGlass div:first-child,
         .progressGlass p {
           display: flex;
           justify-content: space-between;
           align-items: center;
         }
+
         .progressGlass span {
           font-size: 34px;
           font-weight: 900;
         }
+
         .progressGlass p {
           margin: 9px 0 0;
           font-size: 14px;
         }
+
         .progressGlass p span {
           font-size: 14px;
         }
+
         .bar {
           margin-top: 12px;
           height: 12px;
@@ -922,36 +889,38 @@ export default function DashboardPage() {
           background: rgba(255,255,255,.28);
           overflow: hidden;
         }
+
         .bar i {
           display: block;
           width: 42%;
           height: 100%;
           border-radius: inherit;
-          background: linear-gradient(90deg, #8cff7e, #60d95a);
+          background: linear-gradient(90deg, #f4d37a, #bda77b);
           animation: loadBar 2.4s ease-out infinite alternate;
         }
 
         .portfolio {
-          background: linear-gradient(145deg, #07351f, #042317);
+          background: linear-gradient(145deg, #244536, #10281f);
           color: white;
           padding: 24px;
           min-height: 520px;
         }
+
         .panelHead {
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 12px;
         }
+
         .panelHead h3 {
           margin: 0;
         }
-        .panelHead button {
-          border: 0;
-          background: transparent;
+
+        .panelHead a {
           color: inherit;
-          cursor: pointer;
-          font-weight: 800;
+          text-decoration: none;
+          font-weight: 900;
         }
 
         .treeOverviewHero {
@@ -959,19 +928,21 @@ export default function DashboardPage() {
           width: 170px;
           height: 170px;
           border-radius: 50%;
-          background:
-            radial-gradient(circle at 35% 35%, #a7ef84, #2a8d37 70%);
+          background: radial-gradient(circle at 35% 35%, #d6c28c, #31553d 72%);
           display: grid;
           place-items: center;
           box-shadow: inset -20px -25px 35px rgba(0,0,0,.18), 0 20px 50px rgba(0,0,0,.22);
         }
+
         .treeOverviewHero div {
           text-align: center;
         }
+
         .treeOverviewHero strong {
           display: block;
           font-size: 38px;
         }
+
         .treeOverviewHero span {
           font-size: 13px;
         }
@@ -980,23 +951,27 @@ export default function DashboardPage() {
           display: grid;
           gap: 12px;
         }
+
         .overviewRow {
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 12px;
           padding: 12px 0;
-          border-bottom: 1px solid rgba(255,255,255,.12);
+          border-bottom: 1px solid rgba(255,255,255,.13);
         }
+
         .overviewRow p {
           margin: 0;
-          color: rgba(255,255,255,.75);
+          color: rgba(255,255,255,.76);
         }
+
         .overviewRow b {
           color: white;
         }
+
         .overviewRow.alert b {
-          color: #ffd166;
+          color: #f4d37a;
         }
 
         .panel {
@@ -1004,12 +979,15 @@ export default function DashboardPage() {
           padding: 22px;
           min-height: 255px;
         }
+
         .inventory {
           grid-column: 1 / 2;
         }
+
         .taskOrders {
           grid-column: 2 / 3;
         }
+
         .activity {
           grid-column: 3 / 4;
         }
@@ -1019,38 +997,44 @@ export default function DashboardPage() {
           display: grid;
           gap: 10px;
         }
+
         .inventoryRow {
           display: grid;
           grid-template-columns: 36px 1fr auto;
           align-items: center;
           gap: 10px;
           padding: 9px 0;
-          border-bottom: 1px solid rgba(0,0,0,.08);
+          border-bottom: 1px solid rgba(92, 70, 35, .10);
         }
+
         .inventoryRow .icon {
           width: 32px;
           height: 32px;
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #e3f1d6;
+          background: #efe3cc;
         }
+
         .inventoryRow strong {
           font-size: 13px;
         }
+
         .inventoryRow p {
           margin: 3px 0 0;
           font-size: 11px;
           color: #666;
         }
+
         .inventoryRow.warn b {
-          color: #c56a00;
+          color: #a66c22;
         }
+
         .inventory small {
           display: block;
-          color: #08782e;
+          color: #6e552d;
           margin-top: 15px;
-          font-weight: 800;
+          font-weight: 900;
           line-height: 1.4;
         }
 
@@ -1060,11 +1044,13 @@ export default function DashboardPage() {
           font-size: 13px;
           line-height: 1.5;
         }
+
         .taskList {
           margin-top: 15px;
           display: grid;
           gap: 10px;
         }
+
         .taskOrder {
           display: grid;
           grid-template-columns: 38px 1fr auto;
@@ -1073,45 +1059,52 @@ export default function DashboardPage() {
           padding: 11px;
           border-radius: 14px;
           background: #f3ead8;
-          border: 1px solid rgba(0,0,0,.04);
+          border: 1px solid rgba(92, 70, 35, .06);
         }
+
         .taskOrder .taskIcon {
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: #e3f1d6;
+          background: #efe3cc;
           display: grid;
           place-items: center;
         }
+
         .taskOrder strong {
           display: block;
           font-size: 13px;
         }
+
         .taskOrder p {
           margin: 3px 0 0;
           font-size: 12px;
           color: #6b6b62;
         }
+
         .taskOrder b {
           font-size: 11px;
           color: #6b6b62;
           text-align: right;
         }
+
         .taskOrder.covered b {
-          color: #08782e;
+          color: #31553d;
         }
+
         .taskCode {
           display: inline-block;
           margin-bottom: 3px;
           font-size: 10px;
           font-weight: 900;
-          color: #08782e;
+          color: #8c6a3c;
           letter-spacing: .6px;
         }
+
         .subscriptionBox {
           margin-top: 14px;
           border-radius: 16px;
-          background: linear-gradient(135deg, #07351f, #0e4d2e);
+          background: linear-gradient(135deg, #244536, #10281f);
           color: white;
           padding: 15px;
           display: flex;
@@ -1119,19 +1112,20 @@ export default function DashboardPage() {
           justify-content: space-between;
           gap: 12px;
         }
+
         .subscriptionBox p {
           margin: 4px 0 0;
           font-size: 12px;
           color: rgba(255,255,255,.72);
         }
-        .subscriptionBox button {
-          border: 0;
+
+        .subscriptionBox a {
           border-radius: 12px;
-          background: #f0c458;
-          color: #07351f;
+          background: #d6b25e;
+          color: #10281f;
           padding: 10px 14px;
           font-weight: 900;
-          cursor: pointer;
+          text-decoration: none;
           white-space: nowrap;
         }
 
@@ -1141,36 +1135,49 @@ export default function DashboardPage() {
           align-items: center;
           gap: 12px;
           padding: 13px 0;
-          border-bottom: 1px solid rgba(0,0,0,.08);
+          border-bottom: 1px solid rgba(92, 70, 35, .10);
         }
+
         .activityRow span {
           width: 38px;
           height: 38px;
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #e3f1d6;
+          background: #efe3cc;
         }
+
         .activityRow strong {
           font-size: 13px;
         }
+
         .activityRow p {
           margin: 4px 0 0;
           font-size: 12px;
           color: #6b6b62;
         }
+
         .activityRow b {
-          color: #0b8d37;
+          color: #31553d;
           font-size: 13px;
           text-align: right;
         }
 
+        .activityRow.danger b {
+          color: #a33c2a;
+        }
+
+        .activityRow.warning b {
+          color: #a66c22;
+        }
+
         footer {
           text-align: center;
-          color: #697067;
+          color: #776e5f;
           padding: 20px 0 0;
           font-size: 14px;
         }
+
         footer span {
           margin: 0 24px;
         }
@@ -1178,25 +1185,30 @@ export default function DashboardPage() {
         @keyframes rotateGlow {
           to { transform: rotate(360deg); }
         }
+
         @keyframes treeBreath {
-          0%, 100% { filter: saturate(1); }
-          50% { filter: saturate(1.25) brightness(1.07); }
+          0%, 100% { filter: saturate(.95); }
+          50% { filter: saturate(1.08) brightness(1.04); }
         }
+
         @keyframes resinPulse {
-          0%, 100% { opacity: .45; transform: translateY(0); }
+          0%, 100% { opacity: .48; transform: translateY(0); }
           50% { opacity: 1; transform: translateY(-4px); }
         }
+
         @keyframes leafFloat {
-          0%, 100% { transform: translateY(0) rotate(-10deg); opacity: .8; }
-          50% { transform: translateY(-22px) rotate(15deg); opacity: 1; }
+          0%, 100% { transform: translateY(0) rotate(-10deg); opacity: .62; }
+          50% { transform: translateY(-22px) rotate(15deg); opacity: .9; }
         }
+
         @keyframes loadBar {
           from { width: 35%; }
           to { width: 42%; }
         }
-        @keyframes floatPlant {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
+
+        @keyframes driftMist {
+          0%, 100% { transform: translateX(-22px); }
+          50% { transform: translateX(28px); }
         }
 
         @media (max-width: 1280px) {
@@ -1208,9 +1220,7 @@ export default function DashboardPage() {
         }
 
         @media (max-width: 900px) {
-          .page { flex-direction: column; }
-          .sidebar { width: 100%; min-height: auto; }
-          nav { grid-template-columns: repeat(2, 1fr); }
+          .content { padding: 18px; }
           .mainGrid, .stats { grid-template-columns: 1fr; }
           .inventory, .taskOrders, .activity { grid-column: 1; }
           .header { flex-direction: column; gap: 20px; }
