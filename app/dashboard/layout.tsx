@@ -12,41 +12,61 @@ export default function DashboardLayout({
 
   useEffect(() => {
     async function checkAccess() {
+      console.log("DASHBOARD LAYOUT RUNNING");
+
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
+      console.log("USER ERROR:", userError);
+      console.log("USER EMAIL:", user?.email);
+      console.log("USER ID:", user?.id);
+
       if (!user) {
-        window.location.replace("/login");
+        console.log("NO USER - REDIRECT LOGIN");
+        window.location.href = "/login";
         return;
       }
 
+      const userEmail = user.email?.trim().toLowerCase() || "";
       const adminEmails = ["demo@gmail.com", "admin@test.com"];
 
-      if (adminEmails.includes(user.email?.toLowerCase() || "")) {
-        window.location.replace("/admin/dashboard");
+      if (adminEmails.includes(userEmail)) {
+        console.log("ADMIN EMAIL MATCHED - REDIRECT ADMIN");
+        window.location.href = "/admin/dashboard";
         return;
       }
 
-      const { data: profileById } = await supabase
+      const { data: profileById, error: idError } = await supabase
         .from("profiles")
         .select("role,email")
         .eq("id", user.id)
         .maybeSingle();
 
-      const { data: profileByEmail } = await supabase
+      console.log("PROFILE BY ID:", profileById);
+      console.log("PROFILE BY ID ERROR:", idError);
+
+      const { data: profileByEmail, error: emailError } = await supabase
         .from("profiles")
         .select("role,email")
-        .eq("email", user.email?.toLowerCase())
+        .eq("email", userEmail)
         .maybeSingle();
+
+      console.log("PROFILE BY EMAIL:", profileByEmail);
+      console.log("PROFILE BY EMAIL ERROR:", emailError);
 
       const profile = profileById || profileByEmail;
 
-      if (profile?.role?.toUpperCase() === "ADMIN") {
-        window.location.replace("/admin/dashboard");
+      console.log("PROFILE DATA:", profile);
+
+      if (profile?.role?.trim().toUpperCase() === "ADMIN") {
+        console.log("ADMIN ROLE DETECTED - REDIRECT ADMIN");
+        window.location.href = "/admin/dashboard";
         return;
       }
 
+      console.log("ALLOWING CUSTOMER DASHBOARD");
       setAllowed(true);
     }
 
