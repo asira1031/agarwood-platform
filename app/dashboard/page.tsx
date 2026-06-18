@@ -289,7 +289,7 @@ export default function DashboardPage() {
               <InventoryRow icon="🪲" name="Insecticide" qty="6 Bottles" warning />
               <InventoryRow icon="🌿" name="Fungicide" qty="8 Bottles" />
               <InventoryRow icon="📍" name="GPS Tags" qty="128 Active" />
-              <InventoryRow icon="📸" name="Photo Credits" qty="42 Left" />
+              <InventoryRow icon="🪴" name="Soil Conditioner" qty="10 Bags" />
             </div>
 
             <small>
@@ -299,27 +299,30 @@ export default function DashboardPage() {
 
           <div className="market panel">
             <div className="panelHead">
-              <h3>Agarwood Market</h3>
-              <button>Live Style⌄</button>
+              <h3>Care Marketplace</h3>
+              <button>Open ›</button>
             </div>
 
-            <div className="marketTop">
-              <div>
-                <p>Agarwood Oil</p>
-                <h2>₱ 148,500</h2>
-                <small>↑ 4.2% this month</small>
-              </div>
+            <p className="marketIntro">
+              Buy care supplies or request operator services for your owned trees.
+            </p>
 
-              <div className="marketPills">
-                <span>Chips ↑ 8.7%</span>
-                <span>Resin ↓ 1.4%</span>
-              </div>
+            <div className="marketplaceGrid">
+              <MarketItem icon="💧" name="Watering Service" price="₱150" />
+              <MarketItem icon="🌱" name="Organic Fertilizer" price="₱450" />
+              <MarketItem icon="🧪" name="Growth Booster" price="₱380" />
+              <MarketItem icon="🪲" name="Insecticide" price="₱320" />
+              <MarketItem icon="🌿" name="Fungicide" price="₱300" />
+              <MarketItem icon="📍" name="GPS Verification" price="₱80" />
             </div>
 
-            <div className="lineChart">
-              <svg viewBox="0 0 400 130" preserveAspectRatio="none">
-                <path d="M0 95 C40 40, 80 110, 120 70 C170 20, 200 110, 250 55 C300 5, 330 65, 400 20" />
-              </svg>
+            <div className="carePlan">
+              <strong>Managed Care Subscription</strong>
+              <p>
+                Let Agarwood Operations handle watering, fertilizer reminders,
+                inspection, GPS verification, and photo updates.
+              </p>
+              <button>Subscribe Care Plan</button>
             </div>
           </div>
 
@@ -1040,52 +1043,76 @@ export default function DashboardPage() {
           line-height: 1.4;
         }
 
-        .marketTop {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          margin-top: 16px;
-        }
-        .marketTop p {
-          margin: 0 0 8px;
+        .marketIntro {
+          margin: 14px 0 0;
           color: #5c6259;
+          font-size: 13px;
+          line-height: 1.5;
         }
-        .marketTop h2 {
-          margin: 0 0 8px;
-          font-size: 30px;
+
+        .marketplaceGrid {
+          margin-top: 16px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
         }
-        .marketTop small {
+
+        .marketItem {
+          border-radius: 14px;
+          background: #e3f1d6;
+          padding: 11px;
+          display: grid;
+          grid-template-columns: 30px 1fr;
+          gap: 8px;
+          align-items: center;
+        }
+
+        .marketItem span {
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background: rgba(255,255,255,.65);
+        }
+
+        .marketItem strong {
+          display: block;
+          font-size: 12px;
+          line-height: 1.2;
+        }
+
+        .marketItem p {
+          margin: 3px 0 0;
+          font-size: 12px;
           color: #08782e;
           font-weight: 900;
         }
-        .marketPills {
-          display: grid;
-          gap: 8px;
-          align-content: start;
-        }
-        .marketPills span {
-          border-radius: 999px;
-          background: #e3f1d6;
-          padding: 8px 12px;
-          font-size: 12px;
-          font-weight: 800;
-          white-space: nowrap;
+
+        .carePlan {
+          margin-top: 15px;
+          border-radius: 16px;
+          background: linear-gradient(135deg, #07351f, #0e4d2e);
+          color: white;
+          padding: 15px;
         }
 
-        .lineChart {
-          height: 125px;
-          margin-top: 18px;
+        .carePlan p {
+          margin: 8px 0 0;
+          font-size: 12px;
+          line-height: 1.45;
+          color: rgba(255,255,255,.75);
         }
-        .lineChart svg {
-          width: 100%;
-          height: 100%;
-        }
-        .lineChart path {
-          fill: none;
-          stroke: #15903c;
-          stroke-width: 5;
-          stroke-linecap: round;
-          filter: drop-shadow(0 8px 10px rgba(31, 145, 54, .18));
+
+        .carePlan button {
+          margin-top: 12px;
+          border: 0;
+          border-radius: 12px;
+          background: #f0c458;
+          color: #07351f;
+          font-weight: 900;
+          padding: 10px 12px;
+          cursor: pointer;
         }
 
         .activityRow {
@@ -1234,6 +1261,26 @@ function InventoryRow({
         <p>Marketplace supply</p>
       </div>
       <b>{qty}</b>
+    </div>
+  );
+}
+
+function MarketItem({
+  icon,
+  name,
+  price,
+}: {
+  icon: string;
+  name: string;
+  price: string;
+}) {
+  return (
+    <div className="marketItem">
+      <span>{icon}</span>
+      <div>
+        <strong>{name}</strong>
+        <p>{price}</p>
+      </div>
     </div>
   );
 }
