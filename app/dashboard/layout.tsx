@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 export default function DashboardLayout({
@@ -8,70 +9,54 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
   const [allowed, setAllowed] = useState(false);
 
   useEffect(() => {
     async function checkAccess() {
-      console.log("DASHBOARD LAYOUT RUNNING");
-
       const {
         data: { user },
-        error: userError,
       } = await supabase.auth.getUser();
 
-      console.log("USER ERROR:", userError);
-      console.log("USER EMAIL:", user?.email);
-      console.log("USER ID:", user?.id);
-
       if (!user) {
-        console.log("NO USER - REDIRECT LOGIN");
-        window.location.href = "/login";
+        window.location.replace("/login");
         return;
       }
 
-      const userEmail = user.email?.trim().toLowerCase() || "";
-      const adminEmails = ["demo@gmail.com", "admin@test.com"];
+      const email = user.email?.trim().toLowerCase() || "";
 
-      if (adminEmails.includes(userEmail)) {
-        console.log("ADMIN EMAIL MATCHED - REDIRECT ADMIN");
-        window.location.href = "/admin/dashboard";
-        return;
-      }
-
-      const { data: profileById, error: idError } = await supabase
+      const { data: profileById } = await supabase
         .from("profiles")
-        .select("role,email")
+        .select("role,email,membership_status")
         .eq("id", user.id)
         .maybeSingle();
 
-      console.log("PROFILE BY ID:", profileById);
-      console.log("PROFILE BY ID ERROR:", idError);
-
-      const { data: profileByEmail, error: emailError } = await supabase
+      const { data: profileByEmail } = await supabase
         .from("profiles")
-        .select("role,email")
-        .eq("email", userEmail)
+        .select("role,email,membership_status")
+        .eq("email", email)
         .maybeSingle();
-
-      console.log("PROFILE BY EMAIL:", profileByEmail);
-      console.log("PROFILE BY EMAIL ERROR:", emailError);
 
       const profile = profileById || profileByEmail;
 
-      console.log("PROFILE DATA:", profile);
-
-      if (profile?.role?.trim().toUpperCase() === "ADMIN") {
-        console.log("ADMIN ROLE DETECTED - REDIRECT ADMIN");
-        window.location.href = "/admin/dashboard";
+      if (profile?.role?.toUpperCase() === "ADMIN") {
+        window.location.replace("/admin/dashboard");
         return;
       }
 
-      console.log("ALLOWING CUSTOMER DASHBOARD");
+      const isMembershipPage = pathname === "/dashboard/membership";
+      const membershipStatus = profile?.membership_status?.toUpperCase();
+
+      if (!isMembershipPage && membershipStatus !== "ACTIVE") {
+        window.location.replace("/dashboard/membership");
+        return;
+      }
+
       setAllowed(true);
     }
 
     checkAccess();
-  }, []);
+  }, [pathname]);
 
   if (!allowed) {
     return (
