@@ -61,6 +61,7 @@ export default function DashboardPage() {
 
   const displayName = profile?.full_name || "Agarwood Investor";
   const initials = getInitials(displayName);
+  const careSubscription = "ACTIVE";
 
   return (
     <main className="page">
@@ -75,6 +76,8 @@ export default function DashboardPage() {
           {[
             ["🏠", "Dashboard"],
             ["🌳", "My Trees"],
+            ["🛠️", "Tree Operations"],
+            ["🛒", "Marketplace"],
             ["📈", "Investments"],
             ["💹", "Earnings"],
             ["💳", "Wallet"],
@@ -121,7 +124,8 @@ export default function DashboardPage() {
               {displayName} <span>🍃</span>
             </h2>
             <small>
-              Monitor your agarwood ownership, care updates, and market movement.
+              Monitor your agarwood ownership, task orders, care subscription,
+              and tree updates.
             </small>
           </div>
 
@@ -144,15 +148,15 @@ export default function DashboardPage() {
             sub="78 individual • 50 package"
           />
           <Card
-            icon="🔔"
+            icon="📋"
             title="Care Tasks Due"
             value="5"
-            sub="Needs attention today"
+            sub="Task orders scheduled"
           />
           <Card
             icon="🛡️"
             title="Care Subscription"
-            value="ACTIVE"
+            value={careSubscription}
             sub="Covered until Jul 18"
             gold
           />
@@ -170,11 +174,36 @@ export default function DashboardPage() {
             <h4>How agarwood develops 🍃</h4>
 
             {[
-              ["Seedling", "0 - 6 Months", "Early root stage; photo may be limited", true],
-              ["Sapling", "6 - 18 Months", "Visible stem and leaves begin", true],
-              ["Young Tree", "1.5 - 3 Years", "Active growth and care monitoring", true],
-              ["Mature Tree", "3 - 7 Years", "Trunk mass and value development", false],
-              ["Harvest Ready", "7+ Years", "Eligible for sell or harvest review", false],
+              [
+                "Seedling",
+                "0 - 6 Months",
+                "Early root stage; photo may be limited",
+                true,
+              ],
+              [
+                "Sapling",
+                "6 - 18 Months",
+                "Visible stem and leaves begin",
+                true,
+              ],
+              [
+                "Young Tree",
+                "1.5 - 3 Years",
+                "Active growth and care monitoring",
+                true,
+              ],
+              [
+                "Mature Tree",
+                "3 - 7 Years",
+                "Trunk mass and value development",
+                false,
+              ],
+              [
+                "Harvest Ready",
+                "7+ Years",
+                "Eligible for sell or harvest review",
+                false,
+              ],
             ].map((x, i) => (
               <div
                 className={`step ${i === 2 ? "current" : ""}`}
@@ -259,24 +288,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="actions darkPanel">
-            <h3>Quick Actions</h3>
-            <div>
-              <button>
-                🍃<span>Invest</span>
-              </button>
-              <button>
-                💼<span>Add Funds</span>
-              </button>
-              <button>
-                ↑<span>Withdraw</span>
-              </button>
-              <button>
-                🌳<span>My Trees</span>
-              </button>
-            </div>
-          </div>
-
           <div className="inventory panel">
             <div className="panelHead">
               <h3>Inventory</h3>
@@ -288,41 +299,69 @@ export default function DashboardPage() {
               <InventoryRow icon="🧪" name="Growth Booster" qty="12 Bottles" />
               <InventoryRow icon="🪲" name="Insecticide" qty="6 Bottles" warning />
               <InventoryRow icon="🌿" name="Fungicide" qty="8 Bottles" />
-              <InventoryRow icon="📍" name="GPS Tags" qty="128 Active" />
               <InventoryRow icon="🪴" name="Soil Conditioner" qty="10 Bags" />
             </div>
 
             <small>
-              ⚠ Insecticide is near low stock. Buy from marketplace when needed.
+              ⚠ Insecticide is near low stock. Buy supplies from Marketplace
+              when needed.
             </small>
           </div>
 
-          <div className="market panel">
+          <div className="taskOrders panel">
             <div className="panelHead">
-              <h3>Care Marketplace</h3>
-              <button>Open ›</button>
+              <h3>Task Orders</h3>
+              <button>Open Operations ›</button>
             </div>
 
-            <p className="marketIntro">
-              Buy care supplies or request operator services for your owned trees.
+            <p className="taskIntro">
+              Scheduled care requirements for your trees. If subscribed, required
+              items and service handling are covered by your care plan.
             </p>
 
-            <div className="marketplaceGrid">
-              <MarketItem icon="💧" name="Watering Service" price="₱150" />
-              <MarketItem icon="🌱" name="Organic Fertilizer" price="₱450" />
-              <MarketItem icon="🧪" name="Growth Booster" price="₱380" />
-              <MarketItem icon="🪲" name="Insecticide" price="₱320" />
-              <MarketItem icon="🌿" name="Fungicide" price="₱300" />
-              <MarketItem icon="📍" name="GPS Verification" price="₱80" />
+            <div className="taskList">
+              <TaskOrder
+                code="TO-001"
+                icon="🌱"
+                title="Organic Fertilizer"
+                tree="Tree AG-003"
+                date="Jun 20"
+                status="Covered by Care Plan"
+                covered
+              />
+              <TaskOrder
+                code="TO-002"
+                icon="🧪"
+                title="Growth Booster"
+                tree="Tree AG-008"
+                date="Jun 25"
+                status="Covered by Care Plan"
+                covered
+              />
+              <TaskOrder
+                code="TO-003"
+                icon="🪲"
+                title="Insecticide"
+                tree="Tree AG-011"
+                date="Jul 01"
+                status="Awaiting Schedule"
+              />
+              <TaskOrder
+                code="TO-004"
+                icon="🌿"
+                title="Fungicide"
+                tree="Tree AG-014"
+                date="Jul 08"
+                status="Awaiting Schedule"
+              />
             </div>
 
-            <div className="carePlan">
-              <strong>Managed Care Subscription</strong>
-              <p>
-                Let Agarwood Operations handle watering, fertilizer reminders,
-                inspection, GPS verification, and photo updates.
-              </p>
-              <button>Subscribe Care Plan</button>
+            <div className="subscriptionBox">
+              <div>
+                <strong>Managed Care Subscription</strong>
+                <p>Care service status: {careSubscription}</p>
+              </div>
+              <button>{careSubscription === "ACTIVE" ? "Renew" : "Subscribe"}</button>
             </div>
           </div>
 
@@ -334,8 +373,8 @@ export default function DashboardPage() {
 
             {[
               ["💧", "Tree AG-001", "Watering missed", "2 days ago"],
-              ["🌱", "Tree AG-003", "Fertilizer due", "Jun 20"],
-              ["📸", "Tree AG-005", "Photo update available", "Today"],
+              ["🌱", "Tree AG-003", "Fertilizer scheduled", "Jun 20"],
+              ["👨‍🌾", "Caretaker Report", "Care report uploaded", "Today"],
               ["📍", "Tree AG-002", "GPS verified", "Completed"],
               ["🛡️", "Care Subscription", "Expires in 3 days", "Renew soon"],
               ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750"],
@@ -409,7 +448,7 @@ export default function DashboardPage() {
           gap: 9px;
         }
         nav button {
-          height: 54px;
+          min-height: 50px;
           border: 0;
           border-radius: 13px;
           background: transparent;
@@ -418,7 +457,7 @@ export default function DashboardPage() {
           align-items: center;
           gap: 14px;
           padding: 0 20px;
-          font-size: 16px;
+          font-size: 15px;
           font-weight: 800;
           cursor: pointer;
           transition: .25s;
@@ -438,7 +477,7 @@ export default function DashboardPage() {
           margin-top: auto;
           border-radius: 18px;
           padding: 20px;
-          min-height: 210px;
+          min-height: 190px;
           background:
             linear-gradient(rgba(6, 40, 29, .25), rgba(6, 40, 29, .75)),
             radial-gradient(circle at 80% 70%, #6fd148, transparent 32%);
@@ -594,7 +633,7 @@ export default function DashboardPage() {
           gap: 16px;
         }
 
-        .journey, .growthCard, .portfolio, .darkPanel, .panel {
+        .journey, .growthCard, .portfolio, .panel {
           border-radius: 18px;
           box-shadow: 0 13px 38px rgba(20, 29, 18, .09);
           border: 1px solid rgba(45, 34, 13, .07);
@@ -892,12 +931,10 @@ export default function DashboardPage() {
           animation: loadBar 2.4s ease-out infinite alternate;
         }
 
-        .portfolio, .darkPanel {
+        .portfolio {
           background: linear-gradient(145deg, #07351f, #042317);
           color: white;
           padding: 24px;
-        }
-        .portfolio {
           min-height: 520px;
         }
         .panelHead {
@@ -962,31 +999,6 @@ export default function DashboardPage() {
           color: #ffd166;
         }
 
-        .actions {
-          min-height: 210px;
-        }
-        .actions div {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 13px;
-          margin-top: 22px;
-        }
-        .actions button {
-          height: 110px;
-          border-radius: 14px;
-          border: 1px solid rgba(255,255,255,.13);
-          background: rgba(255,255,255,.06);
-          color: white;
-          display: grid;
-          place-items: center;
-          cursor: pointer;
-          font-weight: 900;
-        }
-        .actions button span {
-          display: block;
-          font-size: 13px;
-        }
-
         .panel {
           background: rgba(255, 253, 246, .86);
           padding: 22px;
@@ -995,12 +1007,11 @@ export default function DashboardPage() {
         .inventory {
           grid-column: 1 / 2;
         }
-        .market {
+        .taskOrders {
           grid-column: 2 / 3;
         }
         .activity {
           grid-column: 3 / 4;
-          grid-row: 3 / 5;
         }
 
         .inventoryList {
@@ -1043,76 +1054,85 @@ export default function DashboardPage() {
           line-height: 1.4;
         }
 
-        .marketIntro {
-          margin: 14px 0 0;
+        .taskIntro {
+          margin: 12px 0 0;
           color: #5c6259;
           font-size: 13px;
           line-height: 1.5;
         }
-
-        .marketplaceGrid {
-          margin-top: 16px;
+        .taskList {
+          margin-top: 15px;
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 10px;
         }
-
-        .marketItem {
-          border-radius: 14px;
-          background: #e3f1d6;
-          padding: 11px;
+        .taskOrder {
           display: grid;
-          grid-template-columns: 30px 1fr;
-          gap: 8px;
+          grid-template-columns: 38px 1fr auto;
           align-items: center;
+          gap: 10px;
+          padding: 11px;
+          border-radius: 14px;
+          background: #f3ead8;
+          border: 1px solid rgba(0,0,0,.04);
         }
-
-        .marketItem span {
-          width: 30px;
-          height: 30px;
+        .taskOrder .taskIcon {
+          width: 36px;
+          height: 36px;
           border-radius: 50%;
+          background: #e3f1d6;
           display: grid;
           place-items: center;
-          background: rgba(255,255,255,.65);
         }
-
-        .marketItem strong {
+        .taskOrder strong {
           display: block;
-          font-size: 12px;
-          line-height: 1.2;
+          font-size: 13px;
         }
-
-        .marketItem p {
+        .taskOrder p {
           margin: 3px 0 0;
           font-size: 12px;
-          color: #08782e;
-          font-weight: 900;
+          color: #6b6b62;
         }
-
-        .carePlan {
-          margin-top: 15px;
+        .taskOrder b {
+          font-size: 11px;
+          color: #6b6b62;
+          text-align: right;
+        }
+        .taskOrder.covered b {
+          color: #08782e;
+        }
+        .taskCode {
+          display: inline-block;
+          margin-bottom: 3px;
+          font-size: 10px;
+          font-weight: 900;
+          color: #08782e;
+          letter-spacing: .6px;
+        }
+        .subscriptionBox {
+          margin-top: 14px;
           border-radius: 16px;
           background: linear-gradient(135deg, #07351f, #0e4d2e);
           color: white;
           padding: 15px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
         }
-
-        .carePlan p {
-          margin: 8px 0 0;
+        .subscriptionBox p {
+          margin: 4px 0 0;
           font-size: 12px;
-          line-height: 1.45;
-          color: rgba(255,255,255,.75);
+          color: rgba(255,255,255,.72);
         }
-
-        .carePlan button {
-          margin-top: 12px;
+        .subscriptionBox button {
           border: 0;
           border-radius: 12px;
           background: #f0c458;
           color: #07351f;
+          padding: 10px 14px;
           font-weight: 900;
-          padding: 10px 12px;
           cursor: pointer;
+          white-space: nowrap;
         }
 
         .activityRow {
@@ -1182,9 +1202,9 @@ export default function DashboardPage() {
         @media (max-width: 1280px) {
           .stats { grid-template-columns: repeat(2, 1fr); }
           .mainGrid { grid-template-columns: 220px 1fr; }
-          .portfolio, .actions, .activity { grid-column: 1 / -1; }
+          .portfolio, .activity { grid-column: 1 / -1; }
           .inventory { grid-column: 1 / 2; }
-          .market { grid-column: 2 / 3; }
+          .taskOrders { grid-column: 2 / 3; }
         }
 
         @media (max-width: 900px) {
@@ -1192,7 +1212,7 @@ export default function DashboardPage() {
           .sidebar { width: 100%; min-height: auto; }
           nav { grid-template-columns: repeat(2, 1fr); }
           .mainGrid, .stats { grid-template-columns: 1fr; }
-          .inventory, .market, .activity { grid-column: 1; }
+          .inventory, .taskOrders, .activity { grid-column: 1; }
           .header { flex-direction: column; gap: 20px; }
         }
       `}</style>
@@ -1265,22 +1285,34 @@ function InventoryRow({
   );
 }
 
-function MarketItem({
+function TaskOrder({
+  code,
   icon,
-  name,
-  price,
+  title,
+  tree,
+  date,
+  status,
+  covered,
 }: {
+  code: string;
   icon: string;
-  name: string;
-  price: string;
+  title: string;
+  tree: string;
+  date: string;
+  status: string;
+  covered?: boolean;
 }) {
   return (
-    <div className="marketItem">
-      <span>{icon}</span>
+    <div className={`taskOrder ${covered ? "covered" : ""}`}>
+      <span className="taskIcon">{icon}</span>
       <div>
-        <strong>{name}</strong>
-        <p>{price}</p>
+        <span className="taskCode">{code}</span>
+        <strong>{title}</strong>
+        <p>
+          {tree} • Scheduled {date}
+        </p>
       </div>
+      <b>{status}</b>
     </div>
   );
 }
