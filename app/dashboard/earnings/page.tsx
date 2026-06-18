@@ -1,211 +1,405 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
-type EarningRecord = {
+type Profile = {
   id: string;
-  source: string;
-  treeId: string;
-  date: string;
-  gross: number;
-  fee: number;
-  net: number;
-  status: "AVAILABLE" | "PENDING" | "PROCESSING";
+  full_name: string | null;
+  email: string | null;
+  membership_status: string | null;
+  kyc_status: string | null;
 };
 
-const earnings: EarningRecord[] = [
-  {
-    id: "EARN-001",
-    source: "Tree Sale Earnings",
-    treeId: "AG-001",
-    date: "Jun 18, 2026",
-    gross: 25000,
-    fee: 500,
-    net: 24500,
-    status: "AVAILABLE",
-  },
-  {
-    id: "EARN-002",
-    source: "Referral Bonus",
-    treeId: "REF-2026-18",
-    date: "Jun 16, 2026",
-    gross: 750,
-    fee: 0,
-    net: 750,
-    status: "AVAILABLE",
-  },
-  {
-    id: "EARN-003",
-    source: "Tree Sale Pending",
-    treeId: "AG-014",
-    date: "Jun 15, 2026",
-    gross: 18000,
-    fee: 360,
-    net: 17640,
-    status: "PENDING",
-  },
-  {
-    id: "EARN-004",
-    source: "Package Tree Yield",
-    treeId: "PKG-050",
-    date: "Jun 12, 2026",
-    gross: 5200,
-    fee: 104,
-    net: 5096,
-    status: "PROCESSING",
-  },
-];
+type Wallet = {
+  id: string;
+  profile_id: string;
+  balance: number | null;
+};
+
+type WalletTransaction = {
+  id: string;
+  profile_id: string;
+  transaction_type: string | null;
+  amount: number | null;
+  status: string | null;
+  reference_no: string | null;
+  description: string | null;
+  created_at: string | null;
+};
+
+type SellTreeRequest = {
+  id: string;
+  profile_id: string;
+  tree_id: string | null;
+  tree_value: number | null;
+  platform_fee: number | null;
+  net_receive: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type WithdrawalRequest = {
+  id: string;
+  profile_id: string;
+  amount: number | null;
+  processing_fee: number | null;
+  net_receive: number | null;
+  status: string | null;
+  created_at: string | null;
+};
 
 export default function EarningsPage() {
-  const totalGross = earnings.reduce((sum, item) => sum + item.gross, 0);
-  const totalFees = earnings.reduce((sum, item) => sum + item.fee, 0);
-  const totalNet = earnings.reduce((sum, item) => sum + item.net, 0);
-  const withdrawable = earnings
-    .filter((item) => item.status === "AVAILABLE")
-    .reduce((sum, item) => sum + item.net, 0);
-  const pending = earnings
-    .filter((item) => item.status !== "AVAILABLE")
-    .reduce((sum, item) => sum + item.net, 0);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [sellRequests, setSellRequests] = useState<SellTreeRequest[]>([]);
+  const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadRealData() {
+      setLoading(true);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const email = user.email?.trim().toLowerCase() || "";
+
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, membership_status, kyc_status")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const { data: profileByEmail } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, membership_status, kyc_status")
+        .eq("email", email)
+        .maybeSingle();
+
+      const currentProfile = profileById || profileByEmail;
+
+      if (!currentProfile) {
+        setLoading(false);
+        return;
+      }
+
+      setProfile(currentProfile);
+
+      const profileId = currentProfile.id;
+
+      const { data: walletData } = await supabase
+        .from("wallets")
+        .select("id, profile_id, balance")
+        .eq("profile_id", profileId)
+        .maybeSingle();
+
+      const { data: transactionData } = await supabase
+        .from("wallet_transactions")
+        .select(
+          "id, profile_id, transaction_type, amount, status, reference_no, description, created_at"
+        )
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      const { data: sellData } = await supabase
+        .from("sell_tree_requests")
+        .select(
+          "id, profile_id, tree_id, tree_value, platform_fee, net_receive, status, created_at"
+        )
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      const { data: withdrawalData } = await supabase
+        .from("withdrawal_requests")
+        .select(
+          "id, profile_id, amount, processing_fee, net_receive, status, created_at"
+        )
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      setWallet(walletData || null);
+      setTransactions(transactionData || []);
+      setSellRequests(sellData || []);
+      setWithdrawals(withdrawalData || []);
+      setLoading(false);
+    }
+
+    loadRealData();
+  }, []);
+
+  const totals = useMemo(() => {
+    const treeSaleTransactions = transactions.filter(
+      (item) => item.transaction_type === "TREE_SALE"
+    );
+
+    const referralTransactions = transactions.filter(
+      (item) => item.transaction_type === "REFERRAL_BONUS"
+    );
+
+    const completedEarnings = transactions
+      .filter(
+        (item) =>
+          item.status === "COMPLETED" &&
+          ["TREE_SALE", "REFERRAL_BONUS"].includes(item.transaction_type || "")
+      )
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const pendingSellNet = sellRequests
+      .filter((item) => item.status === "PENDING")
+      .reduce((sum, item) => sum + Number(item.net_receive || 0), 0);
+
+    const totalTreeSales = treeSaleTransactions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    const totalReferral = referralTransactions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    const totalPlatformFees = sellRequests.reduce(
+      (sum, item) => sum + Number(item.platform_fee || 0),
+      0
+    );
+
+    const totalWithdrawn = withdrawals
+      .filter((item) => item.status === "COMPLETED")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    return {
+      completedEarnings,
+      pendingSellNet,
+      totalTreeSales,
+      totalReferral,
+      totalPlatformFees,
+      totalWithdrawn,
+    };
+  }, [transactions, sellRequests, withdrawals]);
+
+  const membershipStatus = profile?.membership_status || "UNKNOWN";
+  const kycStatus = profile?.kyc_status || "UNKNOWN";
+  const walletBalance = Number(wallet?.balance || 0);
 
   return (
     <main className="earningsPage">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Earnings</p>
+          <p className="eyebrow">Real Database Connected</p>
           <h1>Earnings Center</h1>
           <span>
-            Track tree sale proceeds, referral bonuses, pending earnings, and
-            withdrawable balance.
+            Earnings are now loaded from Supabase wallet transactions, sell tree
+            requests, withdrawal requests, and wallet balance.
           </span>
         </div>
 
         <div className="heroActions">
           <Link href="/dashboard/sell-tree">Sell Tree</Link>
           <Link href="/dashboard/wallet" className="primary">
-            Withdraw
+            Wallet / Withdraw
           </Link>
         </div>
       </section>
 
-      <section className="cards">
-        <SummaryCard
-          label="Total Gross Earnings"
-          value={peso(totalGross)}
-          note="Before platform fees"
-          icon="🌳"
-        />
-        <SummaryCard
-          label="Platform Fees"
-          value={peso(totalFees)}
-          note="2% fee on tree sale earnings"
-          icon="🏛️"
-          gold
-        />
-        <SummaryCard
-          label="Net Earnings"
-          value={peso(totalNet)}
-          note="After deductions"
-          icon="💹"
-        />
-        <SummaryCard
-          label="Withdrawable"
-          value={peso(withdrawable)}
-          note="KYC required before withdrawal"
-          icon="💳"
-          gold
-        />
-      </section>
+      {loading ? (
+        <div className="loadingBox">Loading real earnings data...</div>
+      ) : (
+        <>
+          <section className="cards">
+            <SummaryCard
+              icon="💳"
+              label="Wallet Balance"
+              value={peso(walletBalance)}
+              note="From wallets table"
+              gold
+            />
+            <SummaryCard
+              icon="🌳"
+              label="Tree Sale Earnings"
+              value={peso(totals.totalTreeSales)}
+              note="Completed TREE_SALE transactions"
+            />
+            <SummaryCard
+              icon="👥"
+              label="Referral Earnings"
+              value={peso(totals.totalReferral)}
+              note="Completed referral bonuses"
+            />
+            <SummaryCard
+              icon="🏛️"
+              label="Platform Fees"
+              value={peso(totals.totalPlatformFees)}
+              note="2% fees from sell requests"
+              gold
+            />
+          </section>
 
-      <section className="grid">
-        <div className="panel bigPanel">
-          <div className="panelHead">
-            <div>
-              <h2>Earnings History</h2>
-              <p>Latest customer earnings from agarwood investment activity.</p>
+          <section className="grid">
+            <div className="panel bigPanel">
+              <div className="panelHead">
+                <div>
+                  <h2>Wallet Transactions</h2>
+                  <p>
+                    Real transaction records from{" "}
+                    <strong>wallet_transactions</strong>.
+                  </p>
+                </div>
+                <Link href="/dashboard/transactions">View Transactions ›</Link>
+              </div>
+
+              {transactions.length === 0 ? (
+                <EmptyState message="No wallet transactions yet." />
+              ) : (
+                <div className="tableWrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Reference</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {transactions.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <strong>{item.reference_no || "—"}</strong>
+                          </td>
+                          <td>{cleanType(item.transaction_type)}</td>
+                          <td>{item.description || "—"}</td>
+                          <td>
+                            <strong>{peso(Number(item.amount || 0))}</strong>
+                          </td>
+                          <td>
+                            <span className={`status ${statusClass(item.status)}`}>
+                              {item.status || "UNKNOWN"}
+                            </span>
+                          </td>
+                          <td>{formatDate(item.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-            <Link href="/dashboard/transactions">View Transactions ›</Link>
-          </div>
 
-          <div className="tableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Earning ID</th>
-                  <th>Source</th>
-                  <th>Tree / Ref</th>
-                  <th>Date</th>
-                  <th>Gross</th>
-                  <th>Fee</th>
-                  <th>Net</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {earnings.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <strong>{item.id}</strong>
-                    </td>
-                    <td>{item.source}</td>
-                    <td>{item.treeId}</td>
-                    <td>{item.date}</td>
-                    <td>{peso(item.gross)}</td>
-                    <td>{peso(item.fee)}</td>
-                    <td>
-                      <strong>{peso(item.net)}</strong>
-                    </td>
-                    <td>
-                      <span className={`status ${item.status.toLowerCase()}`}>
-                        {item.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+            <aside className="panel sidePanel">
+              <h2>Account Rules</h2>
 
-        <aside className="panel sidePanel">
-          <h2>Withdraw Rules</h2>
+              <div className="rule active">
+                <span>✓</span>
+                <div>
+                  <strong>Membership Status</strong>
+                  <p>{membershipStatus}</p>
+                </div>
+              </div>
 
-          <div className="rule active">
-            <span>✓</span>
-            <div>
-              <strong>Membership Active</strong>
-              <p>Required to access wallet and earnings features.</p>
+              <div className="rule warning">
+                <span>!</span>
+                <div>
+                  <strong>KYC Status</strong>
+                  <p>{kycStatus}</p>
+                </div>
+              </div>
+
+              <div className="withdrawBox">
+                <p>Available Wallet Balance</p>
+                <h3>{peso(walletBalance)}</h3>
+                <Link href="/dashboard/wallet">Go to Wallet</Link>
+              </div>
+
+              <div className="pendingBox">
+                <p>Pending Sell Tree Net</p>
+                <strong>{peso(totals.pendingSellNet)}</strong>
+                <small>Pending admin approval.</small>
+              </div>
+
+              <div className="pendingBox">
+                <p>Total Withdrawn</p>
+                <strong>{peso(totals.totalWithdrawn)}</strong>
+                <small>Completed withdrawal requests.</small>
+              </div>
+            </aside>
+          </section>
+
+          <section className="lowerGrid">
+            <div className="panel">
+              <div className="panelHead">
+                <div>
+                  <h2>Sell Tree Requests</h2>
+                  <p>Real records from sell_tree_requests.</p>
+                </div>
+              </div>
+
+              {sellRequests.length === 0 ? (
+                <EmptyState message="No sell tree requests yet." />
+              ) : (
+                <div className="requestList">
+                  {sellRequests.map((item) => (
+                    <div className="requestCard" key={item.id}>
+                      <div>
+                        <strong>{item.tree_id || "No Tree ID"}</strong>
+                        <p>Tree Value: {peso(Number(item.tree_value || 0))}</p>
+                        <p>Platform Fee: {peso(Number(item.platform_fee || 0))}</p>
+                      </div>
+                      <div>
+                        <span className={`status ${statusClass(item.status)}`}>
+                          {item.status || "UNKNOWN"}
+                        </span>
+                        <b>{peso(Number(item.net_receive || 0))}</b>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
 
-          <div className="rule warning">
-            <span>!</span>
-            <div>
-              <strong>KYC Required</strong>
-              <p>Only verified users can withdraw earnings.</p>
+            <div className="panel">
+              <div className="panelHead">
+                <div>
+                  <h2>Withdrawal Requests</h2>
+                  <p>Real records from withdrawal_requests.</p>
+                </div>
+              </div>
+
+              {withdrawals.length === 0 ? (
+                <EmptyState message="No withdrawal requests yet." />
+              ) : (
+                <div className="requestList">
+                  {withdrawals.map((item) => (
+                    <div className="requestCard" key={item.id}>
+                      <div>
+                        <strong>{peso(Number(item.amount || 0))}</strong>
+                        <p>Processing Fee: {peso(Number(item.processing_fee || 0))}</p>
+                        <p>Net Receive: {peso(Number(item.net_receive || 0))}</p>
+                      </div>
+                      <div>
+                        <span className={`status ${statusClass(item.status)}`}>
+                          {item.status || "UNKNOWN"}
+                        </span>
+                        <b>{formatDate(item.created_at)}</b>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-
-          <div className="rule">
-            <span>%</span>
-            <div>
-              <strong>Withdraw Fee</strong>
-              <p>Processing fee is 2% of withdrawal amount.</p>
-            </div>
-          </div>
-
-          <div className="withdrawBox">
-            <p>Available to withdraw</p>
-            <h3>{peso(withdrawable)}</h3>
-            <Link href="/dashboard/wallet">Go to Wallet</Link>
-          </div>
-
-          <div className="pendingBox">
-            <p>Pending earnings</p>
-            <strong>{peso(pending)}</strong>
-            <small>Pending admin approval or processing.</small>
-          </div>
-        </aside>
-      </section>
+          </section>
+        </>
+      )}
 
       <style>{`
         * { box-sizing: border-box; }
@@ -250,7 +444,7 @@ export default function EarningsPage() {
           margin-top: 8px;
           color: #5f665e;
           font-size: 15px;
-          max-width: 680px;
+          max-width: 720px;
         }
 
         .heroActions {
@@ -273,6 +467,17 @@ export default function EarningsPage() {
         .heroActions a.primary {
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
+        }
+
+        .loadingBox,
+        .emptyState {
+          border-radius: 22px;
+          background: rgba(255,253,246,.86);
+          border: 1px solid rgba(92,70,35,.08);
+          padding: 28px;
+          color: #6b6b62;
+          font-weight: 900;
+          box-shadow: 0 18px 42px rgba(82,60,27,.09);
         }
 
         .cards {
@@ -332,6 +537,13 @@ export default function EarningsPage() {
           display: grid;
           grid-template-columns: 1.5fr 420px;
           gap: 16px;
+          margin-bottom: 16px;
+        }
+
+        .lowerGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
         }
 
         .panel {
@@ -377,7 +589,7 @@ export default function EarningsPage() {
         table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 860px;
+          min-width: 850px;
         }
 
         th {
@@ -406,26 +618,30 @@ export default function EarningsPage() {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          min-width: 96px;
+          min-width: 92px;
           padding: 8px 10px;
           border-radius: 999px;
           font-size: 11px;
           font-weight: 900;
         }
 
-        .status.available {
+        .status.completed,
+        .status.approved,
+        .status.paid {
           background: rgba(49,85,61,.12);
           color: #31553d;
         }
 
-        .status.pending {
+        .status.pending,
+        .status.processing {
           background: rgba(214,178,94,.20);
           color: #8c6a3c;
         }
 
-        .status.processing {
-          background: rgba(70,91,120,.12);
-          color: #465b78;
+        .status.rejected,
+        .status.failed {
+          background: rgba(163,60,42,.12);
+          color: #a33c2a;
         }
 
         .sidePanel {
@@ -534,12 +750,51 @@ export default function EarningsPage() {
           font-weight: 900;
         }
 
+        .requestList {
+          display: grid;
+          gap: 12px;
+        }
+
+        .requestCard {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 14px;
+          padding: 15px;
+          border-radius: 18px;
+          background: #f3ead8;
+          border: 1px solid rgba(92,70,35,.08);
+        }
+
+        .requestCard strong {
+          color: #101a14;
+          font-size: 16px;
+        }
+
+        .requestCard p {
+          margin: 5px 0 0;
+          color: #6b6b62;
+          font-size: 13px;
+        }
+
+        .requestCard div:last-child {
+          display: grid;
+          justify-items: end;
+          gap: 8px;
+        }
+
+        .requestCard b {
+          color: #31553d;
+          font-size: 14px;
+        }
+
         @media (max-width: 1200px) {
           .cards {
             grid-template-columns: repeat(2, 1fr);
           }
 
-          .grid {
+          .grid,
+          .lowerGrid {
             grid-template-columns: 1fr;
           }
         }
@@ -560,6 +815,15 @@ export default function EarningsPage() {
 
           .hero h1 {
             font-size: 34px;
+          }
+
+          .requestCard {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .requestCard div:last-child {
+            justify-items: start;
           }
         }
       `}</style>
@@ -592,6 +856,32 @@ function SummaryCard({
   );
 }
 
+function EmptyState({ message }: { message: string }) {
+  return <div className="emptyState">{message}</div>;
+}
+
 function peso(value: number) {
-  return `₱ ${value.toLocaleString("en-PH")}`;
+  return `₱ ${value.toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function cleanType(value: string | null) {
+  if (!value) return "—";
+  return value.replaceAll("_", " ");
+}
+
+function statusClass(value: string | null) {
+  return (value || "pending").toLowerCase();
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "—";
+
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
