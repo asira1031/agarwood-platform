@@ -12,41 +12,37 @@ export default function DashboardLayout({
 
   useEffect(() => {
     async function checkAccess() {
-      console.log("DASHBOARD LAYOUT RUNNING");
-
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
-      console.log("CURRENT USER:", user?.email, user?.id);
 
       if (!user) {
         window.location.replace("/login");
         return;
       }
 
-      const { data: profileById, error: idError } = await supabase
+      const adminEmails = ["demo@gmail.com", "admin@test.com"];
+
+      if (adminEmails.includes(user.email?.toLowerCase() || "")) {
+        window.location.replace("/admin/dashboard");
+        return;
+      }
+
+      const { data: profileById } = await supabase
         .from("profiles")
         .select("role,email")
         .eq("id", user.id)
         .maybeSingle();
 
-      console.log("PROFILE BY ID:", profileById, idError);
-
-      const { data: profileByEmail, error: emailError } = await supabase
+      const { data: profileByEmail } = await supabase
         .from("profiles")
         .select("role,email")
         .eq("email", user.email?.toLowerCase())
         .maybeSingle();
 
-      console.log("PROFILE BY EMAIL:", profileByEmail, emailError);
-
       const profile = profileById || profileByEmail;
 
-      console.log("PROFILE DATA:", profile);
-
       if (profile?.role?.toUpperCase() === "ADMIN") {
-        console.log("ADMIN DETECTED");
         window.location.replace("/admin/dashboard");
         return;
       }
