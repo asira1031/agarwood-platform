@@ -35,6 +35,9 @@ type WithdrawalRequest = {
   net_receive: number | null;
   status: string | null;
   created_at: string | null;
+  payout_method?: string | null;
+  payout_account_name?: string | null;
+  payout_account_number?: string | null;
 };
 
 type WalletTransaction = {
@@ -48,6 +51,7 @@ type WalletTransaction = {
 };
 
 const PAYMENT_ACCOUNT_NAME = "JANICA MALDIVES";
+const AMOUNTS = [100, 200, 500, 1000, 2000, 5000, 10000];
 
 export default function WalletPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -56,13 +60,17 @@ export default function WalletPage() {
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState<"CASHIN" | "WITHDRAW">("CASHIN");
 
-  const [cashInAmount, setCashInAmount] = useState("");
+  const [cashInAmount, setCashInAmount] = useState("100");
   const [paymentMethod, setPaymentMethod] = useState("GCASH");
   const [cashInReference, setCashInReference] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
 
-  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("100");
+  const [payoutMethod, setPayoutMethod] = useState("GCASH");
+  const [payoutName, setPayoutName] = useState("");
+  const [payoutNumber, setPayoutNumber] = useState("");
   const [message, setMessage] = useState("");
 
   async function loadWallet() {
@@ -116,7 +124,9 @@ export default function WalletPage() {
 
     const { data: withdrawalData } = await supabase
       .from("withdrawal_requests")
-      .select("id, amount, processing_fee, net_receive, status, created_at")
+      .select(
+        "id, amount, processing_fee, net_receive, status, created_at, payout_method, payout_account_name, payout_account_number"
+      )
       .eq("profile_id", profileId)
       .order("created_at", { ascending: false });
 
@@ -163,32 +173,22 @@ export default function WalletPage() {
       .filter((item) => item.status === "PENDING")
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-    return {
-      totalCashIn,
-      pendingCashIn,
-      totalWithdrawn,
-      pendingWithdrawals,
-    };
+    return { totalCashIn, pendingCashIn, totalWithdrawn, pendingWithdrawals };
   }, [cashIns, withdrawals]);
 
   async function submitCashIn() {
     setMessage("");
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
+    if (!profile) return setMessage("Profile not found.");
 
     const amount = Number(cashInAmount);
 
-    if (!amount || amount <= 0) {
-      setMessage("Enter a valid cash-in amount.");
-      return;
+    if (!amount || amount < 100) {
+      return setMessage("Minimum cash-in amount is ₱100.");
     }
 
     if (!cashInReference.trim()) {
-      setMessage("Reference number is required.");
-      return;
+      return setMessage("Reference number is required after payment.");
     }
 
     const { error } = await supabase.from("cashin_requests").insert({
@@ -201,39 +201,33 @@ export default function WalletPage() {
       status: "PENDING",
     });
 
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
+    if (error) return setMessage(error.message);
 
-    setCashInAmount("");
     setCashInReference("");
     setReceiptUrl("");
-    setMessage("Cash-in request submitted. Waiting for admin approval.");
+    setMessage("Payment received. Cash-in request is pending admin verification.");
     await loadWallet();
   }
 
   async function submitWithdrawal() {
     setMessage("");
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
+    if (!profile) return setMessage("Profile not found.");
 
     if (!canWithdraw) {
-      setMessage("Withdrawal locked. Membership must be ACTIVE and KYC must be APPROVED.");
-      return;
+      return setMessage("Withdrawal locked. Membership must be ACTIVE and KYC must be APPROVED.");
     }
 
-    if (!withdrawNumber || withdrawNumber <= 0) {
-      setMessage("Enter a valid withdrawal amount.");
-      return;
+    if (!withdrawNumber || withdrawNumber < 100) {
+      return setMessage("Minimum withdrawal amount is ₱100.");
     }
 
     if (withdrawNumber > walletBalance) {
-      setMessage("Insufficient wallet balance.");
-      return;
+      return setMessage("Insufficient wallet balance.");
+    }
+
+    if (!payoutName.trim() || !payoutNumber.trim()) {
+      return setMessage("Payout account name and number are required.");
     }
 
     const { error } = await supabase.from("withdrawal_requests").insert({
@@ -241,15 +235,16 @@ export default function WalletPage() {
       amount: withdrawNumber,
       processing_fee: withdrawFee,
       net_receive: withdrawNet,
+      payout_method: payoutMethod,
+      payout_account_name: payoutName.trim(),
+      payout_account_number: payoutNumber.trim(),
       status: "PENDING",
     });
 
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
+    if (error) return setMessage(error.message);
 
-    setWithdrawAmount("");
+    setPayoutName("");
+    setPayoutNumber("");
     setMessage("Withdrawal request submitted. Waiting for admin approval.");
     await loadWallet();
   }
@@ -258,11 +253,17 @@ export default function WalletPage() {
     <main className="walletPage">
       <section className="hero">
         <div>
-          <p className="eyebrow">Real Wallet Center</p>
+          <p className="eyebrow">Agarwood Financial Center</p>
           <h1>Wallet</h1>
           <span>
-            Cash in using GCash, Maya, or bank transfer. Submit your reference number for admin approval.
+            Cash in through GCash, Maya, or bank transfer, then submit your payment
+            reference for admin verification.
           </span>
+        </div>
+
+        <div className="heroBalance">
+          <p>Available Balance</p>
+          <strong>{peso(walletBalance)}</strong>
         </div>
       </section>
 
@@ -271,123 +272,225 @@ export default function WalletPage() {
       ) : (
         <>
           <section className="cards">
-            <SummaryCard icon="💰" label="Wallet Balance" value={peso(walletBalance)} note="Current app wallet balance" gold />
+            <SummaryCard icon="💰" label="Wallet Balance" value={peso(walletBalance)} note="Current balance" gold />
             <SummaryCard icon="⬆️" label="Approved Cash-In" value={peso(stats.totalCashIn)} note="Approved by admin" />
             <SummaryCard icon="⬇️" label="Total Withdrawn" value={peso(stats.totalWithdrawn)} note="Completed withdrawals" />
-            <SummaryCard icon="⏳" label="Pending Requests" value={peso(stats.pendingCashIn + stats.pendingWithdrawals)} note="Cash-in + withdrawal pending" gold />
+            <SummaryCard icon="⏳" label="Pending Requests" value={peso(stats.pendingCashIn + stats.pendingWithdrawals)} note="Awaiting verification" gold />
           </section>
 
           {message && <div className="messageBox">{message}</div>}
 
-          <section className="grid">
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Cash-In Request</h2>
-                  <p>Scan QR or transfer manually, then submit payment details.</p>
-                </div>
-              </div>
-
-              <div className="paymentNotice">
-                <strong>Temporary Payment Receiver</strong>
-                <p>{PAYMENT_ACCOUNT_NAME}</p>
-                <small>
-                  This account is temporarily used for Agarwood Platform cash-in transactions.
-                </small>
-              </div>
-
-              <div className="qrGrid">
-                <div className={`qrCard ${paymentMethod === "GCASH" ? "selected" : ""}`} onClick={() => setPaymentMethod("GCASH")}>
-                  <h3>GCash</h3>
-                  <Image src="/payments/gcash.png" alt="GCash QR" width={260} height={260} />
-                  <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-                </div>
-
-                <div className={`qrCard ${paymentMethod === "MAYA" ? "selected" : ""}`} onClick={() => setPaymentMethod("MAYA")}>
-                  <h3>Maya</h3>
-                  <Image src="/payments/maya.png" alt="Maya QR" width={260} height={260} />
-                  <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-                </div>
-
-                <div className={`qrCard bank ${paymentMethod === "BANK_TRANSFER" ? "selected" : ""}`} onClick={() => setPaymentMethod("BANK_TRANSFER")}>
-                  <h3>Bank Transfer</h3>
-                  <div className="bankBox">
-                    <strong>BPI / Bank Transfer</strong>
-                    <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-                    <small>Account number can be added later.</small>
-                  </div>
-                </div>
-              </div>
-
-              <div className="formGrid">
-                <label>
-                  Amount
-                  <input value={cashInAmount} onChange={(e) => setCashInAmount(e.target.value)} type="number" placeholder="Enter cash-in amount" />
-                </label>
-
-                <label>
-                  Payment Method
-                  <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                    <option value="GCASH">GCash</option>
-                    <option value="MAYA">Maya</option>
-                    <option value="BANK_TRANSFER">Bank Transfer</option>
-                  </select>
-                </label>
-
-                <label>
-                  Reference Number
-                  <input value={cashInReference} onChange={(e) => setCashInReference(e.target.value)} placeholder="Enter payment reference number" />
-                </label>
-
-                <label>
-                  Receipt URL optional
-                  <input value={receiptUrl} onChange={(e) => setReceiptUrl(e.target.value)} placeholder="Paste receipt image link if available" />
-                </label>
-              </div>
-
-              <button className="primaryButton" onClick={submitCashIn}>
-                Submit Cash-In Request
+          <section className="actionShell">
+            <div className="modeSwitch">
+              <button className={mode === "CASHIN" ? "active" : ""} onClick={() => setMode("CASHIN")}>
+                Cash In
+              </button>
+              <button className={mode === "WITHDRAW" ? "active" : ""} onClick={() => setMode("WITHDRAW")}>
+                Withdraw
               </button>
             </div>
 
-            <aside className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Withdraw Request</h2>
-                  <p>Processing fee is 2% of withdrawal amount.</p>
+            {mode === "CASHIN" ? (
+              <div className="panel actionPanel">
+                <div className="panelHead">
+                  <div>
+                    <h2>Cash-In Request</h2>
+                    <p>Select amount, pay using QR, then submit your reference number.</p>
+                  </div>
+                  <span className="badge">Payment Received → Pending Verification</span>
                 </div>
-              </div>
 
-              <div className={`rule ${membershipActive ? "ok" : "locked"}`}>
-                <span>{membershipActive ? "✓" : "!"}</span>
-                <div>
-                  <strong>Membership</strong>
-                  <p>{profile?.membership_status || "UNKNOWN"}</p>
+                <div className="amountChips">
+                  {AMOUNTS.map((amount) => (
+                    <button
+                      key={amount}
+                      className={Number(cashInAmount) === amount ? "selected" : ""}
+                      onClick={() => setCashInAmount(String(amount))}
+                    >
+                      {pesoNoDecimal(amount)}
+                    </button>
+                  ))}
                 </div>
-              </div>
 
-              <div className={`rule ${kycApproved ? "ok" : "locked"}`}>
-                <span>{kycApproved ? "✓" : "!"}</span>
-                <div>
-                  <strong>KYC Verification</strong>
-                  <p>{profile?.kyc_status || "UNKNOWN"}</p>
-                </div>
-              </div>
-
-              <div className="withdrawPreview">
-                <label>
-                  Withdraw Amount
-                  <input value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} type="number" placeholder="Enter amount" />
+                <label className="customAmount">
+                  Custom Cash-In Amount
+                  <input
+                    value={cashInAmount}
+                    onChange={(e) => setCashInAmount(e.target.value)}
+                    type="number"
+                    min="100"
+                    placeholder="Minimum ₱100"
+                  />
                 </label>
 
-                <div className="previewRow">
-                  <span>Processing Fee 2%</span>
-                  <b>{peso(withdrawFee)}</b>
+                <div className="paymentNotice">
+                  <div>
+                    <strong>Temporary Payment Receiver</strong>
+                    <p>{PAYMENT_ACCOUNT_NAME}</p>
+                    <small>Used temporarily for Agarwood Platform cash-in transactions.</small>
+                  </div>
+                  <div className="sendBox">
+                    <span>Amount to Send</span>
+                    <b>{peso(Number(cashInAmount || 0))}</b>
+                  </div>
                 </div>
 
-                <div className="previewRow">
-                  <span>Net Receive</span>
-                  <b>{peso(withdrawNet > 0 ? withdrawNet : 0)}</b>
+                <div className="qrGrid">
+                  <PaymentCard
+                    title="GCash"
+                    image="/payments/gcash.png"
+                    selected={paymentMethod === "GCASH"}
+                    onClick={() => setPaymentMethod("GCASH")}
+                    openLabel="Open GCash QR"
+                  />
+
+                  <PaymentCard
+                    title="Maya"
+                    image="/payments/maya.png"
+                    selected={paymentMethod === "MAYA"}
+                    onClick={() => setPaymentMethod("MAYA")}
+                    openLabel="Open Maya QR"
+                  />
+
+                  <div
+                    className={`qrCard bank ${paymentMethod === "BANK_TRANSFER" ? "selected" : ""}`}
+                    onClick={() => setPaymentMethod("BANK_TRANSFER")}
+                  >
+                    <h3>Bank Transfer</h3>
+                    <div className="bankBox">
+                      <strong>BPI / Bank</strong>
+                      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
+                      <small>Bank account number can be added later.</small>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="formGrid">
+                  <label>
+                    Payment Method
+                    <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                      <option value="GCASH">GCash</option>
+                      <option value="MAYA">Maya</option>
+                      <option value="BANK_TRANSFER">Bank Transfer</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Reference Number
+                    <input
+                      value={cashInReference}
+                      onChange={(e) => setCashInReference(e.target.value)}
+                      placeholder="Enter payment reference number"
+                    />
+                  </label>
+
+                  <label className="wide">
+                    Receipt URL optional
+                    <input
+                      value={receiptUrl}
+                      onChange={(e) => setReceiptUrl(e.target.value)}
+                      placeholder="Paste receipt image link if available"
+                    />
+                  </label>
+                </div>
+
+                <button className="primaryButton" onClick={submitCashIn}>
+                  I Have Paid — Submit Cash-In Request
+                </button>
+              </div>
+            ) : (
+              <div className="panel actionPanel">
+                <div className="panelHead">
+                  <div>
+                    <h2>Withdraw Request</h2>
+                    <p>Link your payout account and preview the 2% processing fee.</p>
+                  </div>
+                  <span className="badge">Admin Approval Required</span>
+                </div>
+
+                <div className="ruleGrid">
+                  <div className={`rule ${membershipActive ? "ok" : "locked"}`}>
+                    <span>{membershipActive ? "✓" : "!"}</span>
+                    <div>
+                      <strong>Membership</strong>
+                      <p>{profile?.membership_status || "UNKNOWN"}</p>
+                    </div>
+                  </div>
+
+                  <div className={`rule ${kycApproved ? "ok" : "locked"}`}>
+                    <span>{kycApproved ? "✓" : "!"}</span>
+                    <div>
+                      <strong>KYC Verification</strong>
+                      <p>{profile?.kyc_status || "UNKNOWN"}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="amountChips">
+                  {AMOUNTS.map((amount) => (
+                    <button
+                      key={amount}
+                      className={Number(withdrawAmount) === amount ? "selected" : ""}
+                      onClick={() => setWithdrawAmount(String(amount))}
+                    >
+                      {pesoNoDecimal(amount)}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="formGrid">
+                  <label>
+                    Withdraw Amount
+                    <input
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      type="number"
+                      min="100"
+                      placeholder="Minimum ₱100"
+                    />
+                  </label>
+
+                  <label>
+                    Payout Method
+                    <select value={payoutMethod} onChange={(e) => setPayoutMethod(e.target.value)}>
+                      <option value="GCASH">GCash</option>
+                      <option value="MAYA">Maya</option>
+                      <option value="BANK_TRANSFER">Bank Transfer</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Account Name
+                    <input
+                      value={payoutName}
+                      onChange={(e) => setPayoutName(e.target.value)}
+                      placeholder="Your payout account name"
+                    />
+                  </label>
+
+                  <label>
+                    Account Number
+                    <input
+                      value={payoutNumber}
+                      onChange={(e) => setPayoutNumber(e.target.value)}
+                      placeholder="GCash / Maya / Bank number"
+                    />
+                  </label>
+                </div>
+
+                <div className="withdrawPreview">
+                  <div className="previewRow">
+                    <span>Withdraw Amount</span>
+                    <b>{peso(withdrawNumber)}</b>
+                  </div>
+                  <div className="previewRow">
+                    <span>Processing Fee 2%</span>
+                    <b>{peso(withdrawFee)}</b>
+                  </div>
+                  <div className="previewRow final">
+                    <span>Net Receive</span>
+                    <b>{peso(withdrawNet > 0 ? withdrawNet : 0)}</b>
+                  </div>
                 </div>
 
                 <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw}>
@@ -400,7 +503,7 @@ export default function WalletPage() {
                   </small>
                 )}
               </div>
-            </aside>
+            )}
           </section>
 
           <section className="lowerGrid">
@@ -421,8 +524,8 @@ export default function WalletPage() {
               {withdrawals.map((item) => (
                 <HistoryRow
                   key={item.id}
-                  title="WITHDRAWAL"
-                  subtitle={`Fee: ${peso(Number(item.processing_fee || 0))} • Net: ${peso(Number(item.net_receive || 0))}`}
+                  title={item.payout_method || "WITHDRAWAL"}
+                  subtitle={`${item.payout_account_name || "No account"} • ${item.payout_account_number || "No number"}`}
                   amount={peso(Number(item.amount || 0))}
                   status={item.status || "PENDING"}
                   date={formatDate(item.created_at)}
@@ -505,6 +608,30 @@ export default function WalletPage() {
           max-width: 760px;
         }
 
+        .heroBalance {
+          min-width: 270px;
+          border-radius: 24px;
+          padding: 22px;
+          color: white;
+          background:
+            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 30%),
+            linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 18px 42px rgba(36,69,54,.22);
+        }
+
+        .heroBalance p {
+          margin: 0;
+          color: rgba(255,255,255,.75);
+          font-weight: 900;
+        }
+
+        .heroBalance strong {
+          display: block;
+          margin-top: 8px;
+          font-size: 32px;
+          letter-spacing: -1px;
+        }
+
         .cards {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -563,25 +690,50 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
-        .grid {
-          display: grid;
-          grid-template-columns: 1.45fr 420px;
-          gap: 16px;
+        .loadingBox,
+        .messageBox {
+          padding: 20px;
+          margin-bottom: 16px;
+          color: #31553d;
+          font-weight: 900;
+        }
+
+        .actionShell {
           margin-bottom: 16px;
         }
 
-        .lowerGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 16px;
+        .modeSwitch {
+          display: inline-flex;
+          padding: 8px;
+          border-radius: 999px;
+          background: rgba(255,253,246,.78);
+          border: 1px solid rgba(92,70,35,.08);
+          box-shadow: 0 14px 30px rgba(82,60,27,.08);
+          margin-bottom: 14px;
         }
 
-        .fullWidth {
-          grid-column: 1 / -1;
+        .modeSwitch button {
+          border: 0;
+          border-radius: 999px;
+          padding: 14px 30px;
+          background: transparent;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .modeSwitch button.active {
+          color: white;
+          background: linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 10px 24px rgba(36,69,54,.22);
         }
 
         .panel {
           padding: 22px;
+        }
+
+        .actionPanel {
+          overflow: hidden;
         }
 
         .panelHead {
@@ -595,7 +747,7 @@ export default function WalletPage() {
         .panelHead h2 {
           margin: 0;
           color: #101a14;
-          font-size: 22px;
+          font-size: 24px;
         }
 
         .panelHead p {
@@ -604,25 +756,75 @@ export default function WalletPage() {
           font-size: 14px;
         }
 
-        .loadingBox,
-        .messageBox {
-          padding: 20px;
-          margin-bottom: 16px;
-          color: #6b6b62;
+        .badge {
+          border-radius: 999px;
+          padding: 10px 14px;
+          color: #8c6a3c;
+          background: rgba(214,178,94,.20);
+          font-size: 12px;
           font-weight: 900;
+          white-space: nowrap;
         }
 
-        .messageBox {
-          color: #31553d;
-          background: rgba(255,253,246,.95);
+        .amountChips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-bottom: 16px;
+        }
+
+        .amountChips button {
+          min-width: 96px;
+          border: 1px solid rgba(92,70,35,.12);
+          border-radius: 999px;
+          padding: 13px 18px;
+          background: #f3ead8;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .amountChips button.selected {
+          background: linear-gradient(135deg, #d6b25e, #b99242);
+          color: #10281f;
+          border-color: transparent;
+          box-shadow: 0 12px 26px rgba(185,146,66,.22);
+        }
+
+        label {
+          display: grid;
+          gap: 8px;
+          color: #5f665e;
+          font-weight: 900;
+          font-size: 13px;
+        }
+
+        .customAmount {
+          margin-bottom: 16px;
+        }
+
+        input,
+        select {
+          width: 100%;
+          border: 1px solid rgba(92,70,35,.14);
+          border-radius: 14px;
+          padding: 13px 14px;
+          background: rgba(255,253,246,.92);
+          color: #101a14;
+          outline: none;
+          font-weight: 800;
         }
 
         .paymentNotice {
-          border-radius: 18px;
-          padding: 16px;
+          border-radius: 22px;
+          padding: 18px;
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
           margin-bottom: 18px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 18px;
         }
 
         .paymentNotice p {
@@ -635,6 +837,28 @@ export default function WalletPage() {
           color: rgba(255,255,255,.75);
         }
 
+        .sendBox {
+          min-width: 220px;
+          padding: 16px;
+          border-radius: 18px;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(255,255,255,.14);
+          text-align: right;
+        }
+
+        .sendBox span {
+          display: block;
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
+          font-size: 12px;
+        }
+
+        .sendBox b {
+          display: block;
+          margin-top: 6px;
+          font-size: 28px;
+        }
+
         .qrGrid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
@@ -643,7 +867,7 @@ export default function WalletPage() {
         }
 
         .qrCard {
-          border-radius: 20px;
+          border-radius: 22px;
           padding: 16px;
           background: #f3ead8;
           border: 2px solid transparent;
@@ -662,7 +886,7 @@ export default function WalletPage() {
 
         .qrCard img {
           width: 100%;
-          max-width: 260px;
+          max-width: 240px;
           height: auto;
           border-radius: 14px;
           background: white;
@@ -674,8 +898,20 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
+        .openQr {
+          display: inline-flex;
+          margin-top: 10px;
+          border-radius: 999px;
+          padding: 11px 16px;
+          background: #244536;
+          color: white;
+          text-decoration: none;
+          font-weight: 900;
+          font-size: 13px;
+        }
+
         .bankBox {
-          min-height: 260px;
+          min-height: 270px;
           display: grid;
           place-content: center;
           gap: 10px;
@@ -690,36 +926,21 @@ export default function WalletPage() {
           gap: 14px;
         }
 
-        label {
-          display: grid;
-          gap: 8px;
-          color: #5f665e;
-          font-weight: 900;
-          font-size: 13px;
-        }
-
-        input,
-        select {
-          width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
-          padding: 13px 14px;
-          background: rgba(255,253,246,.92);
-          color: #101a14;
-          outline: none;
-          font-weight: 800;
+        .wide {
+          grid-column: 1 / -1;
         }
 
         .primaryButton {
           margin-top: 16px;
           width: 100%;
           border: 0;
-          border-radius: 15px;
-          padding: 14px 18px;
+          border-radius: 16px;
+          padding: 15px 18px;
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
           font-weight: 900;
           cursor: pointer;
+          box-shadow: 0 14px 30px rgba(36,69,54,.18);
         }
 
         .primaryButton:disabled {
@@ -727,8 +948,14 @@ export default function WalletPage() {
           cursor: not-allowed;
         }
 
+        .ruleGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 14px;
+          margin-bottom: 16px;
+        }
+
         .rule {
-          margin-top: 14px;
           display: grid;
           grid-template-columns: 42px 1fr;
           gap: 12px;
@@ -779,9 +1006,15 @@ export default function WalletPage() {
           display: flex;
           justify-content: space-between;
           gap: 12px;
-          margin-top: 14px;
-          padding-top: 14px;
+          margin-top: 12px;
+          padding-top: 12px;
           border-top: 1px solid rgba(92,70,35,.10);
+        }
+
+        .previewRow:first-child {
+          margin-top: 0;
+          padding-top: 0;
+          border-top: 0;
         }
 
         .previewRow span {
@@ -793,6 +1026,11 @@ export default function WalletPage() {
           color: #101a14;
         }
 
+        .previewRow.final b {
+          color: #31553d;
+          font-size: 20px;
+        }
+
         .lockText {
           display: block;
           margin-top: 12px;
@@ -800,7 +1038,18 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
-        .historyPanel {
+        .lowerGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .fullWidth {
+          grid-column: 1 / -1;
+        }
+
+        .historyPanel,
+        .activityList {
           display: grid;
           gap: 12px;
         }
@@ -873,18 +1122,13 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
-        .activityList {
-          display: grid;
-          gap: 12px;
-        }
-
         @media (max-width: 1250px) {
           .cards,
-          .qrGrid {
+          .qrGrid,
+          .ruleGrid {
             grid-template-columns: repeat(2, 1fr);
           }
 
-          .grid,
           .lowerGrid {
             grid-template-columns: 1fr;
           }
@@ -895,9 +1139,22 @@ export default function WalletPage() {
             padding: 18px;
           }
 
+          .hero,
+          .paymentNotice {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .heroBalance,
+          .sendBox {
+            width: 100%;
+            text-align: left;
+          }
+
           .cards,
           .formGrid,
-          .qrGrid {
+          .qrGrid,
+          .ruleGrid {
             grid-template-columns: 1fr;
           }
 
@@ -912,9 +1169,46 @@ export default function WalletPage() {
           .historyRight {
             justify-items: start;
           }
+
+          .modeSwitch {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            width: 100%;
+          }
         }
       `}</style>
     </main>
+  );
+}
+
+function PaymentCard({
+  title,
+  image,
+  selected,
+  onClick,
+  openLabel,
+}: {
+  title: string;
+  image: string;
+  selected: boolean;
+  onClick: () => void;
+  openLabel: string;
+}) {
+  return (
+    <div className={`qrCard ${selected ? "selected" : ""}`} onClick={onClick}>
+      <h3>{title}</h3>
+      <Image src={image} alt={`${title} QR`} width={240} height={240} />
+      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
+      <a
+        className="openQr"
+        href={image}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {openLabel}
+      </a>
+    </div>
   );
 }
 
@@ -1002,6 +1296,10 @@ function peso(value: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function pesoNoDecimal(value: number) {
+  return `₱${value.toLocaleString("en-PH")}`;
 }
 
 function cleanType(value: string | null) {
