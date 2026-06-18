@@ -1,65 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useMemo, useState } from "react";
 
-type Profile = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
-  membership_status: string | null;
-  kyc_status: string | null;
-  account_status: string | null;
-};
+const growthStages = [
+  { name: "Seedling", period: "1 - 3 Months", progress: 12 },
+  { name: "Sapling", period: "3 - 12 Months", progress: 28 },
+  { name: "Young Tree", period: "1 - 3 Years", progress: 48 },
+  { name: "Mature Tree", period: "3 - 7 Years", progress: 76 },
+  { name: "Harvest Ready", period: "7+ Years", progress: 100 },
+];
 
 export default function DashboardPage() {
-  const [stage, setStage] = useState(3);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [stage, setStage] = useState(1);
 
   useEffect(() => {
     const t = setInterval(() => {
       setStage((s) => (s >= 5 ? 1 : s + 1));
     }, 2400);
+
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    async function loadProfile() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const email = user.email?.trim().toLowerCase() || "";
-
-      const { data: profileById } = await supabase
-        .from("profiles")
-        .select(
-          "id, full_name, email, membership_status, kyc_status, account_status"
-        )
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const { data: profileByEmail } = await supabase
-        .from("profiles")
-        .select(
-          "id, full_name, email, membership_status, kyc_status, account_status"
-        )
-        .eq("email", email)
-        .maybeSingle();
-
-      setProfile(profileById || profileByEmail);
-    }
-
-    loadProfile();
-  }, []);
-
-  const displayName = profile?.full_name || "Agarwood Investor";
-  const initials = getInitials(displayName);
+  const currentStage = useMemo(() => growthStages[stage - 1], [stage]);
 
   return (
     <main className="page">
@@ -103,9 +65,9 @@ export default function DashboardPage() {
         </div>
 
         <div className="userBox">
-          <div className="avatar">{initials}</div>
+          <div className="avatar">DU</div>
           <div>
-            <strong>{displayName}</strong>
+            <strong>Demo User</strong>
             <p>Client</p>
           </div>
           <span>⌄</span>
@@ -117,87 +79,58 @@ export default function DashboardPage() {
           <div>
             <p>Welcome back,</p>
             <h2>
-              {displayName} <span>🍃</span>
+              Demo User <span>🍃</span>
             </h2>
-            <small>
-              Monitor your agarwood ownership, care updates, and market movement.
-            </small>
+            <small>Track your agarwood trees, care services, and wallet.</small>
           </div>
 
           <div className="headerActions">
             <button>
-              🔔<i>5</i>
+              🔔<i>8</i>
             </button>
             <button>
               ✉️<i>2</i>
             </button>
-            <div className="topAvatar">{initials}</div>
+            <div className="topAvatar">DU</div>
           </div>
         </header>
 
         <section className="stats">
-          <Card
-            icon="🌳"
-            title="Owned Trees"
-            value="128"
-            sub="78 individual • 50 package"
-          />
-          <Card
-            icon="🔔"
-            title="Care Tasks Due"
-            value="5"
-            sub="Needs attention today"
-          />
-          <Card
-            icon="🛡️"
-            title="Care Subscription"
-            value="ACTIVE"
-            sub="Covered until Jul 18"
-            gold
-          />
-          <Card
-            icon="💳"
-            title="Wallet Balance"
-            value="₱ 12,340"
-            sub="Available balance"
-          />
+          <Card icon="🌳" title="Owned Trees" value="128" sub="Individual + package trees" />
+          <Card icon="🧑‍🌾" title="Care Tasks Due" value="6" sub="Watering, fertilizer, photo update" />
+          <Card icon="🛡️" title="Care Subscription" value="Active" sub="Managed care service" gold />
+          <Card icon="💳" title="Wallet Balance" value="₱ 12,340" sub="Available balance" />
         </section>
 
         <section className="mainGrid">
           <div className="journey">
             <h3>Agarwood Growth Guide</h3>
-            <h4>How agarwood develops 🍃</h4>
+            <h4>{currentStage.name} 🍃</h4>
 
-            {[
-              ["Seedling", "0 - 6 Months", "Early root stage; photo may be limited", true],
-              ["Sapling", "6 - 18 Months", "Visible stem and leaves begin", true],
-              ["Young Tree", "1.5 - 3 Years", "Active growth and care monitoring", true],
-              ["Mature Tree", "3 - 7 Years", "Trunk mass and value development", false],
-              ["Harvest Ready", "7+ Years", "Eligible for sell or harvest review", false],
-            ].map((x, i) => (
-              <div
-                className={`step ${i === 2 ? "current" : ""}`}
-                key={x[0] as string}
-              >
-                <span>{x[3] ? "✓" : "🔒"}</span>
+            {growthStages.map((x, i) => (
+              <div className={`step ${stage === i + 1 ? "current" : ""}`} key={x.name}>
+                <span>{stage > i + 1 ? "✓" : stage === i + 1 ? "●" : "○"}</span>
                 <div>
-                  <strong>{x[0]}</strong>
-                  <p>{x[1]}</p>
-                  <small>{x[2]}</small>
+                  <strong>{x.name}</strong>
+                  <p>{x.period}</p>
                 </div>
-                {i === 2 && <b />}
+                {stage === i + 1 && <b />}
               </div>
             ))}
           </div>
 
           <div className="growthCard">
-            <div className="pill">🍃 Agarwood Tree Visualization</div>
+            <div className="pill">🍃 {currentStage.name}</div>
             <p className="growthText">
-              Demo growth cycle: seedling to harvest-ready agarwood.
+              Live tree guide only — not actual owned tree data.
             </p>
 
             <div className="forestScene">
               <div className="glowCircle" />
+              <div className="resinGlow r1" />
+              <div className="resinGlow r2" />
+              <div className="resinGlow r3" />
+
               <div className="leaf l1">🍃</div>
               <div className="leaf l2">🍃</div>
               <div className="leaf l3">🍃</div>
@@ -206,7 +139,8 @@ export default function DashboardPage() {
                 <div className="soil" />
                 <div className="trunk">
                   <i />
-                  <em />
+                  <i />
+                  <i />
                 </div>
                 <div className="branch b1" />
                 <div className="branch b2" />
@@ -216,21 +150,21 @@ export default function DashboardPage() {
                 <div className="crown c2" />
                 <div className="crown c3" />
                 <div className="crown c4" />
-                <div className="resinGlow" />
+                <div className="crown c5" />
               </div>
             </div>
 
             <div className="progressGlass">
               <div>
-                <strong>Growth Progress</strong>
-                <span>42%</span>
+                <strong>Growth Guide Progress</strong>
+                <span>{currentStage.progress}%</span>
               </div>
               <div className="bar">
-                <i />
+                <i style={{ width: `${currentStage.progress}%` }} />
               </div>
               <p>
-                <b>Estimated Harvest</b>
-                <span>1 Year, 8 Months</span>
+                <b>Current Guide Stage</b>
+                <span>{currentStage.name}</span>
               </p>
             </div>
           </div>
@@ -241,38 +175,24 @@ export default function DashboardPage() {
               <button>View My Trees ›</button>
             </div>
 
-            <div className="treeOverviewHero">
-              <div>
-                <strong>128</strong>
-                <span>Owned Trees</span>
-              </div>
-            </div>
-
-            <div className="overviewRows">
-              <OverviewRow label="Individual Trees" value="78" />
-              <OverviewRow label="Package Trees" value="50" />
-              <OverviewRow label="Latest Photo Update" value="Jun 18" />
-              <OverviewRow label="GPS Verification" value="Verified" />
-              <OverviewRow label="Care Subscription" value="Active" />
-              <OverviewRow label="Trees Needing Attention" value="5" alert />
+            <div className="treeOverview">
+              <Info label="Owned Trees" value="128" />
+              <Info label="Individual Trees" value="58" />
+              <Info label="Package Trees" value="70" />
+              <Info label="Latest Photo Update" value="Today" />
+              <Info label="GPS Verified" value="124 / 128" />
+              <Info label="Care Subscription" value="Active" />
+              <Info label="Trees Needing Attention" value="6" alert />
             </div>
           </div>
 
           <div className="actions darkPanel">
             <h3>Quick Actions</h3>
             <div>
-              <button>
-                🍃<span>Invest</span>
-              </button>
-              <button>
-                💼<span>Add Funds</span>
-              </button>
-              <button>
-                ↑<span>Withdraw</span>
-              </button>
-              <button>
-                🌳<span>My Trees</span>
-              </button>
+              <button>🍃<span>Invest</span></button>
+              <button>💼<span>Add Funds</span></button>
+              <button>↑<span>Withdraw</span></button>
+              <button>🌳<span>My Trees</span></button>
             </div>
           </div>
 
@@ -282,81 +202,86 @@ export default function DashboardPage() {
               <button>Buy More ›</button>
             </div>
 
-            <div className="inventoryList">
-              <InventoryRow icon="🌱" name="Organic Fertilizer" qty="18 Bags" />
-              <InventoryRow icon="🧪" name="Growth Booster" qty="12 Bottles" />
-              <InventoryRow icon="🪲" name="Insecticide" qty="6 Bottles" warning />
-              <InventoryRow icon="🌿" name="Fungicide" qty="8 Bottles" />
-              <InventoryRow icon="📍" name="GPS Tags" qty="128 Active" />
-              <InventoryRow icon="📸" name="Photo Credits" qty="42 Left" />
-            </div>
-
-            <small>
-              ⚠ Insecticide is near low stock. Buy from marketplace when needed.
-            </small>
+            {[
+              ["Organic Fertilizer", "24 packs"],
+              ["Growth Booster", "18 bottles"],
+              ["Insecticide", "12 bottles"],
+              ["Fungicide", "10 bottles"],
+              ["GPS Tags", "40 tags"],
+              ["Photo Credits", "85 credits"],
+            ].map((x) => (
+              <div className="listRow" key={x[0]}>
+                <span>{x[0]}</span>
+                <b>{x[1]}</b>
+              </div>
+            ))}
           </div>
 
           <div className="market panel">
             <div className="panelHead">
               <h3>Agarwood Market</h3>
-              <button>Live Style⌄</button>
+              <button>Live Style</button>
             </div>
 
-            <div className="marketTop">
-              <div>
-                <p>Agarwood Oil</p>
-                <h2>₱ 148,500</h2>
-                <small>↑ 4.2% this month</small>
-              </div>
-
-              <div className="marketPills">
-                <span>Chips ↑ 8.7%</span>
-                <span>Resin ↓ 1.4%</span>
-              </div>
-            </div>
-
-            <div className="lineChart">
-              <svg viewBox="0 0 400 130" preserveAspectRatio="none">
-                <path d="M0 95 C40 40, 80 110, 120 70 C170 20, 200 110, 250 55 C300 5, 330 65, 400 20" />
+            <div className="marketGraph">
+              <svg viewBox="0 0 500 150" preserveAspectRatio="none">
+                <path className="oil" d="M0 100 C55 55, 90 120, 150 75 C210 25, 250 115, 310 65 C370 25, 430 85, 500 35" />
+                <path className="chips" d="M0 120 C70 95, 110 100, 170 80 C235 58, 285 98, 350 62 C410 36, 455 65, 500 48" />
+                <path className="resin" d="M0 135 C70 125, 120 82, 185 98 C260 118, 310 40, 380 52 C440 62, 465 30, 500 20" />
               </svg>
+            </div>
+
+            <div className="marketLegend">
+              <span><i className="oilDot" /> Agarwood Oil</span>
+              <span><i className="chipsDot" /> Agarwood Chips</span>
+              <span><i className="resinDot" /> Premium Resin</span>
             </div>
           </div>
 
-          <div className="activity panel">
+          <div className="notifications panel">
             <div className="panelHead">
               <h3>Notifications</h3>
               <button>View all ›</button>
             </div>
 
             {[
-              ["💧", "Tree AG-001", "Watering missed", "2 days ago"],
-              ["🌱", "Tree AG-003", "Fertilizer due", "Jun 20"],
-              ["📸", "Tree AG-005", "Photo update available", "Today"],
-              ["📍", "Tree AG-002", "GPS verified", "Completed"],
-              ["🛡️", "Care Subscription", "Expires in 3 days", "Renew soon"],
-              ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750"],
-            ].map((a) => (
-              <div className="activityRow" key={`${a[1]}-${a[2]}`}>
-                <span>{a[0]}</span>
-                <div>
-                  <strong>{a[1]}</strong>
-                  <p>{a[2]}</p>
-                </div>
-                <b>{a[3]}</b>
+              "Watering missed",
+              "Fertilizer due",
+              "Photo update available",
+              "GPS verified",
+              "Subscription expiring",
+              "Caretaker report uploaded",
+              "Referral bonus",
+              "Tree entered new stage",
+            ].map((x) => (
+              <div className="notice" key={x}>
+                <span>•</span>
+                <p>{x}</p>
               </div>
             ))}
+          </div>
+
+          <div className="referrals panel">
+            <div className="panelHead">
+              <h3>Referrals</h3>
+              <button>Invite ›</button>
+            </div>
+            <h2>₱ 7,500</h2>
+            <small>Total referral bonus earned</small>
+            <div className="referralBox">Share your code: AGAR-DEMO-128</div>
           </div>
         </section>
 
         <footer>
-          🍃 Thank you for being part of a greener tomorrow. <span>|</span>{" "}
-          Agarwood Investments © 2026
+          🍃 Membership fee = platform access. Tree care fee = maintenance service.{" "}
+          <span>|</span> Agarwood Investments © 2026
         </footer>
       </section>
 
       <style>{`
         * { box-sizing: border-box; }
         body { margin: 0; }
+
         .page {
           min-height: 100vh;
           display: flex;
@@ -382,17 +307,20 @@ export default function DashboardPage() {
           text-align: center;
           margin-bottom: 10px;
         }
+
         .logoMark {
           font-size: 58px;
           color: #f0c458;
           line-height: .8;
         }
+
         .logo h1 {
           font-size: 22px;
           letter-spacing: 5px;
           margin: 10px 0 0;
           color: #f3c75b;
         }
+
         .logo p {
           margin: 5px 0 0;
           font-size: 11px;
@@ -404,6 +332,7 @@ export default function DashboardPage() {
           display: grid;
           gap: 9px;
         }
+
         nav button {
           height: 54px;
           border: 0;
@@ -419,10 +348,12 @@ export default function DashboardPage() {
           cursor: pointer;
           transition: .25s;
         }
+
         nav button span {
           width: 25px;
           text-align: center;
         }
+
         nav button.active,
         nav button:hover {
           background: linear-gradient(135deg, #2c8f41, #0e4d2e);
@@ -442,15 +373,18 @@ export default function DashboardPage() {
           overflow: hidden;
           position: relative;
         }
+
         .promo h3 {
           margin: 0;
           font-size: 20px;
           line-height: 1.35;
         }
+
         .promo p {
           font-size: 13px;
           line-height: 1.6;
         }
+
         .promoPlant {
           position: absolute;
           right: 18px;
@@ -465,7 +399,9 @@ export default function DashboardPage() {
           gap: 12px;
           padding: 8px 5px;
         }
-        .avatar, .topAvatar {
+
+        .avatar,
+        .topAvatar {
           width: 54px;
           height: 54px;
           border-radius: 50%;
@@ -476,6 +412,7 @@ export default function DashboardPage() {
           color: white;
           font-weight: 900;
         }
+
         .userBox p {
           margin: 3px 0 0;
           opacity: .8;
@@ -494,25 +431,30 @@ export default function DashboardPage() {
           align-items: start;
           margin-bottom: 20px;
         }
+
         .header p {
           margin: 0;
           font-weight: 800;
         }
+
         .header h2 {
           margin: 4px 0 4px;
           font-size: 36px;
           line-height: 1;
           letter-spacing: -1px;
         }
+
         .header small {
           color: #536258;
           font-size: 16px;
         }
+
         .headerActions {
           display: flex;
           align-items: center;
           gap: 14px;
         }
+
         .headerActions button {
           position: relative;
           width: 52px;
@@ -524,6 +466,7 @@ export default function DashboardPage() {
           cursor: pointer;
           font-size: 20px;
         }
+
         .headerActions i {
           position: absolute;
           right: 8px;
@@ -557,6 +500,7 @@ export default function DashboardPage() {
           padding: 20px;
           box-shadow: 0 12px 35px rgba(22, 37, 20, .08);
         }
+
         .statIcon {
           width: 70px;
           height: 70px;
@@ -567,18 +511,22 @@ export default function DashboardPage() {
           font-size: 31px;
           box-shadow: 0 10px 23px rgba(69, 132, 58, .18);
         }
+
         .statIcon.gold {
           background: radial-gradient(circle, #fff5c7, #efbd43);
         }
+
         .stat p {
           margin: 0 0 8px;
           font-size: 14px;
         }
+
         .stat h3 {
           margin: 0 0 8px;
           font-size: 30px;
           letter-spacing: -1px;
         }
+
         .stat small {
           color: #08782e;
           font-weight: 800;
@@ -590,7 +538,11 @@ export default function DashboardPage() {
           gap: 16px;
         }
 
-        .journey, .growthCard, .portfolio, .darkPanel, .panel {
+        .journey,
+        .growthCard,
+        .portfolio,
+        .darkPanel,
+        .panel {
           border-radius: 18px;
           box-shadow: 0 13px 38px rgba(20, 29, 18, .09);
           border: 1px solid rgba(45, 34, 13, .07);
@@ -601,22 +553,27 @@ export default function DashboardPage() {
           padding: 20px;
           min-height: 520px;
         }
-        .journey h3, .journey h4 {
+
+        .journey h3,
+        .journey h4 {
           margin: 0;
         }
+
         .journey h4 {
           margin-top: 12px;
           color: #108131;
         }
+
         .step {
           position: relative;
           display: flex;
           align-items: center;
           gap: 14px;
-          padding: 13px 10px;
+          padding: 14px 10px;
           margin-top: 10px;
           border-radius: 14px;
         }
+
         .step:before {
           content: "";
           position: absolute;
@@ -626,10 +583,15 @@ export default function DashboardPage() {
           height: 24px;
           background: #c8d5bb;
         }
-        .step:first-of-type:before { display: none; }
+
+        .step:first-of-type:before {
+          display: none;
+        }
+
         .step.current {
           background: linear-gradient(90deg, #d9efc4, #c6e5ae);
         }
+
         .step span {
           width: 24px;
           height: 24px;
@@ -640,22 +602,18 @@ export default function DashboardPage() {
           color: white;
           font-size: 12px;
           z-index: 2;
-          flex: 0 0 auto;
         }
+
         .step div strong {
           font-size: 14px;
         }
+
         .step div p {
           margin: 5px 0 0;
           font-size: 13px;
           color: #596056;
         }
-        .step div small {
-          display: block;
-          margin-top: 3px;
-          font-size: 11px;
-          color: #7c8378;
-        }
+
         .step b {
           width: 8px;
           height: 8px;
@@ -673,6 +631,7 @@ export default function DashboardPage() {
             radial-gradient(circle at 72% 30%, rgba(255, 225, 117, .65), transparent 25%),
             linear-gradient(135deg, #e6e2c6, #88a773 48%, #113a1f);
         }
+
         .pill {
           position: absolute;
           top: 28px;
@@ -686,6 +645,7 @@ export default function DashboardPage() {
           z-index: 5;
           white-space: nowrap;
         }
+
         .growthText {
           position: absolute;
           top: 74px;
@@ -694,7 +654,9 @@ export default function DashboardPage() {
           text-align: center;
           color: white;
           z-index: 5;
+          padding: 0 20px;
         }
+
         .forestScene {
           position: absolute;
           inset: 0;
@@ -702,10 +664,11 @@ export default function DashboardPage() {
           place-items: center;
           padding-top: 80px;
         }
+
         .glowCircle {
           position: absolute;
-          width: 440px;
-          height: 440px;
+          width: 420px;
+          height: 420px;
           border-radius: 50%;
           border: 4px solid rgba(110, 255, 123, .75);
           border-left-color: rgba(255,255,255,.25);
@@ -716,121 +679,137 @@ export default function DashboardPage() {
 
         .treeStage {
           position: relative;
-          width: 260px;
+          width: 280px;
           height: 315px;
           transform-origin: bottom center;
           animation: treeBreath 3s ease-in-out infinite;
           z-index: 3;
+          transition: transform .9s ease, opacity .9s ease;
         }
+
         .soil {
           position: absolute;
-          left: 32px;
+          left: 42px;
           bottom: 0;
-          width: 196px;
+          width: 195px;
           height: 38px;
           border-radius: 50%;
           background: #2b1b0c;
           box-shadow: 0 15px 28px rgba(0,0,0,.35);
         }
+
         .trunk {
           position: absolute;
-          left: 112px;
+          left: 121px;
           bottom: 22px;
-          width: 35px;
-          height: 190px;
+          width: 38px;
+          height: 172px;
           border-radius: 20px;
-          background: linear-gradient(90deg, #5a2c0f, #b26a20 45%, #6a3d15);
+          background: linear-gradient(90deg, #4d260d, #b26a20, #5a2c0f);
           overflow: hidden;
-          box-shadow: inset -7px 0 10px rgba(0,0,0,.18);
-        }
-        .trunk i,
-        .trunk em {
-          position: absolute;
-          display: block;
-          width: 7px;
-          border-radius: 999px;
-          background: rgba(54, 22, 7, .55);
-        }
-        .trunk i {
-          height: 150px;
-          left: 9px;
-          top: 24px;
-          transform: rotate(4deg);
-        }
-        .trunk em {
-          height: 105px;
-          right: 7px;
-          top: 62px;
-          transform: rotate(-5deg);
+          box-shadow: inset 8px 0 12px rgba(255, 199, 92, .12);
         }
 
-        .resinGlow {
+        .trunk i {
           position: absolute;
-          left: 122px;
-          bottom: 98px;
-          width: 16px;
-          height: 70px;
+          top: 14px;
+          width: 4px;
+          height: 140px;
           border-radius: 999px;
-          background: linear-gradient(180deg, rgba(255, 220, 99, .8), rgba(129, 75, 23, .1));
-          filter: blur(.2px);
-          opacity: .82;
-          animation: resinPulse 3.5s ease-in-out infinite;
+          background: rgba(41, 19, 5, .45);
         }
+
+        .trunk i:nth-child(1) { left: 8px; }
+        .trunk i:nth-child(2) { left: 18px; opacity: .7; }
+        .trunk i:nth-child(3) { right: 8px; opacity: .55; }
 
         .branch {
           position: absolute;
-          height: 13px;
+          bottom: 135px;
+          width: 94px;
+          height: 14px;
           border-radius: 20px;
           background: #7b4418;
         }
-        .b1 { left: 52px; bottom: 145px; width: 90px; transform: rotate(-32deg); }
-        .b2 { right: 54px; bottom: 148px; width: 92px; transform: rotate(34deg); }
-        .b3 { left: 72px; bottom: 192px; width: 70px; transform: rotate(-24deg); }
-        .b4 { right: 75px; bottom: 197px; width: 72px; transform: rotate(25deg); }
+
+        .b1 { left: 54px; transform: rotate(-30deg); }
+        .b2 { right: 58px; transform: rotate(32deg); }
+        .b3 { left: 43px; bottom: 176px; transform: rotate(-18deg); }
+        .b4 { right: 50px; bottom: 184px; transform: rotate(18deg); }
 
         .crown {
           position: absolute;
           border-radius: 50%;
-          background: radial-gradient(circle at 35% 30%, #a4d85d, #1f6c21 70%);
+          background: radial-gradient(circle at 35% 30%, #bce86c, #1f6c21 70%);
           box-shadow: inset -12px -16px 26px rgba(0,0,0,.12);
-          transition: opacity .6s ease, transform .6s ease;
+          transition: .9s ease;
         }
-        .c1 { width: 120px; height: 118px; left: 68px; top: 0; }
-        .c2 { width: 140px; height: 136px; left: 13px; top: 74px; }
-        .c3 { width: 148px; height: 142px; right: 5px; top: 70px; }
-        .c4 { width: 190px; height: 128px; left: 34px; top: 126px; }
 
-        .stage1 { transform: scale(.42); }
+        .c1 { width: 122px; height: 122px; left: 78px; top: 18px; }
+        .c2 { width: 145px; height: 145px; left: 28px; top: 75px; }
+        .c3 { width: 155px; height: 155px; right: 15px; top: 72px; }
+        .c4 { width: 198px; height: 130px; left: 42px; top: 135px; }
+        .c5 { width: 125px; height: 105px; left: 78px; top: 0; }
+
+        .stage1 {
+          transform: scale(.30) translateY(80px);
+        }
+
         .stage1 .branch,
         .stage1 .crown,
+        .stage1 .trunk i,
         .stage1 .resinGlow {
           opacity: 0;
         }
-        .stage1 .trunk {
-          height: 75px;
-          bottom: 18px;
+
+        .stage2 {
+          transform: scale(.52) translateY(52px);
         }
 
-        .stage2 { transform: scale(.62); }
         .stage2 .b3,
         .stage2 .b4,
-        .stage2 .c2,
         .stage2 .c3,
         .stage2 .c4,
-        .stage2 .resinGlow {
+        .stage2 .c5 {
           opacity: 0;
         }
-        .stage2 .trunk {
-          height: 115px;
+
+        .stage3 {
+          transform: scale(.78) translateY(24px);
         }
 
-        .stage3 { transform: scale(.84); }
-        .stage3 .resinGlow {
-          opacity: .25;
+        .stage3 .c5 {
+          opacity: .2;
         }
 
-        .stage4 { transform: scale(1); }
-        .stage5 { transform: scale(1.12); }
+        .stage4 {
+          transform: scale(1.03) translateY(0);
+        }
+
+        .stage5 {
+          transform: scale(1.18) translateY(-10px);
+          filter: drop-shadow(0 0 18px rgba(255, 196, 67, .28));
+        }
+
+        .stage5 .crown {
+          background: radial-gradient(circle at 35% 30%, #d5f283, #237a26 70%);
+        }
+
+        .resinGlow {
+          position: absolute;
+          width: 15px;
+          height: 38px;
+          border-radius: 999px;
+          background: linear-gradient(#fff5a6, #d88915);
+          box-shadow: 0 0 18px rgba(255, 189, 41, .9);
+          z-index: 4;
+          opacity: .75;
+          animation: resinPulse 1.8s ease-in-out infinite;
+        }
+
+        .r1 { left: 48%; top: 49%; }
+        .r2 { left: 52%; top: 57%; animation-delay: .45s; }
+        .r3 { left: 45%; top: 61%; animation-delay: .9s; }
 
         .leaf {
           position: absolute;
@@ -838,6 +817,7 @@ export default function DashboardPage() {
           z-index: 2;
           animation: leafFloat 5s ease-in-out infinite;
         }
+
         .l1 { left: 18%; top: 30%; }
         .l2 { right: 17%; top: 23%; animation-delay: 1s; }
         .l3 { right: 25%; bottom: 38%; animation-delay: 1.8s; }
@@ -855,23 +835,28 @@ export default function DashboardPage() {
           backdrop-filter: blur(12px);
           z-index: 6;
         }
+
         .progressGlass div:first-child,
         .progressGlass p {
           display: flex;
           justify-content: space-between;
           align-items: center;
         }
+
         .progressGlass span {
           font-size: 34px;
           font-weight: 900;
         }
+
         .progressGlass p {
           margin: 9px 0 0;
           font-size: 14px;
         }
+
         .progressGlass p span {
           font-size: 14px;
         }
+
         .bar {
           margin-top: 12px;
           height: 12px;
@@ -879,32 +864,37 @@ export default function DashboardPage() {
           background: rgba(255,255,255,.28);
           overflow: hidden;
         }
+
         .bar i {
           display: block;
-          width: 42%;
           height: 100%;
           border-radius: inherit;
-          background: linear-gradient(90deg, #8cff7e, #60d95a);
-          animation: loadBar 2.4s ease-out infinite alternate;
+          background: linear-gradient(90deg, #8cff7e, #ffe27a);
+          transition: width .9s ease;
         }
 
-        .portfolio, .darkPanel {
+        .portfolio,
+        .darkPanel {
           background: linear-gradient(145deg, #07351f, #042317);
           color: white;
           padding: 24px;
         }
+
         .portfolio {
           min-height: 520px;
         }
+
         .panelHead {
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 12px;
         }
+
         .panelHead h3 {
           margin: 0;
         }
+
         .panelHead button {
           border: 0;
           background: transparent;
@@ -913,60 +903,48 @@ export default function DashboardPage() {
           font-weight: 800;
         }
 
-        .treeOverviewHero {
-          margin: 26px auto 20px;
-          width: 170px;
-          height: 170px;
-          border-radius: 50%;
-          background:
-            radial-gradient(circle at 35% 35%, #a7ef84, #2a8d37 70%);
+        .treeOverview {
           display: grid;
-          place-items: center;
-          box-shadow: inset -20px -25px 35px rgba(0,0,0,.18), 0 20px 50px rgba(0,0,0,.22);
+          gap: 12px;
+          margin-top: 22px;
         }
-        .treeOverviewHero div {
-          text-align: center;
+
+        .info {
+          padding: 13px 14px;
+          border-radius: 14px;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.1);
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
         }
-        .treeOverviewHero strong {
-          display: block;
-          font-size: 38px;
-        }
-        .treeOverviewHero span {
+
+        .info span {
+          opacity: .82;
           font-size: 13px;
         }
 
-        .overviewRows {
-          display: grid;
-          gap: 12px;
+        .info b {
+          font-size: 14px;
         }
-        .overviewRow {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 12px;
-          padding: 12px 0;
-          border-bottom: 1px solid rgba(255,255,255,.12);
-        }
-        .overviewRow p {
-          margin: 0;
-          color: rgba(255,255,255,.75);
-        }
-        .overviewRow b {
-          color: white;
-        }
-        .overviewRow.alert b {
+
+        .info.alert b {
           color: #ffd166;
         }
 
         .actions {
           min-height: 210px;
+          grid-column: 1 / -1;
         }
+
         .actions div {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: 13px;
           margin-top: 22px;
         }
+
         .actions button {
           height: 110px;
           border-radius: 14px;
@@ -977,7 +955,9 @@ export default function DashboardPage() {
           place-items: center;
           cursor: pointer;
           font-weight: 900;
+          font-size: 24px;
         }
+
         .actions button span {
           display: block;
           font-size: 13px;
@@ -988,133 +968,124 @@ export default function DashboardPage() {
           padding: 22px;
           min-height: 255px;
         }
+
         .inventory {
           grid-column: 1 / 2;
         }
+
         .market {
           grid-column: 2 / 3;
         }
-        .activity {
+
+        .notifications {
           grid-column: 3 / 4;
           grid-row: 3 / 5;
         }
 
-        .inventoryList {
-          margin-top: 18px;
-          display: grid;
-          gap: 10px;
-        }
-        .inventoryRow {
-          display: grid;
-          grid-template-columns: 36px 1fr auto;
-          align-items: center;
-          gap: 10px;
-          padding: 9px 0;
-          border-bottom: 1px solid rgba(0,0,0,.08);
-        }
-        .inventoryRow .icon {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: #e3f1d6;
-        }
-        .inventoryRow strong {
-          font-size: 13px;
-        }
-        .inventoryRow p {
-          margin: 3px 0 0;
-          font-size: 11px;
-          color: #666;
-        }
-        .inventoryRow.warn b {
-          color: #c56a00;
-        }
-        .inventory small {
-          display: block;
-          color: #08782e;
-          margin-top: 15px;
-          font-weight: 800;
-          line-height: 1.4;
+        .referrals {
+          grid-column: 1 / 3;
         }
 
-        .marketTop {
+        .listRow,
+        .notice {
           display: flex;
           justify-content: space-between;
-          gap: 18px;
-          margin-top: 16px;
-        }
-        .marketTop p {
-          margin: 0 0 8px;
-          color: #5c6259;
-        }
-        .marketTop h2 {
-          margin: 0 0 8px;
-          font-size: 30px;
-        }
-        .marketTop small {
-          color: #08782e;
-          font-weight: 900;
-        }
-        .marketPills {
-          display: grid;
-          gap: 8px;
-          align-content: start;
-        }
-        .marketPills span {
-          border-radius: 999px;
-          background: #e3f1d6;
-          padding: 8px 12px;
-          font-size: 12px;
-          font-weight: 800;
-          white-space: nowrap;
+          align-items: center;
+          gap: 14px;
+          padding: 12px 0;
+          border-bottom: 1px solid rgba(0,0,0,.07);
+          font-size: 14px;
         }
 
-        .lineChart {
-          height: 125px;
-          margin-top: 18px;
+        .listRow b {
+          color: #0b8d37;
         }
-        .lineChart svg {
+
+        .notice {
+          justify-content: flex-start;
+          padding: 10px 0;
+        }
+
+        .notice span {
+          color: #0b8d37;
+          font-size: 24px;
+          line-height: 1;
+        }
+
+        .notice p {
+          margin: 0;
+          font-size: 14px;
+        }
+
+        .marketGraph {
+          height: 150px;
+          margin-top: 22px;
+          border-radius: 16px;
+          background: linear-gradient(180deg, rgba(12, 90, 48, .08), rgba(255, 255, 255, .2));
+          overflow: hidden;
+        }
+
+        .marketGraph svg {
           width: 100%;
           height: 100%;
         }
-        .lineChart path {
+
+        .marketGraph path {
           fill: none;
-          stroke: #15903c;
           stroke-width: 5;
           stroke-linecap: round;
           filter: drop-shadow(0 8px 10px rgba(31, 145, 54, .18));
+          stroke-dasharray: 900;
+          stroke-dashoffset: 900;
+          animation: drawLine 4s ease-in-out infinite alternate;
         }
 
-        .activityRow {
-          display: grid;
-          grid-template-columns: 42px 1fr auto;
+        .marketGraph .oil { stroke: #15903c; }
+        .marketGraph .chips { stroke: #d39a23; animation-delay: .4s; }
+        .marketGraph .resin { stroke: #7c4a16; animation-delay: .8s; }
+
+        .marketLegend {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 14px;
+          margin-top: 15px;
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        .marketLegend span {
+          display: flex;
           align-items: center;
-          gap: 12px;
-          padding: 13px 0;
-          border-bottom: 1px solid rgba(0,0,0,.08);
+          gap: 7px;
         }
-        .activityRow span {
-          width: 38px;
-          height: 38px;
+
+        .marketLegend i {
+          width: 11px;
+          height: 11px;
           border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: #e3f1d6;
         }
-        .activityRow strong {
-          font-size: 13px;
+
+        .oilDot { background: #15903c; }
+        .chipsDot { background: #d39a23; }
+        .resinDot { background: #7c4a16; }
+
+        .referrals h2 {
+          font-size: 34px;
+          margin: 22px 0 6px;
         }
-        .activityRow p {
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: #6b6b62;
+
+        .referrals small {
+          color: #08782e;
+          font-weight: 900;
         }
-        .activityRow b {
-          color: #0b8d37;
-          font-size: 13px;
-          text-align: right;
+
+        .referralBox {
+          margin-top: 24px;
+          padding: 16px;
+          border-radius: 16px;
+          background: #e4f2d8;
+          color: #0c5a30;
+          font-weight: 900;
         }
 
         footer {
@@ -1123,6 +1094,7 @@ export default function DashboardPage() {
           padding: 20px 0 0;
           font-size: 14px;
         }
+
         footer span {
           margin: 0 24px;
         }
@@ -1130,42 +1102,90 @@ export default function DashboardPage() {
         @keyframes rotateGlow {
           to { transform: rotate(360deg); }
         }
+
         @keyframes treeBreath {
           0%, 100% { filter: saturate(1); }
           50% { filter: saturate(1.25) brightness(1.07); }
         }
+
         @keyframes resinPulse {
-          0%, 100% { opacity: .45; transform: translateY(0); }
-          50% { opacity: 1; transform: translateY(-4px); }
+          0%, 100% { transform: scale(.9); opacity: .45; }
+          50% { transform: scale(1.15); opacity: 1; }
         }
+
         @keyframes leafFloat {
           0%, 100% { transform: translateY(0) rotate(-10deg); opacity: .8; }
           50% { transform: translateY(-22px) rotate(15deg); opacity: 1; }
         }
-        @keyframes loadBar {
-          from { width: 35%; }
-          to { width: 42%; }
-        }
+
         @keyframes floatPlant {
           0%, 100% { transform: translateY(0); }
           50% { transform: translateY(-10px); }
         }
 
+        @keyframes drawLine {
+          to { stroke-dashoffset: 0; }
+        }
+
         @media (max-width: 1280px) {
-          .stats { grid-template-columns: repeat(2, 1fr); }
-          .mainGrid { grid-template-columns: 220px 1fr; }
-          .portfolio, .actions, .activity { grid-column: 1 / -1; }
-          .inventory { grid-column: 1 / 2; }
-          .market { grid-column: 2 / 3; }
+          .stats {
+            grid-template-columns: repeat(2, 1fr);
+          }
+
+          .mainGrid {
+            grid-template-columns: 220px 1fr;
+          }
+
+          .portfolio,
+          .actions,
+          .notifications,
+          .referrals {
+            grid-column: 1 / -1;
+          }
+
+          .inventory {
+            grid-column: 1 / 2;
+          }
+
+          .market {
+            grid-column: 2 / 3;
+          }
         }
 
         @media (max-width: 900px) {
-          .page { flex-direction: column; }
-          .sidebar { width: 100%; min-height: auto; }
-          nav { grid-template-columns: repeat(2, 1fr); }
-          .mainGrid, .stats { grid-template-columns: 1fr; }
-          .inventory, .market, .activity { grid-column: 1; }
-          .header { flex-direction: column; gap: 20px; }
+          .page {
+            flex-direction: column;
+          }
+
+          .sidebar {
+            width: 100%;
+            min-height: auto;
+          }
+
+          nav {
+            grid-template-columns: repeat(2, 1fr);
+          }
+
+          .mainGrid,
+          .stats {
+            grid-template-columns: 1fr;
+          }
+
+          .inventory,
+          .market,
+          .notifications,
+          .referrals {
+            grid-column: 1;
+          }
+
+          .header {
+            flex-direction: column;
+            gap: 20px;
+          }
+
+          .actions div {
+            grid-template-columns: repeat(2, 1fr);
+          }
         }
       `}</style>
     </main>
@@ -1197,7 +1217,7 @@ function Card({
   );
 }
 
-function OverviewRow({
+function Info({
   label,
   value,
   alert,
@@ -1207,41 +1227,9 @@ function OverviewRow({
   alert?: boolean;
 }) {
   return (
-    <div className={`overviewRow ${alert ? "alert" : ""}`}>
-      <p>{label}</p>
+    <div className={`info ${alert ? "alert" : ""}`}>
+      <span>{label}</span>
       <b>{value}</b>
     </div>
   );
-}
-
-function InventoryRow({
-  icon,
-  name,
-  qty,
-  warning,
-}: {
-  icon: string;
-  name: string;
-  qty: string;
-  warning?: boolean;
-}) {
-  return (
-    <div className={`inventoryRow ${warning ? "warn" : ""}`}>
-      <span className="icon">{icon}</span>
-      <div>
-        <strong>{name}</strong>
-        <p>Marketplace supply</p>
-      </div>
-      <b>{qty}</b>
-    </div>
-  );
-}
-
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
 }
