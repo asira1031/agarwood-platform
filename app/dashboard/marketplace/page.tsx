@@ -439,7 +439,6 @@ function buildTreeRows(profileId: string, product: MarketplaceProduct, count: nu
   return Array.from({ length: count }).map(() => ({
     profile_id: profileId,
     tree_code: makeTreeCode(),
-    name: label,
     tree_type: label,
     stage,
     growth_stage: stage,
@@ -457,7 +456,6 @@ function buildMinimalTreeRows(profileId: string, product: MarketplaceProduct, co
   return Array.from({ length: count }).map(() => ({
     profile_id: profileId,
     tree_code: makeTreeCode(),
-    name: label,
   }));
 }
 

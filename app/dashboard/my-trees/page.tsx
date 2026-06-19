@@ -416,12 +416,18 @@ export default function MyTreesPage() {
                     </div>
                   </div>
 
-                  {sellRequests.filter((item) => item.tree_id === selectedTree.id).length === 0 ? (
+                  {sellRequests.filter(
+                    (item) =>
+                      item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
+                  ).length === 0 ? (
                     <div className="empty small">No sell request for this tree.</div>
                   ) : (
                     <div className="requestList">
                       {sellRequests
-                        .filter((item) => item.tree_id === selectedTree.id)
+                        .filter(
+                          (item) =>
+                            item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
+                        )
                         .map((item) => (
                           <div className="requestRow" key={item.id}>
                             <div>
