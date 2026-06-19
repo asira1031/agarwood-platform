@@ -10,7 +10,6 @@ type Profile = {
   id: string;
   full_name: string | null;
   email: string | null;
-  auto_renew?: boolean | null;
 };
 
 type ViewMode = "TREE" | "GROUP" | "PACKAGE" | "LEDGER";
@@ -142,13 +141,13 @@ export default function InvestmentsPage() {
 
     const { data: profileById } = await supabase
       .from("profiles")
-      .select("id, full_name, email, auto_renew")
+      .select("id, full_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
     const { data: profileByEmail } = await supabase
       .from("profiles")
-      .select("id, full_name, email, auto_renew")
+      .select("id, full_name, email")
       .eq("email", email)
       .maybeSingle();
 
@@ -305,7 +304,7 @@ export default function InvestmentsPage() {
           <strong className={stats.roi >= 0 ? "goodText" : "badText"}>
             {stats.roi.toFixed(2)}%
           </strong>
-          <small>{profile?.auto_renew ? "Auto Renew: ON" : "Auto Renew: OFF"}</small>
+          <small>{"Auto Renew: Tree Level Only"}</small>
         </div>
       </section>
 
@@ -443,7 +442,7 @@ export default function InvestmentsPage() {
                       <Mini
                         label="Auto Renew"
                         value={
-                          selectedTree.auto_renew_enabled || profile?.auto_renew
+                          selectedTree.auto_renew_enabled
                             ? "ON - Display Only"
                             : "OFF"
                         }
