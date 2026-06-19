@@ -163,39 +163,31 @@ export default function TreeOperationsPage() {
     amount: number,
     description: string
   ) {
-    const payloadAttempts = [
+    const basePayload = {
+      profile_id: currentProfile.id,
+      wallet_id: walletId ?? null,
+      amount: -Math.abs(amount),
+      type: "DEBIT",
+      transaction_type: "DEBIT",
+      description,
+      status: "COMPLETED",
+    };
+
+    const positiveAmountPayload = {
+      ...basePayload,
+      amount: Math.abs(amount),
+    };
+
+    const payloadAttempts: Array<typeof basePayload & { category?: string }> = [
       {
-        profile_id: currentProfile.id,
-        wallet_id: walletId,
-        amount: -Math.abs(amount),
-        type: "DEBIT",
-        transaction_type: "DEBIT",
+        ...basePayload,
         category: "TREE_CARE_PROGRAM_AUTO_RENEW",
-        description,
-        status: "COMPLETED",
       },
       {
-        profile_id: currentProfile.id,
-        wallet_id: null,
-        amount: -Math.abs(amount),
-        type: "DEBIT",
-        description,
-        status: "COMPLETED",
+        ...basePayload,
       },
       {
-        profile_id: currentProfile.id,
-        wallet_id: null,
-        amount: Math.abs(amount),
-        transaction_type: "DEBIT",
-        description,
-        status: "COMPLETED",
-      },
-      {
-        profile_id: currentProfile.id,
-        wallet_id: null,
-        amount: Math.abs(amount),
-        description,
-        status: "COMPLETED",
+        ...positiveAmountPayload,
       },
     ];
 
@@ -635,39 +627,31 @@ export default function TreeOperationsPage() {
 
     const description = `${actionLabel}: ${operation?.name || "Tree Care Program"} for ${treeLabel}`;
 
-    const payloadAttempts = [
+    const basePayload = {
+      profile_id: profile.id,
+      wallet_id: wallet?.id ?? null,
+      amount: -Math.abs(amount),
+      type: "DEBIT",
+      transaction_type: "DEBIT",
+      description,
+      status: "COMPLETED",
+    };
+
+    const positiveAmountPayload = {
+      ...basePayload,
+      amount: Math.abs(amount),
+    };
+
+    const payloadAttempts: Array<typeof basePayload & { category?: string }> = [
       {
-        profile_id: profile.id,
-        wallet_id: wallet?.id || null,
-        amount: -Math.abs(amount),
-        type: "DEBIT",
-        transaction_type: "DEBIT",
+        ...basePayload,
         category: "TREE_CARE_PROGRAM",
-        description,
-        status: "COMPLETED",
       },
       {
-        profile_id: profile.id,
-        wallet_id: null,
-        amount: -Math.abs(amount),
-        type: "DEBIT",
-        description,
-        status: "COMPLETED",
+        ...basePayload,
       },
       {
-        profile_id: profile.id,
-        wallet_id: null,
-        amount: Math.abs(amount),
-        transaction_type: "DEBIT",
-        description,
-        status: "COMPLETED",
-      },
-      {
-        profile_id: profile.id,
-        wallet_id: null,
-        amount: Math.abs(amount),
-        description,
-        status: "COMPLETED",
+        ...positiveAmountPayload,
       },
     ];
 
