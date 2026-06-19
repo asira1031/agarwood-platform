@@ -1,67 +1,42 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Profile = {
+type InventoryItem = {
   id: string;
-  full_name: string | null;
-  email: string | null;
-  membership_status: string | null;
-  kyc_status: string | null;
-};
-
-type Wallet = {
-  id: string;
-  profile_id: string;
-  balance: number | null;
-};
-
-type TreeRow = Record<string, any>;
-
-type WalletTransaction = {
-  id: string;
-  transaction_type: string | null;
-  amount: number | null;
+  profile_id: string | null;
+  tree_id: string | null;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  starting_qty: number | null;
+  remaining_qty: number | null;
+  low_stock_level: number | null;
   status: string | null;
-  reference_no: string | null;
-  description: string | null;
   created_at: string | null;
 };
 
-const INVESTMENT_EXPENSE_TYPES = [
-  "MARKETPLACE_PURCHASE",
-  "TREE_PURCHASE",
-  "INVESTMENT_PURCHASE",
-  "MEMBERSHIP",
-  "MEMBERSHIP_PAYMENT",
-];
+const weeklyNeeds: Record<string, number> = {
+  Fertilizer: 1,
+  Fungicide: 0.5,
+  Insecticide: 0.25,
+  Nutrients: 0.5,
+  "Soil Conditioner": 0.5,
+  Booster: 0.5,
+};
 
-const INVESTMENT_EARNING_TYPES = [
-  "TREE_SALE",
-  "SELL_TREE",
-  "REFERRAL_BONUS",
-  "ROI",
-  "DIVIDEND",
-  "EARNING",
-];
-
-export default function InvestmentsPage() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+export default function InventoryPage() {
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [treeCount, setTreeCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
-  async function loadInvestments() {
+  async function loadInventory() {
     setLoading(true);
     setMessage("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
       window.location.href = "/login";
@@ -70,556 +45,176 @@ export default function InvestmentsPage() {
 
     const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .eq("id", user.id)
-      .maybeSingle();
+    const { data: profileById } = await supabase.from("profiles").select("id, email").eq("id", user.id).maybeSingle();
+    const { data: profileByEmail } = await supabase.from("profiles").select("id, email").eq("email", email).maybeSingle();
 
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .eq("email", email)
-      .maybeSingle();
+    const profile = profileById || profileByEmail;
 
-    const currentProfile = profileById || profileByEmail;
-
-    if (!currentProfile) {
+    if (!profile) {
       setMessage("Profile not found.");
       setLoading(false);
       return;
     }
 
-    setProfile(currentProfile);
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("id, profile_id, tree_id, item_name, category, unit, starting_qty, remaining_qty, low_stock_level, status, created_at")
+      .eq("profile_id", profile.id)
+      .order("created_at", { ascending: false });
 
-    const { data: walletRows } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const { data: treeData, error: treeError } = await supabase
+    const { data: trees } = await supabase
       .from("trees")
-      .select("*")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
+      .select("id")
+      .eq("profile_id", profile.id);
 
-    const { data: txData, error: txError } = await supabase
-      .from("wallet_transactions")
-      .select("id, transaction_type, amount, status, reference_no, description, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
+    if (error) {
+      setMessage("Inventory table not found yet. Run the inventory SQL table first.");
+      setItems([]);
+      setLoading(false);
+      return;
+    }
 
-    if (treeError) setMessage(treeError.message);
-    if (txError) setMessage(txError.message);
-
-    setWallet(walletRows?.[0] || null);
-    setTrees(treeData || []);
-    setTransactions(txData || []);
+    setTreeCount((trees || []).length);
+    setItems(data || []);
     setLoading(false);
   }
 
   useEffect(() => {
-    loadInvestments();
+    loadInventory();
   }, []);
 
+  function weeklyRequired(category: string | null) {
+    return (weeklyNeeds[category || ""] || 0) * Math.max(treeCount, 1);
+  }
+
+  function getWeeksRemaining(item: InventoryItem) {
+    const remaining = Number(item.remaining_qty || 0);
+    const need = weeklyRequired(item.category);
+    if (need <= 0) return 999;
+    return remaining / need;
+  }
+
   const stats = useMemo(() => {
-    const completed = transactions.filter(
-      (item) => (item.status || "").toUpperCase() === "COMPLETED"
-    );
+    const totalItems = items.length;
+    const lowStock = items.filter((item) => {
+      const remaining = Number(item.remaining_qty || 0);
+      const low = Number(item.low_stock_level || 0);
+      return low > 0 && remaining <= low;
+    }).length;
 
-    const totalInvested = completed
-      .filter((item) =>
-        INVESTMENT_EXPENSE_TYPES.includes((item.transaction_type || "").toUpperCase())
-      )
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const notEnoughForWeek = items.filter((item) => getWeeksRemaining(item) < 1).length;
+    const enoughForMonth = items.filter((item) => getWeeksRemaining(item) >= 4).length;
 
-    const totalReturns = completed
-      .filter((item) =>
-        INVESTMENT_EARNING_TYPES.includes((item.transaction_type || "").toUpperCase())
-      )
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const marketplaceSpend = completed
-      .filter((item) => (item.transaction_type || "").toUpperCase() === "MARKETPLACE_PURCHASE")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const treeSales = completed
-      .filter((item) =>
-        ["TREE_SALE", "SELL_TREE"].includes((item.transaction_type || "").toUpperCase())
-      )
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const netGain = totalReturns - totalInvested;
-
-    return {
-      ownedTrees: trees.length,
-      walletBalance: Number(wallet?.balance || 0),
-      totalInvested,
-      totalReturns,
-      marketplaceSpend,
-      treeSales,
-      netGain,
-    };
-  }, [trees, wallet, transactions]);
+    return { totalItems, lowStock, notEnoughForWeek, enoughForMonth };
+  }, [items, treeCount]);
 
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Portfolio</p>
-          <h1>Investments</h1>
-          <span>
-            Monitor your real wallet balance, owned trees, total invested amount,
-            returns, and investment ledger from Supabase.
-          </span>
-        </div>
-
-        <div className="heroActions">
-          <button onClick={loadInvestments}>Refresh</button>
-          <Link href="/dashboard/marketplace">Buy More Trees</Link>
-          <Link href="/dashboard/wallet" className="primary">
-            Wallet
-          </Link>
+          <p className="eyebrow">Agarwood Inventory Intelligence</p>
+          <h1>Inventory</h1>
+          <span>Track supplies, low stock, and care readiness for your owned trees.</span>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       {loading ? (
-        <div className="empty">Loading investment data...</div>
+        <div className="empty">Loading inventory...</div>
       ) : (
         <>
-          <section className="cards">
-            <Card icon="💳" label="Wallet Balance" value={peso(stats.walletBalance)} note="Latest wallet row" gold />
-            <Card icon="🌳" label="Owned Trees" value={String(stats.ownedTrees)} note="Real trees table" />
-            <Card icon="📥" label="Total Invested" value={peso(stats.totalInvested)} note="Purchases and investment costs" />
-            <Card icon="📈" label="Total Returns" value={peso(stats.totalReturns)} note="Sales, ROI, referral, dividends" gold />
+          <section className="stats">
+            <Card label="Total Items" value={String(stats.totalItems)} />
+            <Card label="Low Stock" value={String(stats.lowStock)} />
+            <Card label="Not Enough 1 Week" value={String(stats.notEnoughForWeek)} danger={stats.notEnoughForWeek > 0} />
+            <Card label="Enough 1 Month" value={String(stats.enoughForMonth)} />
           </section>
 
-          <section className="cards">
-            <Card icon="🛒" label="Marketplace Spend" value={peso(stats.marketplaceSpend)} note="Completed marketplace purchases" />
-            <Card icon="🌿" label="Tree Sale Returns" value={peso(stats.treeSales)} note="Completed tree sale payouts" />
-            <Card
-              icon={stats.netGain >= 0 ? "✅" : "⚠️"}
-              label="Net Position"
-              value={peso(stats.netGain)}
-              note="Returns minus invested amount"
-              gold={stats.netGain >= 0}
-            />
-            <Card
-              icon="🎖️"
-              label="Membership"
-              value={profile?.membership_status || "UNKNOWN"}
-              note={`KYC: ${profile?.kyc_status || "UNKNOWN"}`}
-            />
-          </section>
-
-          <section className="grid">
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Owned Tree Portfolio</h2>
-                  <p>Real owned trees from the trees table.</p>
-                </div>
-                <Link href="/dashboard/my-trees">View My Trees ›</Link>
+          <section className="panel">
+            <div className="panelHead">
+              <div>
+                <h2>Supply Readiness</h2>
+                <p>Based on {treeCount} owned tree{treeCount === 1 ? "" : "s"} and weekly care requirements.</p>
               </div>
+              <button onClick={loadInventory}>Refresh</button>
+            </div>
 
-              {trees.length === 0 ? (
-                <div className="empty small">
-                  No owned trees yet. Buy trees from Marketplace to start your portfolio.
-                </div>
-              ) : (
-                <div className="treeList">
-                  {trees.slice(0, 10).map((tree) => (
-                    <div className="treeRow" key={tree.id}>
+            {items.length === 0 ? (
+              <div className="empty small">No inventory records yet. Buy supplies from Marketplace.</div>
+            ) : (
+              <div className="list">
+                {items.map((item) => {
+                  const remaining = Number(item.remaining_qty || 0);
+                  const low = Number(item.low_stock_level || 0);
+                  const isLow = low > 0 && remaining <= low;
+                  const weeks = getWeeksRemaining(item);
+                  const weekNeed = weeklyRequired(item.category);
+                  const status = weeks < 1 ? "Not enough for 1 week" : weeks < 4 ? "Enough for week only" : "Enough for 1 month+";
+
+                  return (
+                    <div className={`row ${isLow || weeks < 1 ? "low" : ""}`} key={item.id}>
                       <div>
-                        <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                        <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
+                        <strong>{item.item_name || "Inventory Item"}</strong>
+                        <p>{item.category || "Uncategorized"} • {item.status || "AVAILABLE"}</p>
+                        <small>Weekly need estimate: {weekNeed.toLocaleString("en-PH")} {item.unit || "unit"} for your trees</small>
                       </div>
-                      <div>
-                        <span>{tree.stage || tree.growth_stage || "Stage Pending"}</span>
-                        <b>{peso(Number(tree.current_value || tree.tree_value || tree.purchase_price || 0))}</b>
+
+                      <div className="qty">
+                        <b>{remaining.toLocaleString("en-PH")} {item.unit || "unit"}</b>
+                        <span>{status}</span>
+                        {isLow && <em>Low Supply</em>}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Investment Ledger</h2>
-                  <p>Completed investment-related wallet transactions.</p>
-                </div>
-                <Link href="/dashboard/transactions">View All ›</Link>
+                  );
+                })}
               </div>
-
-              {transactions.length === 0 ? (
-                <div className="empty small">No wallet transactions yet.</div>
-              ) : (
-                <div className="ledgerList">
-                  {transactions.slice(0, 12).map((item) => {
-                    const type = (item.transaction_type || "").toUpperCase();
-                    const isReturn = INVESTMENT_EARNING_TYPES.includes(type);
-                    const isExpense = INVESTMENT_EXPENSE_TYPES.includes(type);
-
-                    return (
-                      <div className="ledgerRow" key={item.id}>
-                        <div>
-                          <strong>{cleanType(item.transaction_type)}</strong>
-                          <p>{item.description || item.reference_no || "Wallet transaction"}</p>
-                          <small>{formatDate(item.created_at)}</small>
-                        </div>
-                        <div className="right">
-                          <span className={isReturn ? "return" : isExpense ? "expense" : "neutral"}>
-                            {isReturn ? "Return" : isExpense ? "Investment" : "Other"}
-                          </span>
-                          <b>{peso(Number(item.amount || 0))}</b>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            )}
           </section>
         </>
       )}
 
       <style>{`
         * { box-sizing: border-box; }
-
-        .page {
-          min-height: 100vh;
-          padding: 30px;
-          color: #18261d;
-          font-family: Arial, Helvetica, sans-serif;
-          background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
-        }
-
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 20px;
-          margin-bottom: 22px;
-        }
-
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 44px;
-          color: #101a14;
-          letter-spacing: -1.6px;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          max-width: 760px;
-          line-height: 1.6;
-        }
-
-        .heroActions {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-
-        .heroActions a,
-        .heroActions button {
-          border: 0;
-          border-radius: 14px;
-          padding: 13px 18px;
-          background: rgba(255,253,246,.88);
-          color: #244536;
-          text-decoration: none;
-          font-weight: 900;
-          cursor: pointer;
-          box-shadow: 0 14px 30px rgba(82,60,27,.08);
-        }
-
-        .heroActions .primary {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .message,
-        .empty,
-        .card,
-        .panel {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .message,
-        .empty {
-          padding: 20px;
-          margin-bottom: 18px;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
-        }
-
-        .cards {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .card {
-          min-height: 145px;
-          padding: 20px;
-          display: flex;
-          align-items: center;
-          gap: 18px;
-        }
-
-        .cardIcon {
-          width: 66px;
-          height: 66px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-          font-size: 28px;
-        }
-
-        .cardIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
-        }
-
-        .card p {
-          margin: 0 0 8px;
-          color: #5f665e;
-          font-size: 13px;
-          font-weight: 900;
-        }
-
-        .card h3 {
-          margin: 0 0 8px;
-          color: #101a14;
-          font-size: 27px;
-          letter-spacing: -1px;
-        }
-
-        .card small {
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 16px;
-        }
-
-        .panel {
-          padding: 24px;
-        }
-
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: start;
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-        }
-
-        .panelHead a {
-          color: #31553d;
-          font-weight: 900;
-          text-decoration: none;
-          white-space: nowrap;
-        }
-
-        .treeList,
-        .ledgerList {
-          display: grid;
-          gap: 12px;
-        }
-
-        .treeRow,
-        .ledgerRow {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 16px;
-          align-items: center;
-          border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-          padding: 16px;
-        }
-
-        .treeRow strong,
-        .ledgerRow strong {
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .treeRow p,
-        .ledgerRow p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .ledgerRow small {
-          display: block;
-          margin-top: 5px;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .treeRow div:last-child,
-        .right {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-        }
-
-        .treeRow span,
-        .right span {
-          border-radius: 999px;
-          padding: 8px 10px;
-          font-size: 11px;
-          font-weight: 900;
-          background: rgba(107,107,98,.12);
-          color: #6b6b62;
-        }
-
-        .right span.return {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .right span.expense {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        .treeRow b,
-        .right b {
-          color: #244536;
-        }
-
-        @media (max-width: 1200px) {
-          .cards {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .cards,
-          .treeRow,
-          .ledgerRow {
-            grid-template-columns: 1fr;
-          }
-
-          .treeRow div:last-child,
-          .right {
-            justify-items: start;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-        }
+        .page { min-height: 100vh; padding: 30px; color: #18261d; font-family: Arial, Helvetica, sans-serif; background: radial-gradient(circle at 18% 5%, rgba(255,226,154,.55), transparent 24%), radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%), linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%); }
+        .hero { margin-bottom: 22px; }
+        .eyebrow { margin: 0 0 8px; color: #8c6a3c; font-weight: 900; text-transform: uppercase; letter-spacing: .12em; font-size: 12px; }
+        h1 { margin: 0; font-size: 44px; color: #101a14; letter-spacing: -1.6px; }
+        .hero span { display: block; margin-top: 8px; color: #5f665e; max-width: 820px; line-height: 1.6; }
+        .message, .empty, .card, .panel { border-radius: 26px; background: rgba(255,253,246,.88); border: 1px solid rgba(92,70,35,.08); box-shadow: 0 18px 42px rgba(82,60,27,.09); }
+        .message, .empty { padding: 20px; margin-bottom: 18px; color: #31553d; font-weight: 900; }
+        .small { box-shadow: none; border-radius: 18px; background: #f3ead8; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }
+        .card { padding: 24px; }
+        .card p { margin: 0; color: #6b6b62; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .12em; }
+        .card h3 { margin: 10px 0 0; color: #244536; font-size: 32px; }
+        .card.danger h3 { color: #a33c2a; }
+        .panel { padding: 24px; }
+        .panelHead { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+        .panelHead h2 { margin: 0; color: #101a14; }
+        .panelHead p { margin: 6px 0 0; color: #6b6b62; }
+        .panelHead button { border: 0; border-radius: 999px; padding: 12px 18px; background: #244536; color: white; font-weight: 900; cursor: pointer; }
+        .list { display: grid; gap: 12px; }
+        .row { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; border-radius: 20px; background: #f3ead8; border: 1px solid rgba(92,70,35,.08); padding: 16px; }
+        .row strong { color: #101a14; font-size: 16px; }
+        .row p { margin: 6px 0 0; color: #6b6b62; font-size: 13px; font-weight: 800; }
+        .row small { display: block; margin-top: 6px; color: #8c6a3c; font-weight: 800; }
+        .qty { display: grid; justify-items: end; gap: 6px; }
+        .qty b { color: #244536; }
+        .qty span { border-radius: 999px; padding: 8px 10px; background: rgba(49,85,61,.12); color: #31553d; font-size: 11px; font-weight: 900; }
+        .qty em { color: #a33c2a; font-size: 12px; font-weight: 900; font-style: normal; }
+        .row.low .qty span { background: rgba(214,178,94,.20); color: #8c6a3c; }
+        @media (max-width: 760px) { .page { padding: 18px; } .stats, .row { grid-template-columns: 1fr; } .qty { justify-items: start; } }
       `}</style>
     </main>
   );
 }
 
-function Card({
-  icon,
-  label,
-  value,
-  note,
-  gold,
-}: {
-  icon: string;
-  label: string;
-  value: string;
-  note: string;
-  gold?: boolean;
-}) {
+function Card({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="card">
-      <div className={`cardIcon ${gold ? "gold" : ""}`}>{icon}</div>
-      <div>
-        <p>{label}</p>
-        <h3>{value}</h3>
-        <small>{note}</small>
-      </div>
+    <div className={`card ${danger ? "danger" : ""}`}>
+      <p>{label}</p>
+      <h3>{value}</h3>
     </div>
   );
-}
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function cleanType(value: string | null) {
-  if (!value) return "—";
-  return value.replaceAll("_", " ");
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }

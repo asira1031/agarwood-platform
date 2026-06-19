@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Profile = {
@@ -18,101 +18,37 @@ type Wallet = {
 };
 
 type Product = {
+  id: string;
+  product_key: string | null;
   name: string;
-  price: number;
-  note: string;
-  stock: string;
-  icon: string;
-  category: string;
-  unit: string;
-  low_stock_level: number;
+  price: number | null;
+  note: string | null;
+  stock_status: string | null;
+  icon: string | null;
+  category: string | null;
+  unit: string | null;
+  low_stock_level: number | null;
+  product_type: string | null;
+  status: string | null;
 };
 
-const products: Product[] = [
-  {
-    name: "Organic Fertilizer",
-    price: 350,
-    note: "Supports soil nutrition and steady agarwood growth.",
-    stock: "Available",
-    icon: "🌱",
-    category: "Fertilizer",
-    unit: "Bag",
-    low_stock_level: 5,
-  },
-  {
-    name: "Growth Booster",
-    price: 480,
-    note: "For stronger young tree development.",
-    stock: "Available",
-    icon: "🪴",
-    category: "Booster",
-    unit: "Bottle",
-    low_stock_level: 5,
-  },
-  {
-    name: "Insecticide",
-    price: 420,
-    note: "Helps protect trees from harmful insects.",
-    stock: "Available",
-    icon: "🛡️",
-    category: "Insecticide",
-    unit: "Bottle",
-    low_stock_level: 3,
-  },
-  {
-    name: "Fungicide",
-    price: 450,
-    note: "For fungal prevention and treatment support.",
-    stock: "Available",
-    icon: "🍃",
-    category: "Fungicide",
-    unit: "Bottle",
-    low_stock_level: 3,
-  },
-  {
-    name: "Soil Conditioner",
-    price: 390,
-    note: "Improves soil quality around planted trees.",
-    stock: "Available",
-    icon: "🌾",
-    category: "Soil Conditioner",
-    unit: "Bag",
-    low_stock_level: 5,
-  },
-  {
-    name: "Tree Nutrients",
-    price: 520,
-    note: "General nutrient support for agarwood care.",
-    stock: "Available",
-    icon: "💧",
-    category: "Nutrients",
-    unit: "Bottle",
-    low_stock_level: 5,
-  },
-  {
-    name: "Disease Prevention Kit",
-    price: 850,
-    note: "Preventive package for common tree issues.",
-    stock: "Limited",
-    icon: "🧪",
-    category: "Disease Prevention",
-    unit: "Kit",
-    low_stock_level: 2,
-  },
-];
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
+type InventoryItem = {
+  id: string;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  starting_qty: number | null;
+  remaining_qty: number | null;
+  status: string | null;
+};
 
 export default function MarketplacePage() {
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -140,30 +76,24 @@ export default function MarketplacePage() {
       }
 
       const email = user.email?.trim().toLowerCase() || "";
-      let activeProfile: Profile | null = null;
 
       const { data: profileById } = await supabase
         .from("profiles")
         .select("id, full_name, email")
         .eq("id", user.id)
-        .limit(1)
         .maybeSingle();
 
-      if (profileById) {
-        activeProfile = profileById as Profile;
-      } else if (email) {
-        const { data: profileByEmail } = await supabase
-          .from("profiles")
-          .select("id, full_name, email")
-          .eq("email", email)
-          .limit(1)
-          .maybeSingle();
+      const { data: profileByEmail } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("email", email)
+        .maybeSingle();
 
-        activeProfile = (profileByEmail as Profile) || null;
-      }
+      const activeProfile = profileById || profileByEmail;
 
       if (!activeProfile) {
         setErrorMessage("Profile not found. Please contact support.");
+        setLoading(false);
         return;
       }
 
@@ -178,30 +108,49 @@ export default function MarketplacePage() {
 
       if (walletError) throw walletError;
 
+      const { data: productData, error: productError } = await supabase
+        .from("marketplace_products")
+        .select(
+          "id, product_key, name, price, note, stock_status, icon, category, unit, low_stock_level, product_type, status"
+        )
+        .eq("status", "ACTIVE")
+        .order("created_at", { ascending: true });
+
+      if (productError) throw productError;
+
+      const { data: inventoryData, error: inventoryError } = await supabase
+        .from("inventory")
+        .select("id, item_name, category, unit, starting_qty, remaining_qty, status")
+        .eq("profile_id", activeProfile.id)
+        .is("tree_id", null)
+        .order("created_at", { ascending: false });
+
+      if (inventoryError) throw inventoryError;
+
       setWallet((walletRows?.[0] as Wallet) || null);
+      setProducts((productData || []) as Product[]);
+      setInventory((inventoryData || []) as InventoryItem[]);
     } catch (error: any) {
-      console.error("Marketplace load error:", error);
       setErrorMessage(error?.message || "Unable to load marketplace.");
     } finally {
       setLoading(false);
     }
   }
 
-  function getQty(productName: string) {
-    return quantities[productName] || 1;
+  function getQty(productId: string) {
+    return quantities[productId] || 1;
   }
 
-  function updateQty(productName: string, value: number) {
-    const safeValue = Math.max(1, Number(value || 1));
+  function updateQty(productId: string, value: number) {
     setQuantities((prev) => ({
       ...prev,
-      [productName]: safeValue,
+      [productId]: Math.max(1, Number(value || 1)),
     }));
   }
 
   async function buyProduct(product: Product) {
     try {
-      setBuying(product.name);
+      setBuying(product.id);
       setMessage("");
       setErrorMessage("");
 
@@ -215,16 +164,18 @@ export default function MarketplacePage() {
         return;
       }
 
-      const qty = getQty(product.name);
-      const total = product.price * qty;
+      const qty = getQty(product.id);
+      const unitPrice = Number(product.price || 0);
+      const total = unitPrice * qty;
       const currentBalance = Number(wallet.balance || 0);
 
+      if (unitPrice <= 0) {
+        setErrorMessage("Invalid product price.");
+        return;
+      }
+
       if (currentBalance < total) {
-        setErrorMessage(
-          `Insufficient wallet balance. Needed ${peso(total)}, available ${peso(
-            currentBalance
-          )}.`
-        );
+        setErrorMessage(`Insufficient wallet balance. Needed ${peso(total)}, available ${peso(currentBalance)}.`);
         return;
       }
 
@@ -237,224 +188,534 @@ export default function MarketplacePage() {
 
       if (walletUpdateError) throw walletUpdateError;
 
-      const { error: transactionError } = await supabase
-        .from("wallet_transactions")
-        .insert({
-          profile_id: profile.id,
-          transaction_type: "MARKETPLACE_PURCHASE",
-          amount: total,
-          status: "COMPLETED",
-          description: `Purchased ${qty} ${product.unit}(s) of ${product.name}`,
-        });
+      const { error: transactionError } = await supabase.from("wallet_transactions").insert({
+        profile_id: profile.id,
+        transaction_type: "MARKETPLACE_PURCHASE",
+        amount: total,
+        status: "COMPLETED",
+        reference_no: product.id,
+        description: `Purchased ${qty} ${product.unit || "Unit"}(s) of ${product.name}`,
+      });
 
-      if (transactionError) throw transactionError;
+      if (transactionError) {
+        await supabase.from("wallets").update({ balance: currentBalance }).eq("id", wallet.id);
+        throw transactionError;
+      }
 
       const { data: existingRows, error: inventoryFindError } = await supabase
         .from("inventory")
-        .select("*")
+        .select("id, starting_qty, remaining_qty")
         .eq("profile_id", profile.id)
         .eq("item_name", product.name)
-        .eq("category", product.category)
+        .eq("category", product.category || "Supply")
         .is("tree_id", null)
         .limit(1);
 
-      if (inventoryFindError) throw inventoryFindError;
+      if (inventoryFindError) {
+        await supabase.from("wallets").update({ balance: currentBalance }).eq("id", wallet.id);
+        throw inventoryFindError;
+      }
 
       const existingItem = existingRows?.[0];
 
       if (existingItem) {
-        const currentStarting = Number(existingItem.starting_qty || 0);
-        const currentRemaining = Number(existingItem.remaining_qty || 0);
-
         const { error: inventoryUpdateError } = await supabase
           .from("inventory")
           .update({
-            starting_qty: currentStarting + qty,
-            remaining_qty: currentRemaining + qty,
+            starting_qty: Number(existingItem.starting_qty || 0) + qty,
+            remaining_qty: Number(existingItem.remaining_qty || 0) + qty,
             status: "AVAILABLE",
+            updated_at: new Date().toISOString(),
           })
           .eq("id", existingItem.id);
 
-        if (inventoryUpdateError) throw inventoryUpdateError;
+        if (inventoryUpdateError) {
+          await supabase.from("wallets").update({ balance: currentBalance }).eq("id", wallet.id);
+          throw inventoryUpdateError;
+        }
       } else {
-        const { error: inventoryInsertError } = await supabase
-          .from("inventory")
-          .insert({
-            profile_id: profile.id,
-            tree_id: null,
-            item_name: product.name,
-            category: product.category,
-            unit: product.unit,
-            starting_qty: qty,
-            remaining_qty: qty,
-            low_stock_level: product.low_stock_level,
-            status: "AVAILABLE",
-          });
+        const { error: inventoryInsertError } = await supabase.from("inventory").insert({
+          profile_id: profile.id,
+          tree_id: null,
+          item_name: product.name,
+          category: product.category || "Supply",
+          unit: product.unit || "Unit",
+          starting_qty: qty,
+          remaining_qty: qty,
+          low_stock_level: Number(product.low_stock_level || 0),
+          status: "AVAILABLE",
+        });
 
-        if (inventoryInsertError) throw inventoryInsertError;
+        if (inventoryInsertError) {
+          await supabase.from("wallets").update({ balance: currentBalance }).eq("id", wallet.id);
+          throw inventoryInsertError;
+        }
       }
 
       setWallet((prev) => (prev ? { ...prev, balance: newBalance } : prev));
-      setMessage(
-        `${product.name} added to inventory. Wallet deducted ${peso(total)}.`
-      );
+      setQuantities((prev) => ({ ...prev, [product.id]: 1 }));
+      setMessage(`${product.name} added to inventory. Wallet deducted ${peso(total)}.`);
+
+      await loadMarketplace();
     } catch (error: any) {
-      console.error("Purchase error:", error);
       setErrorMessage(error?.message || "Purchase failed.");
     } finally {
       setBuying(null);
     }
   }
 
+  const totalInventoryItems = useMemo(() => {
+    return inventory.reduce((sum, item) => sum + Number(item.remaining_qty || 0), 0);
+  }, [inventory]);
+
   return (
-    <main className="min-h-screen bg-[#061b12] p-8 text-[#f8e7b5]">
-      <section className="rounded-[32px] border border-[#d6b76c]/30 bg-[radial-gradient(circle_at_top,#123f2b,#061b12_60%)] p-8 shadow-2xl">
-        <div className="mb-8 flex items-start justify-between gap-6">
-          <div>
-            <Link
-              href="/dashboard"
-              className="mb-5 inline-block text-sm font-semibold text-[#d6b76c] hover:text-white"
-            >
-              ← Back to Dashboard
-            </Link>
-
-            <h1 className="text-5xl font-bold text-[#f8e7b5]">
-              Marketplace
-            </h1>
-            <p className="mt-2 text-lg italic text-[#d6b76c]">
-              Premium Products for Healthy Agarwood Growth
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-[#d6b76c]/40 bg-[#0b2b1c]/90 px-8 py-6 shadow-xl">
-            <p className="text-xs font-bold tracking-widest text-[#d6b76c]">
-              WALLET BALANCE
-            </p>
-            <h2 className="mt-2 text-3xl font-bold text-[#f8e7b5]">
-              {loading ? "Loading..." : peso(Number(wallet?.balance || 0))}
-            </h2>
-          </div>
+    <main className="page">
+      <section className="hero">
+        <div>
+          <Link href="/dashboard" className="back">← Back to Dashboard</Link>
+          <p className="eyebrow">Agarwood Marketplace</p>
+          <h1>Supply Store</h1>
+          <span>
+            Buy real care supplies for your agarwood operation. Purchases deduct your wallet,
+            create wallet ledger records, and add stock to your inventory.
+          </span>
         </div>
 
-        {message && (
-          <div className="mb-6 rounded-2xl border border-green-400/40 bg-green-900/30 px-5 py-4 text-sm font-bold text-green-200">
-            {message}
-          </div>
-        )}
+        <div className="walletCard">
+          <p>Wallet Balance</p>
+          <strong>{loading ? "Loading..." : peso(Number(wallet?.balance || 0))}</strong>
+          <small>Inventory Items: {totalInventoryItems}</small>
+        </div>
+      </section>
 
-        {errorMessage && (
-          <div className="mb-6 rounded-2xl border border-red-400/40 bg-red-900/30 px-5 py-4 text-sm font-bold text-red-200">
-            {errorMessage}
-          </div>
-        )}
+      {message && <div className="message">{message}</div>}
+      {errorMessage && <div className="error">{errorMessage}</div>}
 
-        <div className="mb-10 rounded-3xl border border-[#d6b76c]/30 bg-[#0b2b1c]/80 p-6">
-          <div className="flex items-center gap-5">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full border border-[#d6b76c] text-4xl">
-              🛒
-            </div>
-
+      {loading ? (
+        <div className="empty">Loading marketplace...</div>
+      ) : (
+        <>
+          <section className="infoPanel">
+            <div className="infoIcon">🛒</div>
             <div>
-              <h2 className="text-xl font-bold text-[#f8e7b5]">
-                Marketplace purchase adds stock to Inventory.
-              </h2>
-              <p className="mt-2 max-w-3xl text-sm text-[#cabf9a]">
-                Buying supplies deducts your wallet, creates a wallet transaction,
-                then inserts or updates your inventory remaining quantity.
+              <h2>Marketplace purchase adds stock to Inventory.</h2>
+              <p>
+                Caretaker/gardener usage will later deduct from this inventory when they
+                apply fertilizer, fungicide, insecticide, nutrients, or other care supplies.
               </p>
             </div>
-          </div>
-        </div>
+          </section>
 
-        <h2 className="mb-6 text-2xl font-bold text-[#d6b76c]">
-          Available Products
-        </h2>
+          <section className="stats">
+            <Stat label="Products" value={String(products.length)} />
+            <Stat label="Inventory Qty" value={String(totalInventoryItems)} />
+            <Stat label="Wallet" value={peso(Number(wallet?.balance || 0))} />
+          </section>
 
-        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {products.map((item) => {
-            const qty = getQty(item.name);
-            const total = item.price * qty;
-            const isBuying = buying === item.name;
+          <section className="grid">
+            {products.length === 0 ? (
+              <div className="empty">No marketplace products found. Add rows in marketplace_products.</div>
+            ) : (
+              products.map((item) => {
+                const qty = getQty(item.id);
+                const price = Number(item.price || 0);
+                const total = price * qty;
+                const isBuying = buying === item.id;
 
-            return (
-              <div
-                key={item.name}
-                className="group overflow-hidden rounded-3xl border border-[#d6b76c]/30 bg-[#082417]/90 p-5 shadow-xl transition hover:-translate-y-1 hover:border-[#f4d47d]"
-              >
-                <div className="mb-5 flex h-40 items-center justify-center rounded-2xl bg-gradient-to-br from-[#143d28] to-[#03150d] text-7xl shadow-inner">
-                  {item.icon}
-                </div>
+                return (
+                  <div key={item.id} className="card">
+                    <div className="iconBox">{item.icon || "🌿"}</div>
 
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <h3 className="text-2xl font-bold text-[#f8e7b5]">
-                    {item.name}
-                  </h3>
-
-                  <span className="rounded-full bg-[#1b5133] px-3 py-1 text-xs font-bold text-[#d6b76c]">
-                    {item.stock}
-                  </span>
-                </div>
-
-                <p className="min-h-[48px] text-sm text-[#cabf9a]">
-                  {item.note}
-                </p>
-
-                <div className="mt-5 rounded-2xl border border-[#d6b76c]/20 bg-[#061b12]/70 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-widest text-[#d6b76c]">
-                        Unit Price
-                      </p>
-                      <p className="mt-1 text-2xl font-bold text-[#f4d47d]">
-                        {peso(item.price)}
-                      </p>
+                    <div className="cardTop">
+                      <div>
+                        <h3>{item.name}</h3>
+                        <p>{item.note || "No description added."}</p>
+                      </div>
+                      <span>{item.stock_status || "AVAILABLE"}</span>
                     </div>
 
-                    <div className="text-right">
-                      <p className="text-xs font-bold uppercase tracking-widest text-[#d6b76c]">
-                        Unit
-                      </p>
-                      <p className="mt-1 font-bold text-[#f8e7b5]">
-                        {item.unit}
-                      </p>
+                    <div className="priceBox">
+                      <div>
+                        <small>Unit Price</small>
+                        <strong>{peso(price)}</strong>
+                      </div>
+                      <div>
+                        <small>Unit</small>
+                        <strong>{item.unit || "Unit"}</strong>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="mt-4 flex items-center justify-between gap-4">
-                    <label className="text-sm font-bold text-[#cabf9a]">
-                      Quantity
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={qty}
-                      onChange={(e) => updateQty(item.name, Number(e.target.value))}
-                      className="w-24 rounded-xl border border-[#d6b76c]/30 bg-[#0b2b1c] px-3 py-2 text-center font-bold text-[#f8e7b5] outline-none"
-                    />
-                  </div>
+                    <div className="qtyRow">
+                      <label>Quantity</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={qty}
+                        onChange={(e) => updateQty(item.id, Number(e.target.value))}
+                      />
+                    </div>
 
-                  <div className="mt-4 flex items-center justify-between border-t border-[#d6b76c]/20 pt-4">
-                    <span className="text-sm font-bold text-[#cabf9a]">
-                      Total
-                    </span>
-                    <strong className="text-xl text-[#f4d47d]">
-                      {peso(total)}
-                    </strong>
-                  </div>
-                </div>
+                    <div className="totalRow">
+                      <span>Total</span>
+                      <strong>{peso(total)}</strong>
+                    </div>
 
-                <button
-                  onClick={() => buyProduct(item)}
-                  disabled={loading || isBuying}
-                  className="mt-5 w-full rounded-xl bg-gradient-to-r from-[#315f33] to-[#1f7a43] px-4 py-3 text-sm font-bold text-[#f8e7b5] shadow-lg transition hover:from-[#3f7a42] hover:to-[#24a85b] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isBuying ? "Processing..." : "🛒 Add to Inventory"}
-                </button>
-              </div>
-            );
-          })}
-        </section>
-      </section>
+                    <button onClick={() => buyProduct(item)} disabled={isBuying}>
+                      {isBuying ? "Processing..." : "Add to Inventory"}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </section>
+        </>
+      )}
+
+      <style>{`
+        * { box-sizing: border-box; }
+
+        .page {
+          min-height: 100vh;
+          padding: 30px;
+          color: #18261d;
+          font-family: Arial, Helvetica, sans-serif;
+          background:
+            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
+            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
+            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+        }
+
+        .hero {
+          display: flex;
+          justify-content: space-between;
+          align-items: stretch;
+          gap: 18px;
+          margin-bottom: 22px;
+        }
+
+        .back {
+          display: inline-block;
+          margin-bottom: 12px;
+          color: #8c6a3c;
+          font-weight: 900;
+          text-decoration: none;
+        }
+
+        .eyebrow {
+          margin: 0 0 8px;
+          color: #8c6a3c;
+          font-weight: 900;
+          letter-spacing: .5px;
+          text-transform: uppercase;
+          font-size: 12px;
+        }
+
+        .hero h1 {
+          margin: 0;
+          font-size: 44px;
+          letter-spacing: -1.6px;
+          color: #101a14;
+        }
+
+        .hero span {
+          display: block;
+          margin-top: 8px;
+          color: #5f665e;
+          font-size: 15px;
+          max-width: 850px;
+          line-height: 1.6;
+        }
+
+        .walletCard {
+          min-width: 290px;
+          border-radius: 28px;
+          padding: 22px;
+          color: white;
+          background:
+            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
+            linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 24px 56px rgba(36,69,54,.24);
+        }
+
+        .walletCard p {
+          margin: 0;
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .14em;
+          font-size: 12px;
+        }
+
+        .walletCard strong {
+          display: block;
+          margin-top: 10px;
+          font-size: 30px;
+        }
+
+        .walletCard small {
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
+        }
+
+        .message,
+        .error,
+        .empty,
+        .infoPanel,
+        .stat,
+        .card {
+          border-radius: 26px;
+          background: rgba(255,253,246,.88);
+          border: 1px solid rgba(92,70,35,.08);
+          box-shadow: 0 18px 42px rgba(82,60,27,.09);
+        }
+
+        .message,
+        .error,
+        .empty {
+          padding: 20px;
+          margin-bottom: 18px;
+          font-weight: 900;
+        }
+
+        .message { color: #31553d; }
+        .error { color: #a33c2a; }
+
+        .infoPanel {
+          display: flex;
+          gap: 18px;
+          align-items: center;
+          padding: 22px;
+          margin-bottom: 18px;
+        }
+
+        .infoIcon {
+          width: 76px;
+          height: 76px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          font-size: 34px;
+          background: #f3ead8;
+        }
+
+        .infoPanel h2 {
+          margin: 0;
+          color: #101a14;
+        }
+
+        .infoPanel p {
+          margin: 8px 0 0;
+          color: #6b6b62;
+          line-height: 1.6;
+          font-weight: 800;
+        }
+
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .stat {
+          padding: 22px;
+        }
+
+        .stat p {
+          margin: 0;
+          color: #6b6b62;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        .stat h3 {
+          margin: 10px 0 0;
+          color: #244536;
+          font-size: 28px;
+        }
+
+        .grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 18px;
+        }
+
+        .card {
+          padding: 20px;
+        }
+
+        .iconBox {
+          height: 150px;
+          border-radius: 22px;
+          display: grid;
+          place-items: center;
+          font-size: 68px;
+          background: linear-gradient(135deg, #244536, #10281f);
+          margin-bottom: 16px;
+        }
+
+        .cardTop {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: start;
+        }
+
+        .card h3 {
+          margin: 0;
+          font-size: 22px;
+          color: #101a14;
+        }
+
+        .card p {
+          margin: 8px 0 0;
+          color: #6b6b62;
+          line-height: 1.5;
+          font-weight: 800;
+          min-height: 45px;
+        }
+
+        .cardTop span {
+          border-radius: 999px;
+          padding: 8px 10px;
+          color: #8c6a3c;
+          background: rgba(214,178,94,.20);
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .priceBox {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        .priceBox div,
+        .qtyRow,
+        .totalRow {
+          border-radius: 18px;
+          padding: 14px;
+          background: #f3ead8;
+          border: 1px solid rgba(92,70,35,.08);
+        }
+
+        small,
+        label,
+        .totalRow span {
+          display: block;
+          color: #6b6b62;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .1em;
+        }
+
+        .priceBox strong,
+        .totalRow strong {
+          display: block;
+          margin-top: 7px;
+          color: #101a14;
+          font-size: 18px;
+        }
+
+        .qtyRow {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          margin-top: 12px;
+        }
+
+        input {
+          width: 92px;
+          border: 1px solid rgba(92,70,35,.14);
+          border-radius: 12px;
+          padding: 10px;
+          text-align: center;
+          background: rgba(255,253,246,.94);
+          color: #101a14;
+          outline: none;
+          font-weight: 900;
+        }
+
+        .totalRow {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 12px;
+        }
+
+        button {
+          width: 100%;
+          margin-top: 14px;
+          border: 0;
+          border-radius: 16px;
+          padding: 14px;
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        button:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+        }
+
+        @media (max-width: 1100px) {
+          .hero {
+            flex-direction: column;
+          }
+
+          .walletCard {
+            min-width: 100%;
+          }
+
+          .grid,
+          .stats {
+            grid-template-columns: 1fr 1fr;
+          }
+        }
+
+        @media (max-width: 760px) {
+          .page {
+            padding: 18px;
+          }
+
+          .hero h1 {
+            font-size: 34px;
+          }
+
+          .grid,
+          .stats {
+            grid-template-columns: 1fr;
+          }
+
+          .infoPanel {
+            flex-direction: column;
+            align-items: start;
+          }
+        }
+      `}</style>
     </main>
   );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="stat">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </div>
+  );
+}
+
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }

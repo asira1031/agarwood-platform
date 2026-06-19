@@ -5,12 +5,55 @@ import { supabase } from "@/lib/supabase";
 
 type TreeRow = Record<string, any>;
 type SellRequest = Record<string, any>;
+type InventoryItem = Record<string, any>;
+
+type CarePlanKey = "WEEKLY" | "MONTHLY";
 
 const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
 
+const CARE_PLANS: Record<
+  CarePlanKey,
+  {
+    label: string;
+    duration: string;
+    careCost: number;
+    multiplier: number;
+    needs: Record<string, number>;
+  }
+> = {
+  WEEKLY: {
+    label: "Weekly Care",
+    duration: "1_WEEK",
+    careCost: 500,
+    multiplier: 1,
+    needs: {
+      Fertilizer: 1,
+      Fungicide: 0.5,
+      Insecticide: 0.25,
+      Nutrients: 0.5,
+      "Soil Conditioner": 0.5,
+    },
+  },
+  MONTHLY: {
+    label: "Monthly Care",
+    duration: "1_MONTH",
+    careCost: 1800,
+    multiplier: 4,
+    needs: {
+      Fertilizer: 1,
+      Fungicide: 0.5,
+      Insecticide: 0.25,
+      Nutrients: 0.5,
+      "Soil Conditioner": 0.5,
+    },
+  },
+};
+
 export default function MyTreesPage() {
+  const [profileId, setProfileId] = useState("");
   const [trees, setTrees] = useState<TreeRow[]>([]);
   const [sellRequests, setSellRequests] = useState<SellRequest[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTree, setSelectedTree] = useState<TreeRow | null>(null);
   const [message, setMessage] = useState("");
@@ -23,6 +66,8 @@ export default function MyTreesPage() {
   const [renameValue, setRenameValue] = useState("");
 
   const [qrOpen, setQrOpen] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<CarePlanKey>("WEEKLY");
+  const [subscribing, setSubscribing] = useState(false);
 
   async function loadTrees() {
     setLoading(true);
@@ -59,6 +104,8 @@ export default function MyTreesPage() {
       return;
     }
 
+    setProfileId(profile.id);
+
     const { data: treeData, error: treeError } = await supabase
       .from("trees")
       .select("*")
@@ -77,14 +124,21 @@ export default function MyTreesPage() {
       .eq("profile_id", profile.id)
       .order("created_at", { ascending: false });
 
+    const { data: inventoryData } = await supabase
+      .from("inventory")
+      .select("*")
+      .eq("profile_id", profile.id)
+      .order("created_at", { ascending: false });
+
     const rows = treeData || [];
 
     setTrees(rows);
     setSellRequests(sellData || []);
+    setInventory(inventoryData || []);
 
-    setSelectedTree((current) => {
+    setSelectedTree((current: TreeRow | null) => {
       if (current) {
-        const refreshed = rows.find((tree) => tree.id === current.id);
+        const refreshed = rows.find((tree: TreeRow) => tree.id === current.id);
         if (refreshed) return refreshed;
       }
 
@@ -99,7 +153,7 @@ export default function MyTreesPage() {
   }, []);
 
   const stats = useMemo(() => {
-    const owned = trees.length;
+    const owned = trees.filter((tree) => !isSold(tree)).length;
     const totalSpent = trees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
     const estimatedValue = trees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
     const profit = estimatedValue - totalSpent;
@@ -111,10 +165,16 @@ export default function MyTreesPage() {
     const q = search.trim().toLowerCase();
 
     return trees.filter((tree) => {
-      const stage = String(tree.stage || tree.growth_stage || "").toLowerCase();
+      const stage = String(
+        tree.stage || tree.growth_stage || tree.current_stage || ""
+      ).toLowerCase();
       const code = String(tree.tree_code || tree.code || tree.id || "").toLowerCase();
-      const name = String(tree.custom_name || tree.name || "").toLowerCase();
-      const group = String(tree.tree_group_name || "Ungrouped").toLowerCase();
+      const name = String(
+        tree.custom_name || tree.display_name || tree.name || ""
+      ).toLowerCase();
+      const group = String(
+        tree.tree_group_name || tree.package_name || "Ungrouped"
+      ).toLowerCase();
 
       const matchesSearch =
         !q || code.includes(q) || name.includes(q) || group.includes(q) || stage.includes(q);
@@ -132,7 +192,7 @@ export default function MyTreesPage() {
     const map: Record<string, TreeRow[]> = {};
 
     filteredTrees.forEach((tree) => {
-      const groupName = tree.tree_group_name || "Ungrouped Trees";
+      const groupName = tree.tree_group_name || tree.package_name || "Ungrouped Trees";
       if (!map[groupName]) map[groupName] = [];
       map[groupName].push(tree);
     });
@@ -159,6 +219,12 @@ export default function MyTreesPage() {
   const selectedQrUrl = selectedTree
     ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
     : "";
+
+  const careCheck = useMemo(() => {
+    return getCareCheck(selectedPlan, inventory);
+  }, [selectedPlan, inventory]);
+
+  const canSubscribe = Boolean(selectedTree) && careCheck.every((item) => item.enough);
 
   async function saveRename() {
     setMessage("");
@@ -189,7 +255,12 @@ export default function MyTreesPage() {
 
   function openRename() {
     if (!selectedTree) return;
-    setRenameValue(selectedTree.custom_name || selectedTree.name || "Agarwood Tree");
+    setRenameValue(
+      selectedTree.custom_name ||
+        selectedTree.display_name ||
+        selectedTree.name ||
+        "Agarwood Tree"
+    );
     setRenameOpen(true);
   }
 
@@ -198,16 +269,125 @@ export default function MyTreesPage() {
     setQrOpen(true);
   }
 
+  async function subscribeCare() {
+    setMessage("");
+
+    if (!profileId) {
+      setMessage("Profile not found.");
+      return;
+    }
+
+    if (!selectedTree) {
+      setMessage("Select a tree first.");
+      return;
+    }
+
+    const check = getCareCheck(selectedPlan, inventory);
+    const missing = check.filter((item) => !item.enough);
+
+    if (missing.length > 0) {
+      setMessage(
+        `Care subscription blocked. Low supply: ${missing
+          .map((item) => `${item.category} need ${item.required} ${item.unit}, available ${item.available} ${item.unit}`)
+          .join("; ")}.`
+      );
+      return;
+    }
+
+    try {
+      setSubscribing(true);
+
+      const plan = CARE_PLANS[selectedPlan];
+
+      for (const item of check) {
+        const inventoryItem = item.inventoryItem;
+
+        if (!inventoryItem) continue;
+
+        const newRemaining = Number(inventoryItem.remaining_qty || 0) - item.required;
+
+        const { error: updateError } = await supabase
+          .from("inventory")
+          .update({
+            remaining_qty: newRemaining,
+            status: newRemaining <= 0 ? "OUT_OF_STOCK" : "AVAILABLE",
+          })
+          .eq("id", inventoryItem.id);
+
+        if (updateError) throw updateError;
+
+        const { error: logError } = await supabase.from("inventory_usage_logs").insert({
+          profile_id: profileId,
+          tree_id: selectedTree.id,
+          inventory_id: inventoryItem.id,
+          item_name: inventoryItem.item_name,
+          category: inventoryItem.category,
+          qty_used: item.required,
+          unit: inventoryItem.unit,
+          used_by: "CARE_SUBSCRIPTION",
+          reason: `${plan.label} for ${selectedTree.tree_code || selectedTree.id}`,
+        });
+
+        if (logError) {
+          console.warn("Inventory usage log skipped:", logError.message);
+        }
+      }
+
+      const { error: subscriptionError } = await supabase.from("care_subscriptions").insert({
+        profile_id: profileId,
+        tree_id: selectedTree.id,
+        plan_name: plan.label,
+        duration: plan.duration,
+        required_fertilizer: findRequired(check, "Fertilizer"),
+        required_fungicide: findRequired(check, "Fungicide"),
+        required_insecticide: findRequired(check, "Insecticide"),
+        required_nutrients: findRequired(check, "Nutrients"),
+        required_soil_conditioner: findRequired(check, "Soil Conditioner"),
+        total_supply_units: check.reduce((sum, item) => sum + item.required, 0),
+        status: "ACTIVE",
+      });
+
+      if (subscriptionError) {
+        console.warn("Care subscription log skipped:", subscriptionError.message);
+      }
+
+      const currentCareCost = getOperationCost(selectedTree);
+
+      const { error: treeUpdateError } = await supabase
+        .from("trees")
+        .update({
+          care_cost: currentCareCost + plan.careCost,
+          care_plan: plan.label,
+        })
+        .eq("id", selectedTree.id);
+
+      if (treeUpdateError) throw treeUpdateError;
+
+      setMessage(`${plan.label} activated. Supplies deducted from Inventory.`);
+      await loadTrees();
+    } catch (error: any) {
+      setMessage(error?.message || "Care subscription failed.");
+    } finally {
+      setSubscribing(false);
+    }
+  }
+
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Portfolio</p>
+          <p className="eyebrow">Agarwood Portfolio V3</p>
           <h1>My Trees</h1>
           <span>
-            Search, group, rename, verify QR identity, track spending, and review
-            profit/loss before selling your agarwood trees.
+            Search, group, rename, verify QR identity, track ROI, and subscribe
+            care only when Inventory supplies are enough.
           </span>
+        </div>
+
+        <div className="heroCard">
+          <p>Inventory Gate</p>
+          <strong>{careCheck.every((item) => item.enough) ? "READY" : "LOW"}</strong>
+          <small>For selected care plan</small>
         </div>
       </section>
 
@@ -234,8 +414,8 @@ export default function MyTreesPage() {
                 <label>Search Trees</label>
                 <input
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Tree code, name, group, stage..."
+                  onChange={(e: any) => setSearch(e.target.value)}
+                  placeholder="Tree code, name, group, package, stage..."
                 />
               </div>
 
@@ -283,8 +463,15 @@ export default function MyTreesPage() {
                         >
                           <div>
                             <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                            <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
-                            <small>{tree.tree_group_name || "Ungrouped Trees"}</small>
+                            <p>
+                              {tree.custom_name ||
+                                tree.display_name ||
+                                tree.name ||
+                                "Agarwood Tree"}
+                            </p>
+                            <small>
+                              {tree.tree_group_name || tree.package_name || "Ungrouped Trees"}
+                            </small>
                           </div>
                           <span className={math.profit >= 0 ? "gain" : "loss"}>
                             {peso(math.profit)}
@@ -307,7 +494,10 @@ export default function MyTreesPage() {
                       >
                         <div>
                           <strong>{group.name}</strong>
-                          <p>{group.trees.length} tree{group.trees.length === 1 ? "" : "s"}</p>
+                          <p>
+                            {group.trees.length} tree
+                            {group.trees.length === 1 ? "" : "s"}
+                          </p>
                           <small>Value: {peso(group.estimatedValue)}</small>
                         </div>
                         <span className={group.profit >= 0 ? "gain" : "loss"}>
@@ -325,9 +515,18 @@ export default function MyTreesPage() {
                 <div className="detailTop">
                   <div>
                     <p className="eyebrow">Tree Asset</p>
-                    <h2>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</h2>
+                    <h2>
+                      {selectedTree.custom_name ||
+                        selectedTree.display_name ||
+                        selectedTree.name ||
+                        "Agarwood Tree"}
+                    </h2>
                     <span>{selectedTree.tree_code || selectedTree.code || selectedTree.id}</span>
-                    <p className="groupName">{selectedTree.tree_group_name || "Ungrouped Trees"}</p>
+                    <p className="groupName">
+                      {selectedTree.tree_group_name ||
+                        selectedTree.package_name ||
+                        "Ungrouped Trees"}
+                    </p>
                   </div>
 
                   <div className="identityBox">
@@ -350,7 +549,11 @@ export default function MyTreesPage() {
 
                   <div className="stageLine">
                     {STAGES.map((stage, index) => {
-                      const current = normalizeStage(selectedTree.stage || selectedTree.growth_stage);
+                      const current = normalizeStage(
+                        selectedTree.stage ||
+                          selectedTree.growth_stage ||
+                          selectedTree.current_stage
+                      );
                       const foundIndex = STAGES.findIndex(
                         (item) => item.toLowerCase() === current.toLowerCase()
                       );
@@ -372,12 +575,88 @@ export default function MyTreesPage() {
                 </section>
 
                 <section className="cards">
-                  <Mini label="Stage" value={selectedTree.stage || selectedTree.growth_stage || "—"} />
+                  <Mini
+                    label="Stage"
+                    value={
+                      selectedTree.stage ||
+                      selectedTree.growth_stage ||
+                      selectedTree.current_stage ||
+                      "—"
+                    }
+                  />
                   <Mini label="Age" value={getAgeText(selectedTree)} />
-                  <Mini label="GPS Status" value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"} />
-                  <Mini label="Care Plan" value={selectedTree.care_plan || selectedTree.carePlan || "Not Enrolled"} />
-                  <Mini label="Valuation" value={selectedTree.valuation_status || "Awaiting Valuation"} />
-                  <Mini label="Availability" value={selectedTree.availability_status || "Owned"} />
+                  <Mini
+                    label="GPS Status"
+                    value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"}
+                  />
+                  <Mini
+                    label="Care Plan"
+                    value={selectedTree.care_plan || selectedTree.carePlan || "Not Enrolled"}
+                  />
+                  <Mini
+                    label="Valuation"
+                    value={selectedTree.valuation_status || "Awaiting Valuation"}
+                  />
+                  <Mini
+                    label="Availability"
+                    value={selectedTree.availability_status || "Owned"}
+                  />
+                </section>
+
+                <section className="careBox">
+                  <div className="panelHead">
+                    <div>
+                      <h3>Care Subscription Inventory Check</h3>
+                      <p>
+                        This checks Inventory first. If supplies are low, subscription is blocked.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="planSwitch">
+                    <button
+                      className={selectedPlan === "WEEKLY" ? "active" : ""}
+                      onClick={() => setSelectedPlan("WEEKLY")}
+                    >
+                      1 Week Care
+                    </button>
+                    <button
+                      className={selectedPlan === "MONTHLY" ? "active" : ""}
+                      onClick={() => setSelectedPlan("MONTHLY")}
+                    >
+                      1 Month Care
+                    </button>
+                  </div>
+
+                  <div className="supplyList">
+                    {careCheck.map((item) => (
+                      <div
+                        className={`supplyRow ${item.enough ? "ok" : "bad"}`}
+                        key={item.category}
+                      >
+                        <div>
+                          <strong>{item.category}</strong>
+                          <p>
+                            Need {item.required} {item.unit} • Available{" "}
+                            {item.available} {item.unit}
+                          </p>
+                        </div>
+                        <span>{item.enough ? "Enough" : "Low Supply"}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    className="subscribe"
+                    disabled={!canSubscribe || subscribing}
+                    onClick={subscribeCare}
+                  >
+                    {subscribing
+                      ? "Processing..."
+                      : canSubscribe
+                      ? `Subscribe ${CARE_PLANS[selectedPlan].label}`
+                      : "Buy missing supplies first"}
+                  </button>
                 </section>
 
                 <section className="moneyBox">
@@ -406,8 +685,8 @@ export default function MyTreesPage() {
 
                 <section className="actions">
                   <button onClick={() => setQrOpen(true)}>View QR</button>
-                  <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
-                    Request Care
+                  <button onClick={() => (window.location.href = "/dashboard/inventory")}>
+                    Check Inventory
                   </button>
                   <button onClick={() => (window.location.href = "/dashboard/sell-tree")} className="sell">
                     Sell Tree
@@ -422,16 +701,26 @@ export default function MyTreesPage() {
                     </div>
                   </div>
 
-                  {sellRequests.filter((item) => item.tree_id === selectedTree.id).length === 0 ? (
+                  {sellRequests.filter((item) => item.tree_id === selectedTree.id || item.tree_id === selectedTree.tree_code).length === 0 ? (
                     <div className="empty small">No sell request for this tree.</div>
                   ) : (
                     <div className="requestList">
                       {sellRequests
-                        .filter((item) => item.tree_id === selectedTree.id)
+                        .filter((item) => item.tree_id === selectedTree.id || item.tree_id === selectedTree.tree_code)
                         .map((item) => (
                           <div className="requestRow" key={item.id}>
                             <div>
-                              <strong>{peso(Number(item.expected_amount || item.selling_price || 0))}</strong>
+                              <strong>
+                                {peso(
+                                  Number(
+                                    item.expected_amount ||
+                                      item.selling_price ||
+                                      item.net_receive ||
+                                      item.tree_value ||
+                                      0
+                                  )
+                                )}
+                              </strong>
                               <p>{formatDate(item.created_at)}</p>
                             </div>
                             <span>{item.status || "PENDING"}</span>
@@ -455,7 +744,7 @@ export default function MyTreesPage() {
                 <label>New Tree Name</label>
                 <input
                   value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
+                  onChange={(e: any) => setRenameValue(e.target.value)}
                   placeholder="Example: Retirement Tree A"
                 />
 
@@ -485,7 +774,12 @@ export default function MyTreesPage() {
 
                   <div>
                     <strong>{selectedTree.tree_code || selectedTree.id}</strong>
-                    <p>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</p>
+                    <p>
+                      {selectedTree.custom_name ||
+                        selectedTree.display_name ||
+                        selectedTree.name ||
+                        "Agarwood Tree"}
+                    </p>
                     <small>{selectedQrUrl}</small>
                   </div>
                 </div>
@@ -520,7 +814,42 @@ export default function MyTreesPage() {
         }
 
         .hero {
+          display: flex;
+          justify-content: space-between;
+          align-items: stretch;
+          gap: 18px;
           margin-bottom: 22px;
+        }
+
+        .heroCard {
+          min-width: 260px;
+          border-radius: 28px;
+          padding: 22px;
+          color: white;
+          background:
+            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
+            linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 24px 56px rgba(36,69,54,.24);
+        }
+
+        .heroCard p {
+          margin: 0;
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .14em;
+          font-size: 12px;
+        }
+
+        .heroCard strong {
+          display: block;
+          margin-top: 10px;
+          font-size: 30px;
+        }
+
+        .heroCard small {
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
         }
 
         .eyebrow {
@@ -555,7 +884,8 @@ export default function MyTreesPage() {
         .detail,
         .growth,
         .moneyBox,
-        .history {
+        .history,
+        .careBox {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
@@ -651,7 +981,8 @@ export default function MyTreesPage() {
         }
 
         .viewSwitch button,
-        .stageFilters button {
+        .stageFilters button,
+        .planSwitch button {
           border: 1px solid rgba(92,70,35,.12);
           border-radius: 999px;
           padding: 11px 12px;
@@ -662,7 +993,8 @@ export default function MyTreesPage() {
         }
 
         .viewSwitch button.active,
-        .stageFilters button.active {
+        .stageFilters button.active,
+        .planSwitch button.active {
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
           border-color: transparent;
@@ -802,7 +1134,8 @@ export default function MyTreesPage() {
 
         .growth,
         .moneyBox,
-        .history {
+        .history,
+        .careBox {
           padding: 20px;
           margin-top: 18px;
         }
@@ -873,7 +1206,8 @@ export default function MyTreesPage() {
 
         .mini,
         .money,
-        .requestRow {
+        .requestRow,
+        .supplyRow {
           border-radius: 18px;
           background: #f3ead8;
           padding: 14px;
@@ -896,6 +1230,67 @@ export default function MyTreesPage() {
           margin-top: 7px;
           color: #101a14;
           font-size: 16px;
+        }
+
+        .planSwitch {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .supplyList {
+          display: grid;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .supplyRow {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
+        }
+
+        .supplyRow p {
+          margin: 6px 0 0;
+          color: #6b6b62;
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        .supplyRow span {
+          border-radius: 999px;
+          padding: 8px 12px;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .supplyRow.ok span {
+          background: rgba(49,85,61,.12);
+          color: #31553d;
+        }
+
+        .supplyRow.bad span {
+          background: rgba(163,60,42,.12);
+          color: #a33c2a;
+        }
+
+        .subscribe {
+          width: 100%;
+          margin-top: 16px;
+          border: 0;
+          border-radius: 18px;
+          padding: 15px;
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .subscribe:disabled {
+          opacity: .55;
+          cursor: not-allowed;
         }
 
         .moneyGrid {
@@ -1095,6 +1490,14 @@ export default function MyTreesPage() {
           .layout {
             grid-template-columns: 1fr;
           }
+
+          .hero {
+            display: grid;
+          }
+
+          .heroCard {
+            min-width: 0;
+          }
         }
 
         @media (max-width: 760px) {
@@ -1112,7 +1515,8 @@ export default function MyTreesPage() {
           .moneyGrid,
           .actions,
           .modalActions,
-          .qrPreview {
+          .qrPreview,
+          .planSwitch {
             grid-template-columns: 1fr;
           }
 
@@ -1126,6 +1530,10 @@ export default function MyTreesPage() {
 
           .fakeQr {
             width: 100%;
+          }
+
+          .supplyRow {
+            display: grid;
           }
         }
       `}</style>
@@ -1170,6 +1578,40 @@ function Money({
       <strong>{percent ? `${value.toFixed(2)}%` : peso(value)}</strong>
     </div>
   );
+}
+
+function getCareCheck(planKey: CarePlanKey, inventory: InventoryItem[]) {
+  const plan = CARE_PLANS[planKey];
+
+  return Object.entries(plan.needs).map(([category, weeklyQty]) => {
+    const required = Number(weeklyQty || 0) * plan.multiplier;
+    const inventoryItem = findInventoryByCategory(inventory, category);
+    const available = Number(inventoryItem?.remaining_qty || 0);
+
+    return {
+      category,
+      required,
+      available,
+      unit: inventoryItem?.unit || "unit",
+      enough: available >= required,
+      inventoryItem,
+    };
+  });
+}
+
+function findInventoryByCategory(inventory: InventoryItem[], category: string) {
+  const target = category.trim().toLowerCase();
+
+  return inventory.find((item) => {
+    const itemCategory = String(item.category || "").trim().toLowerCase();
+    const itemName = String(item.item_name || "").trim().toLowerCase();
+
+    return itemCategory === target || itemName.includes(target);
+  });
+}
+
+function findRequired(check: ReturnType<typeof getCareCheck>, category: string) {
+  return check.find((item) => item.category === category)?.required || 0;
 }
 
 function getTreeMath(tree: TreeRow) {
@@ -1222,6 +1664,13 @@ function getAgeText(tree: TreeRow) {
 
   if (years <= 0) return `${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
   return `${years} year${years === 1 ? "" : "s"} ${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
+}
+
+function isSold(tree: TreeRow) {
+  const ownership = String(tree.ownership_status || "").toUpperCase();
+  const availability = String(tree.availability_status || "").toUpperCase();
+
+  return ownership === "SOLD" || availability === "SOLD";
 }
 
 function peso(value: number) {
