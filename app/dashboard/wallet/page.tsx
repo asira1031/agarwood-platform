@@ -50,8 +50,33 @@ type WalletTransaction = {
   created_at: string | null;
 };
 
+type MembershipOrder = {
+  id: string;
+  amount: number | null;
+  status: string | null;
+  payment_status: string | null;
+  created_at: string | null;
+};
+
+type SellTreeRequest = {
+  id: string;
+  expected_amount: number | null;
+  selling_price: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type PendingItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  amount: number;
+  status: string;
+  date: string | null;
+};
+
 const PAYMENT_ACCOUNT_NAME = "JANICA MALDIVES";
-const AMOUNTS = [100, 200, 500, 1000, 2000, 5000, 10000];
+const AMOUNTS = [500, 1000, 5000, 10000, 50000];
 
 export default function WalletPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -59,22 +84,26 @@ export default function WalletPage() {
   const [cashIns, setCashIns] = useState<CashInRequest[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [membershipOrders, setMembershipOrders] = useState<MembershipOrder[]>([]);
+  const [sellTreeRequests, setSellTreeRequests] = useState<SellTreeRequest[]>([]);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState<"CASHIN" | "WITHDRAW">("CASHIN");
 
-  const [cashInAmount, setCashInAmount] = useState("100");
-  const [paymentMethod, setPaymentMethod] = useState("GCASH");
+  const [activeAction, setActiveAction] = useState<"NONE" | "CASHIN" | "WITHDRAW">("NONE");
+
+  const [cashInAmount, setCashInAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
   const [cashInReference, setCashInReference] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
 
-  const [withdrawAmount, setWithdrawAmount] = useState("100");
-  const [payoutMethod, setPayoutMethod] = useState("GCASH");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [payoutMethod, setPayoutMethod] = useState("");
   const [payoutName, setPayoutName] = useState("");
   const [payoutNumber, setPayoutNumber] = useState("");
   const [message, setMessage] = useState("");
 
   async function loadWallet() {
     setLoading(true);
+    setMessage("");
 
     const {
       data: { user },
@@ -103,6 +132,7 @@ export default function WalletPage() {
 
     if (!currentProfile) {
       setLoading(false);
+      setMessage("Profile not found.");
       return;
     }
 
@@ -136,10 +166,24 @@ export default function WalletPage() {
       .eq("profile_id", profileId)
       .order("created_at", { ascending: false });
 
+    const { data: orderData } = await supabase
+      .from("membership_orders")
+      .select("id, amount, status, payment_status, created_at")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    const { data: sellData } = await supabase
+      .from("sell_tree_requests")
+      .select("id, expected_amount, selling_price, status, created_at")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
     setWallet(walletData || null);
     setCashIns(cashInData || []);
     setWithdrawals(withdrawalData || []);
     setTransactions(transactionData || []);
+    setMembershipOrders(orderData || []);
+    setSellTreeRequests(sellData || []);
     setLoading(false);
   }
 
@@ -158,23 +202,67 @@ export default function WalletPage() {
 
   const stats = useMemo(() => {
     const totalCashIn = cashIns
-      .filter((item) => item.status === "APPROVED")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    const pendingCashIn = cashIns
-      .filter((item) => item.status === "PENDING")
+      .filter((item) => ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase()))
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const totalWithdrawn = withdrawals
-      .filter((item) => item.status === "COMPLETED")
+      .filter((item) => ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase()))
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-    const pendingWithdrawals = withdrawals
-      .filter((item) => item.status === "PENDING")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
-
-    return { totalCashIn, pendingCashIn, totalWithdrawn, pendingWithdrawals };
+    return { totalCashIn, totalWithdrawn };
   }, [cashIns, withdrawals]);
+
+  const pendingItems = useMemo<PendingItem[]>(() => {
+    const pendingStatuses = ["PENDING", "PROCESSING", "UNDER_REVIEW", "UNDER REVIEW"];
+
+    const cashInPending = cashIns
+      .filter((item) => pendingStatuses.includes((item.status || "PENDING").toUpperCase()))
+      .map((item) => ({
+        id: `cashin-${item.id}`,
+        title: "Cash-In Request",
+        subtitle: item.payment_method || "Payment verification",
+        amount: Number(item.amount || 0),
+        status: item.status || "PENDING",
+        date: item.created_at,
+      }));
+
+    const withdrawalPending = withdrawals
+      .filter((item) => pendingStatuses.includes((item.status || "PENDING").toUpperCase()))
+      .map((item) => ({
+        id: `withdraw-${item.id}`,
+        title: "Withdrawal Request",
+        subtitle: item.payout_method || "Payout approval",
+        amount: Number(item.amount || 0),
+        status: item.status || "PENDING",
+        date: item.created_at,
+      }));
+
+    const membershipPending = membershipOrders
+      .filter((item) => pendingStatuses.includes((item.status || "PENDING").toUpperCase()))
+      .map((item) => ({
+        id: `membership-${item.id}`,
+        title: "Membership Order",
+        subtitle: item.payment_status || "Admin approval",
+        amount: Number(item.amount || 0),
+        status: item.status || "PENDING",
+        date: item.created_at,
+      }));
+
+    const sellTreePending = sellTreeRequests
+      .filter((item) => pendingStatuses.includes((item.status || "PENDING").toUpperCase()))
+      .map((item) => ({
+        id: `sell-${item.id}`,
+        title: "Sell Tree Request",
+        subtitle: "Settlement review",
+        amount: Number(item.expected_amount || item.selling_price || 0),
+        status: item.status || "PENDING",
+        date: item.created_at,
+      }));
+
+    return [...cashInPending, ...withdrawalPending, ...membershipPending, ...sellTreePending].sort(
+      (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+    );
+  }, [cashIns, withdrawals, membershipOrders, sellTreeRequests]);
 
   async function submitCashIn() {
     setMessage("");
@@ -185,6 +273,10 @@ export default function WalletPage() {
 
     if (!amount || amount < 100) {
       return setMessage("Minimum cash-in amount is ₱100.");
+    }
+
+    if (!paymentMethod) {
+      return setMessage("Please select payment method.");
     }
 
     if (!cashInReference.trim()) {
@@ -203,9 +295,12 @@ export default function WalletPage() {
 
     if (error) return setMessage(error.message);
 
+    setCashInAmount("");
+    setPaymentMethod("");
     setCashInReference("");
     setReceiptUrl("");
-    setMessage("Payment received. Cash-in request is pending admin verification.");
+    setActiveAction("NONE");
+    setMessage("Cash-in request submitted. Waiting for admin verification.");
     await loadWallet();
   }
 
@@ -226,6 +321,10 @@ export default function WalletPage() {
       return setMessage("Insufficient wallet balance.");
     }
 
+    if (!payoutMethod) {
+      return setMessage("Please select payout method.");
+    }
+
     if (!payoutName.trim() || !payoutNumber.trim()) {
       return setMessage("Payout account name and number are required.");
     }
@@ -243,8 +342,11 @@ export default function WalletPage() {
 
     if (error) return setMessage(error.message);
 
+    setWithdrawAmount("");
+    setPayoutMethod("");
     setPayoutName("");
     setPayoutNumber("");
+    setActiveAction("NONE");
     setMessage("Withdrawal request submitted. Waiting for admin approval.");
     await loadWallet();
   }
@@ -256,14 +358,9 @@ export default function WalletPage() {
           <p className="eyebrow">Agarwood Financial Center</p>
           <h1>Wallet</h1>
           <span>
-            Cash in through GCash, Maya, or bank transfer, then submit your payment
-            reference for admin verification.
+            Manage your investor wallet, cash-in requests, withdrawals, completed
+            transactions, and pending approvals.
           </span>
-        </div>
-
-        <div className="heroBalance">
-          <p>Available Balance</p>
-          <strong>{peso(walletBalance)}</strong>
         </div>
       </section>
 
@@ -271,35 +368,57 @@ export default function WalletPage() {
         <div className="loadingBox">Loading wallet data...</div>
       ) : (
         <>
-          <section className="cards">
-            <SummaryCard icon="💰" label="Wallet Balance" value={peso(walletBalance)} note="Current balance" gold />
-            <SummaryCard icon="⬆️" label="Approved Cash-In" value={peso(stats.totalCashIn)} note="Approved by admin" />
-            <SummaryCard icon="⬇️" label="Total Withdrawn" value={peso(stats.totalWithdrawn)} note="Completed withdrawals" />
-            <SummaryCard icon="⏳" label="Pending Requests" value={peso(stats.pendingCashIn + stats.pendingWithdrawals)} note="Awaiting verification" gold />
-          </section>
-
           {message && <div className="messageBox">{message}</div>}
 
-          <section className="actionShell">
-            <div className="modeSwitch">
-              <button className={mode === "CASHIN" ? "active" : ""} onClick={() => setMode("CASHIN")}>
-                Cash In
-              </button>
-              <button className={mode === "WITHDRAW" ? "active" : ""} onClick={() => setMode("WITHDRAW")}>
-                Withdraw
-              </button>
+          <section className="topCards">
+            <div className="balanceCard">
+              <div>
+                <p>Available Balance</p>
+                <h2>{peso(walletBalance)}</h2>
+              </div>
+              <div className="balanceSeal">₱</div>
             </div>
 
-            {mode === "CASHIN" ? (
-              <div className="panel actionPanel">
-                <div className="panelHead">
-                  <div>
-                    <h2>Cash-In Request</h2>
-                    <p>Select amount, pay using QR, then submit your reference number.</p>
-                  </div>
-                  <span className="badge">Payment Received → Pending Verification</span>
-                </div>
+            <MetricCard label="Total Cash-In" value={peso(stats.totalCashIn)} note="Approved cash-ins" />
+            <MetricCard label="Total Withdrawn" value={peso(stats.totalWithdrawn)} note="Completed withdrawals" />
+          </section>
 
+          <section className="actionCards">
+            <button
+              className={`actionCard ${activeAction === "CASHIN" ? "selected" : ""}`}
+              onClick={() => {
+                setActiveAction(activeAction === "CASHIN" ? "NONE" : "CASHIN");
+                setMessage("");
+              }}
+            >
+              <span>Cash In</span>
+              <strong>Add funds to wallet</strong>
+              <small>GCash, Maya, or Bank Transfer</small>
+            </button>
+
+            <button
+              className={`actionCard ${activeAction === "WITHDRAW" ? "selected" : ""}`}
+              onClick={() => {
+                setActiveAction(activeAction === "WITHDRAW" ? "NONE" : "WITHDRAW");
+                setMessage("");
+              }}
+            >
+              <span>Withdraw</span>
+              <strong>Request cash-out</strong>
+              <small>Send funds to your account</small>
+            </button>
+          </section>
+
+          {activeAction === "CASHIN" && (
+            <section className="flowPanel">
+              <PanelHeader
+                title="Cash-In Request"
+                text="Select amount first. After choosing an amount, select where you paid and submit the reference number."
+                badge="Payment → Admin Verification"
+              />
+
+              <div className="stepBox">
+                <StepTitle number="1" title="Select Cash-In Amount" />
                 <div className="amountChips">
                   {AMOUNTS.map((amount) => (
                     <button
@@ -313,7 +432,7 @@ export default function WalletPage() {
                 </div>
 
                 <label className="customAmount">
-                  Custom Cash-In Amount
+                  Custom Amount
                   <input
                     value={cashInAmount}
                     onChange={(e) => setCashInAmount(e.target.value)}
@@ -322,110 +441,110 @@ export default function WalletPage() {
                     placeholder="Minimum ₱100"
                   />
                 </label>
-
-                <div className="paymentNotice">
-                  <div>
-                    <strong>Temporary Payment Receiver</strong>
-                    <p>{PAYMENT_ACCOUNT_NAME}</p>
-                    <small>Used temporarily for Agarwood Platform cash-in transactions.</small>
-                  </div>
-                  <div className="sendBox">
-                    <span>Amount to Send</span>
-                    <b>{peso(Number(cashInAmount || 0))}</b>
-                  </div>
-                </div>
-
-                <div className="qrGrid">
-                  <PaymentCard
-                    title="GCash"
-                    image="/payments/gcash.png"
-                    selected={paymentMethod === "GCASH"}
-                    onClick={() => setPaymentMethod("GCASH")}
-                    openLabel="Open GCash QR"
-                  />
-
-                  <PaymentCard
-                    title="Maya"
-                    image="/payments/maya.png"
-                    selected={paymentMethod === "MAYA"}
-                    onClick={() => setPaymentMethod("MAYA")}
-                    openLabel="Open Maya QR"
-                  />
-
-                  <div
-                    className={`qrCard bank ${paymentMethod === "BANK_TRANSFER" ? "selected" : ""}`}
-                    onClick={() => setPaymentMethod("BANK_TRANSFER")}
-                  >
-                    <h3>Bank Transfer</h3>
-                    <div className="bankBox">
-                      <strong>BPI / Bank</strong>
-                      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-                      <small>Bank account number can be added later.</small>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="formGrid">
-                  <label>
-                    Payment Method
-                    <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                      <option value="GCASH">GCash</option>
-                      <option value="MAYA">Maya</option>
-                      <option value="BANK_TRANSFER">Bank Transfer</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    Reference Number
-                    <input
-                      value={cashInReference}
-                      onChange={(e) => setCashInReference(e.target.value)}
-                      placeholder="Enter payment reference number"
-                    />
-                  </label>
-
-                  <label className="wide">
-                    Receipt URL optional
-                    <input
-                      value={receiptUrl}
-                      onChange={(e) => setReceiptUrl(e.target.value)}
-                      placeholder="Paste receipt image link if available"
-                    />
-                  </label>
-                </div>
-
-                <button className="primaryButton" onClick={submitCashIn}>
-                  I Have Paid — Submit Cash-In Request
-                </button>
               </div>
-            ) : (
-              <div className="panel actionPanel">
-                <div className="panelHead">
+
+              {Number(cashInAmount) > 0 && (
+                <div className="stepBox">
+                  <StepTitle number="2" title="Choose Payment Method" />
+
+                  <div className="methodGrid">
+                    {["GCASH", "MAYA", "BANK_TRANSFER"].map((method) => (
+                      <button
+                        key={method}
+                        className={paymentMethod === method ? "selected" : ""}
+                        onClick={() => setPaymentMethod(method)}
+                      >
+                        {cleanType(method)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {Number(cashInAmount) > 0 && paymentMethod && (
+                <div className="stepBox">
+                  <StepTitle number="3" title="Pay and Submit Reference" />
+
+                  <div className="paymentNotice">
+                    <div>
+                      <strong>Receiver</strong>
+                      <p>{PAYMENT_ACCOUNT_NAME}</p>
+                      <small>Amount to send: {peso(Number(cashInAmount || 0))}</small>
+                    </div>
+                  </div>
+
+                  {paymentMethod === "GCASH" && (
+                    <QrPayment image="/payments/gcash.png" label="GCash QR" />
+                  )}
+
+                  {paymentMethod === "MAYA" && (
+                    <QrPayment image="/payments/maya.png" label="Maya QR" />
+                  )}
+
+                  {paymentMethod === "BANK_TRANSFER" && (
+                    <div className="bankBox">
+                      <strong>Bank Transfer</strong>
+                      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
+                      <small>Bank account details can be added later.</small>
+                    </div>
+                  )}
+
+                  <div className="formGrid">
+                    <label>
+                      Reference Number
+                      <input
+                        value={cashInReference}
+                        onChange={(e) => setCashInReference(e.target.value)}
+                        placeholder="Enter payment reference number"
+                      />
+                    </label>
+
+                    <label>
+                      Receipt URL optional
+                      <input
+                        value={receiptUrl}
+                        onChange={(e) => setReceiptUrl(e.target.value)}
+                        placeholder="Paste receipt image link if available"
+                      />
+                    </label>
+                  </div>
+
+                  <button className="primaryButton" onClick={submitCashIn}>
+                    Submit Cash-In Request
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeAction === "WITHDRAW" && (
+            <section className="flowPanel">
+              <PanelHeader
+                title="Withdrawal Request"
+                text="Select amount first, then tell us where to send your cash-out. A 2% processing fee is applied."
+                badge="Admin Approval Required"
+              />
+
+              <div className="ruleGrid">
+                <div className={`rule ${membershipActive ? "ok" : "locked"}`}>
+                  <span>{membershipActive ? "✓" : "!"}</span>
                   <div>
-                    <h2>Withdraw Request</h2>
-                    <p>Link your payout account and preview the 2% processing fee.</p>
-                  </div>
-                  <span className="badge">Admin Approval Required</span>
-                </div>
-
-                <div className="ruleGrid">
-                  <div className={`rule ${membershipActive ? "ok" : "locked"}`}>
-                    <span>{membershipActive ? "✓" : "!"}</span>
-                    <div>
-                      <strong>Membership</strong>
-                      <p>{profile?.membership_status || "UNKNOWN"}</p>
-                    </div>
-                  </div>
-
-                  <div className={`rule ${kycApproved ? "ok" : "locked"}`}>
-                    <span>{kycApproved ? "✓" : "!"}</span>
-                    <div>
-                      <strong>KYC Verification</strong>
-                      <p>{profile?.kyc_status || "UNKNOWN"}</p>
-                    </div>
+                    <strong>Membership</strong>
+                    <p>{profile?.membership_status || "UNKNOWN"}</p>
                   </div>
                 </div>
 
+                <div className={`rule ${kycApproved ? "ok" : "locked"}`}>
+                  <span>{kycApproved ? "✓" : "!"}</span>
+                  <div>
+                    <strong>KYC Verification</strong>
+                    <p>{profile?.kyc_status || "UNKNOWN"}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="stepBox">
+                <StepTitle number="1" title="Select Withdrawal Amount" />
                 <div className="amountChips">
                   {AMOUNTS.map((amount) => (
                     <button
@@ -438,125 +557,138 @@ export default function WalletPage() {
                   ))}
                 </div>
 
-                <div className="formGrid">
-                  <label>
-                    Withdraw Amount
-                    <input
-                      value={withdrawAmount}
-                      onChange={(e) => setWithdrawAmount(e.target.value)}
-                      type="number"
-                      min="100"
-                      placeholder="Minimum ₱100"
-                    />
-                  </label>
-
-                  <label>
-                    Payout Method
-                    <select value={payoutMethod} onChange={(e) => setPayoutMethod(e.target.value)}>
-                      <option value="GCASH">GCash</option>
-                      <option value="MAYA">Maya</option>
-                      <option value="BANK_TRANSFER">Bank Transfer</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    Account Name
-                    <input
-                      value={payoutName}
-                      onChange={(e) => setPayoutName(e.target.value)}
-                      placeholder="Your payout account name"
-                    />
-                  </label>
-
-                  <label>
-                    Account Number
-                    <input
-                      value={payoutNumber}
-                      onChange={(e) => setPayoutNumber(e.target.value)}
-                      placeholder="GCash / Maya / Bank number"
-                    />
-                  </label>
-                </div>
-
-                <div className="withdrawPreview">
-                  <div className="previewRow">
-                    <span>Withdraw Amount</span>
-                    <b>{peso(withdrawNumber)}</b>
-                  </div>
-                  <div className="previewRow">
-                    <span>Processing Fee 2%</span>
-                    <b>{peso(withdrawFee)}</b>
-                  </div>
-                  <div className="previewRow final">
-                    <span>Net Receive</span>
-                    <b>{peso(withdrawNet > 0 ? withdrawNet : 0)}</b>
-                  </div>
-                </div>
-
-                <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw}>
-                  Submit Withdrawal Request
-                </button>
-
-                {!canWithdraw && (
-                  <small className="lockText">
-                    Withdrawal locked. Complete KYC and keep membership ACTIVE.
-                  </small>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="lowerGrid">
-            <HistoryPanel title="Cash-In Requests" empty="No cash-in requests yet.">
-              {cashIns.map((item) => (
-                <HistoryRow
-                  key={item.id}
-                  title={item.payment_method || "CASH_IN"}
-                  subtitle={`Ref: ${item.reference_no || "—"}`}
-                  amount={peso(Number(item.amount || 0))}
-                  status={item.status || "PENDING"}
-                  date={formatDate(item.created_at)}
-                />
-              ))}
-            </HistoryPanel>
-
-            <HistoryPanel title="Withdrawal Requests" empty="No withdrawal requests yet.">
-              {withdrawals.map((item) => (
-                <HistoryRow
-                  key={item.id}
-                  title={item.payout_method || "WITHDRAWAL"}
-                  subtitle={`${item.payout_account_name || "No account"} • ${item.payout_account_number || "No number"}`}
-                  amount={peso(Number(item.amount || 0))}
-                  status={item.status || "PENDING"}
-                  date={formatDate(item.created_at)}
-                />
-              ))}
-            </HistoryPanel>
-
-            <div className="panel fullWidth">
-              <div className="panelHead">
-                <div>
-                  <h2>Wallet Activity</h2>
-                  <p>Real records from wallet_transactions.</p>
-                </div>
+                <label className="customAmount">
+                  Custom Amount
+                  <input
+                    value={withdrawAmount}
+                    onChange={(e) => setWithdrawAmount(e.target.value)}
+                    type="number"
+                    min="100"
+                    placeholder="Minimum ₱100"
+                  />
+                </label>
               </div>
 
-              {transactions.length === 0 ? (
-                <div className="emptyState">No wallet activity yet.</div>
-              ) : (
-                <div className="activityList">
-                  {transactions.map((item) => (
+              {Number(withdrawAmount) > 0 && (
+                <div className="stepBox">
+                  <StepTitle number="2" title="Where Should We Send Your Cash-Out?" />
+
+                  <div className="methodGrid">
+                    {["GCASH", "MAYA", "BANK_TRANSFER"].map((method) => (
+                      <button
+                        key={method}
+                        className={payoutMethod === method ? "selected" : ""}
+                        onClick={() => setPayoutMethod(method)}
+                      >
+                        {cleanType(method)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {payoutMethod && (
+                    <>
+                      <div className="formGrid">
+                        <label>
+                          Account Name
+                          <input
+                            value={payoutName}
+                            onChange={(e) => setPayoutName(e.target.value)}
+                            placeholder="Your payout account name"
+                          />
+                        </label>
+
+                        <label>
+                          Account Number
+                          <input
+                            value={payoutNumber}
+                            onChange={(e) => setPayoutNumber(e.target.value)}
+                            placeholder="GCash / Maya / Bank number"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="withdrawPreview">
+                        <div className="previewRow">
+                          <span>Withdraw Amount</span>
+                          <b>{peso(withdrawNumber)}</b>
+                        </div>
+                        <div className="previewRow">
+                          <span>Processing Fee 2%</span>
+                          <b>{peso(withdrawFee)}</b>
+                        </div>
+                        <div className="previewRow final">
+                          <span>Net Receive</span>
+                          <b>{peso(withdrawNet > 0 ? withdrawNet : 0)}</b>
+                        </div>
+                      </div>
+
+                      <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw}>
+                        Submit Withdrawal Request
+                      </button>
+
+                      {!canWithdraw && (
+                        <small className="lockText">
+                          Withdrawal locked. Complete KYC and keep membership ACTIVE.
+                        </small>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="bottomGrid">
+            <div className="panel">
+              <PanelHeader
+                title="Transaction History"
+                text="Completed and successful wallet movements."
+                badge="Success Logs"
+              />
+
+              <div className="historyPanel">
+                {transactions.length === 0 ? (
+                  <div className="emptyState">No completed wallet activity yet.</div>
+                ) : (
+                  transactions.map((item) => (
                     <HistoryRow
                       key={item.id}
                       title={cleanType(item.transaction_type)}
-                      subtitle={`${item.description || "—"} • ${item.reference_no || "No Ref"}`}
+                      subtitle={`${item.description || "Wallet transaction"} • ${
+                        item.reference_no || "No Ref"
+                      }`}
                       amount={peso(Number(item.amount || 0))}
-                      status={item.status || "PENDING"}
+                      status={item.status || "COMPLETED"}
                       date={formatDate(item.created_at)}
                     />
-                  ))}
-                </div>
-              )}
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="panel">
+              <PanelHeader
+                title="Pending Requests"
+                text="Requests waiting for admin review or settlement."
+                badge={`${pendingItems.length} Pending`}
+              />
+
+              <div className="historyPanel">
+                {pendingItems.length === 0 ? (
+                  <div className="emptyState">No pending requests.</div>
+                ) : (
+                  pendingItems.map((item) => (
+                    <HistoryRow
+                      key={item.id}
+                      title={item.title}
+                      subtitle={item.subtitle}
+                      amount={peso(item.amount)}
+                      status={item.status}
+                      date={formatDate(item.date)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
           </section>
         </>
@@ -567,12 +699,12 @@ export default function WalletPage() {
 
         .walletPage {
           min-height: 100vh;
-          padding: 28px;
+          padding: 30px;
           color: #18261d;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 22%),
-            radial-gradient(circle at 90% 12%, rgba(255,255,255,.72), transparent 28%),
+            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
+            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
             linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
         }
 
@@ -595,8 +727,8 @@ export default function WalletPage() {
 
         .hero h1 {
           margin: 0;
-          font-size: 42px;
-          letter-spacing: -1.4px;
+          font-size: 44px;
+          letter-spacing: -1.6px;
           color: #101a14;
         }
 
@@ -605,135 +737,161 @@ export default function WalletPage() {
           margin-top: 8px;
           color: #5f665e;
           font-size: 15px;
-          max-width: 760px;
+          max-width: 820px;
+          line-height: 1.6;
         }
 
-        .heroBalance {
-          min-width: 270px;
-          border-radius: 24px;
-          padding: 22px;
-          color: white;
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 30%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 18px 42px rgba(36,69,54,.22);
-        }
-
-        .heroBalance p {
-          margin: 0;
-          color: rgba(255,255,255,.75);
-          font-weight: 900;
-        }
-
-        .heroBalance strong {
-          display: block;
-          margin-top: 8px;
-          font-size: 32px;
-          letter-spacing: -1px;
-        }
-
-        .cards {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .summaryCard,
-        .panel,
         .loadingBox,
-        .messageBox {
-          border-radius: 22px;
-          background: rgba(255,253,246,.86);
+        .messageBox,
+        .panel,
+        .flowPanel,
+        .metricCard,
+        .actionCard {
+          border-radius: 26px;
+          background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
           box-shadow: 0 18px 42px rgba(82,60,27,.09);
         }
 
-        .summaryCard {
-          min-height: 145px;
-          padding: 20px;
-          display: flex;
-          align-items: center;
-          gap: 18px;
-        }
-
-        .summaryIcon {
-          width: 66px;
-          height: 66px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          font-size: 28px;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-        }
-
-        .summaryIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
-        }
-
-        .summaryCard p {
-          margin: 0 0 8px;
-          font-size: 13px;
-          color: #5f665e;
-          font-weight: 900;
-        }
-
-        .summaryCard h3 {
-          margin: 0 0 8px;
-          font-size: 27px;
-          letter-spacing: -1px;
-          color: #101a14;
-        }
-
-        .summaryCard small {
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
         .loadingBox,
         .messageBox {
           padding: 20px;
-          margin-bottom: 16px;
+          margin-bottom: 18px;
           color: #31553d;
           font-weight: 900;
         }
 
-        .actionShell {
-          margin-bottom: 16px;
+        .topCards {
+          display: grid;
+          grid-template-columns: 1.5fr 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 18px;
         }
 
-        .modeSwitch {
-          display: inline-flex;
-          padding: 8px;
-          border-radius: 999px;
-          background: rgba(255,253,246,.78);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 14px 30px rgba(82,60,27,.08);
-          margin-bottom: 14px;
-        }
-
-        .modeSwitch button {
-          border: 0;
-          border-radius: 999px;
-          padding: 14px 30px;
-          background: transparent;
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .modeSwitch button.active {
+        .balanceCard {
+          min-height: 190px;
+          border-radius: 32px;
+          padding: 28px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
           color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 10px 24px rgba(36,69,54,.22);
+          background:
+            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
+            linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 24px 56px rgba(36,69,54,.24);
         }
 
+        .balanceCard p {
+          margin: 0;
+          color: rgba(255,255,255,.72);
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .14em;
+          font-size: 12px;
+        }
+
+        .balanceCard h2 {
+          margin: 12px 0 0;
+          font-size: 48px;
+          letter-spacing: -2px;
+        }
+
+        .balanceSeal {
+          width: 86px;
+          height: 86px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, #d6b25e, #b99242);
+          color: #10281f;
+          font-size: 42px;
+          font-weight: 900;
+          box-shadow: inset 0 2px 0 rgba(255,255,255,.25);
+        }
+
+        .metricCard {
+          min-height: 190px;
+          padding: 26px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        .metricCard p {
+          margin: 0;
+          color: #6b6b62;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+          font-size: 12px;
+        }
+
+        .metricCard h3 {
+          margin: 12px 0 8px;
+          font-size: 30px;
+          letter-spacing: -1px;
+          color: #101a14;
+        }
+
+        .metricCard small {
+          color: #8c6a3c;
+          font-weight: 900;
+        }
+
+        .actionCards {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .actionCard {
+          border: 2px solid transparent;
+          padding: 28px;
+          text-align: left;
+          cursor: pointer;
+          min-height: 160px;
+          transition: .2s ease;
+        }
+
+        .actionCard:hover,
+        .actionCard.selected {
+          transform: translateY(-2px);
+          border-color: rgba(140,106,60,.45);
+          box-shadow: 0 22px 50px rgba(82,60,27,.14);
+        }
+
+        .actionCard span {
+          display: inline-flex;
+          border-radius: 999px;
+          padding: 9px 14px;
+          background: rgba(214,178,94,.20);
+          color: #8c6a3c;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        .actionCard strong {
+          display: block;
+          margin-top: 18px;
+          color: #101a14;
+          font-size: 28px;
+        }
+
+        .actionCard small {
+          display: block;
+          margin-top: 8px;
+          color: #6b6b62;
+          font-weight: 900;
+        }
+
+        .flowPanel,
         .panel {
-          padding: 22px;
-        }
-
-        .actionPanel {
-          overflow: hidden;
+          padding: 24px;
+          margin-bottom: 18px;
         }
 
         .panelHead {
@@ -754,6 +912,7 @@ export default function WalletPage() {
           margin: 6px 0 0;
           color: #6b6b62;
           font-size: 14px;
+          line-height: 1.5;
         }
 
         .badge {
@@ -766,25 +925,59 @@ export default function WalletPage() {
           white-space: nowrap;
         }
 
-        .amountChips {
+        .stepBox {
+          border-radius: 24px;
+          background: #f3ead8;
+          border: 1px solid rgba(92,70,35,.08);
+          padding: 18px;
+          margin-top: 14px;
+        }
+
+        .stepTitle {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .stepTitle span {
+          width: 34px;
+          height: 34px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background: #244536;
+          color: white;
+          font-weight: 900;
+        }
+
+        .stepTitle strong {
+          color: #101a14;
+          font-size: 16px;
+        }
+
+        .amountChips,
+        .methodGrid {
           display: flex;
           flex-wrap: wrap;
           gap: 10px;
-          margin-bottom: 16px;
+          margin-bottom: 14px;
         }
 
-        .amountChips button {
-          min-width: 96px;
+        .amountChips button,
+        .methodGrid button {
+          min-width: 110px;
           border: 1px solid rgba(92,70,35,.12);
           border-radius: 999px;
           padding: 13px 18px;
-          background: #f3ead8;
+          background: rgba(255,253,246,.92);
           color: #244536;
           font-weight: 900;
           cursor: pointer;
         }
 
-        .amountChips button.selected {
+        .amountChips button.selected,
+        .methodGrid button.selected {
           background: linear-gradient(135deg, #d6b25e, #b99242);
           color: #10281f;
           border-color: transparent;
@@ -799,17 +992,13 @@ export default function WalletPage() {
           font-size: 13px;
         }
 
-        .customAmount {
-          margin-bottom: 16px;
-        }
-
         input,
         select {
           width: 100%;
           border: 1px solid rgba(92,70,35,.14);
           border-radius: 14px;
           padding: 13px 14px;
-          background: rgba(255,253,246,.92);
+          background: rgba(255,253,246,.94);
           color: #101a14;
           outline: none;
           font-weight: 800;
@@ -820,11 +1009,14 @@ export default function WalletPage() {
           padding: 18px;
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
-          margin-bottom: 18px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 18px;
+          margin-bottom: 16px;
+        }
+
+        .paymentNotice strong {
+          color: rgba(255,255,255,.72);
+          text-transform: uppercase;
+          font-size: 12px;
+          letter-spacing: .12em;
         }
 
         .paymentNotice p {
@@ -835,74 +1027,46 @@ export default function WalletPage() {
 
         .paymentNotice small {
           color: rgba(255,255,255,.75);
-        }
-
-        .sendBox {
-          min-width: 220px;
-          padding: 16px;
-          border-radius: 18px;
-          background: rgba(255,255,255,.10);
-          border: 1px solid rgba(255,255,255,.14);
-          text-align: right;
-        }
-
-        .sendBox span {
-          display: block;
-          color: rgba(255,255,255,.72);
           font-weight: 900;
-          font-size: 12px;
         }
 
-        .sendBox b {
-          display: block;
-          margin-top: 6px;
-          font-size: 28px;
-        }
-
-        .qrGrid {
+        .qrPayment {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 14px;
-          margin-bottom: 18px;
+          grid-template-columns: 260px 1fr;
+          gap: 18px;
+          align-items: center;
+          margin-bottom: 16px;
         }
 
-        .qrCard {
-          border-radius: 22px;
-          padding: 16px;
-          background: #f3ead8;
-          border: 2px solid transparent;
-          cursor: pointer;
+        .qrBox {
+          border-radius: 20px;
+          padding: 14px;
+          background: white;
           text-align: center;
         }
 
-        .qrCard.selected {
-          border-color: #8c6a3c;
-          box-shadow: 0 12px 28px rgba(140,106,60,.16);
-        }
-
-        .qrCard h3 {
-          margin: 0 0 12px;
-        }
-
-        .qrCard img {
+        .qrBox img {
           width: 100%;
-          max-width: 240px;
           height: auto;
           border-radius: 14px;
-          background: white;
         }
 
-        .qrCard p {
+        .qrText h3 {
+          margin: 0 0 8px;
+          font-size: 24px;
+          color: #101a14;
+        }
+
+        .qrText p {
+          margin: 0 0 14px;
           color: #6b6b62;
-          font-size: 13px;
           font-weight: 900;
         }
 
         .openQr {
           display: inline-flex;
-          margin-top: 10px;
           border-radius: 999px;
-          padding: 11px 16px;
+          padding: 12px 16px;
           background: #244536;
           color: white;
           text-decoration: none;
@@ -911,23 +1075,33 @@ export default function WalletPage() {
         }
 
         .bankBox {
-          min-height: 270px;
-          display: grid;
-          place-content: center;
-          gap: 10px;
-          border-radius: 14px;
-          background: rgba(255,253,246,.68);
-          padding: 18px;
+          border-radius: 20px;
+          background: rgba(255,253,246,.72);
+          border: 1px solid rgba(92,70,35,.10);
+          padding: 20px;
+          margin-bottom: 16px;
+        }
+
+        .bankBox strong {
+          color: #101a14;
+          font-size: 20px;
+        }
+
+        .bankBox p {
+          margin: 8px 0;
+          color: #31553d;
+          font-weight: 900;
+        }
+
+        .bankBox small {
+          color: #6b6b62;
+          font-weight: 900;
         }
 
         .formGrid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
           gap: 14px;
-        }
-
-        .wide {
-          grid-column: 1 / -1;
         }
 
         .primaryButton {
@@ -1038,20 +1212,19 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
-        .lowerGrid {
+        .bottomGrid {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 16px;
+          align-items: start;
         }
 
-        .fullWidth {
-          grid-column: 1 / -1;
-        }
-
-        .historyPanel,
-        .activityList {
+        .historyPanel {
           display: grid;
           gap: 12px;
+          max-height: 620px;
+          overflow: auto;
+          padding-right: 4px;
         }
 
         .historyRow {
@@ -1103,7 +1276,9 @@ export default function WalletPage() {
         }
 
         .status.pending,
-        .status.processing {
+        .status.processing,
+        .status.under_review,
+        .status.under-review {
           background: rgba(214,178,94,.20);
           color: #8c6a3c;
         }
@@ -1122,14 +1297,17 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
-        @media (max-width: 1250px) {
-          .cards,
-          .qrGrid,
-          .ruleGrid {
-            grid-template-columns: repeat(2, 1fr);
+        @media (max-width: 1180px) {
+          .topCards {
+            grid-template-columns: 1fr;
           }
 
-          .lowerGrid {
+          .balanceCard,
+          .metricCard {
+            min-height: auto;
+          }
+
+          .bottomGrid {
             grid-template-columns: 1fr;
           }
         }
@@ -1140,26 +1318,26 @@ export default function WalletPage() {
           }
 
           .hero,
-          .paymentNotice {
+          .balanceCard,
+          .panelHead,
+          .qrPayment {
+            grid-template-columns: 1fr;
             flex-direction: column;
             align-items: flex-start;
           }
 
-          .heroBalance,
-          .sendBox {
-            width: 100%;
-            text-align: left;
-          }
-
-          .cards,
-          .formGrid,
-          .qrGrid,
-          .ruleGrid {
-            grid-template-columns: 1fr;
-          }
-
           .hero h1 {
             font-size: 34px;
+          }
+
+          .balanceCard h2 {
+            font-size: 34px;
+          }
+
+          .actionCards,
+          .formGrid,
+          .ruleGrid {
+            grid-template-columns: 1fr;
           }
 
           .historyRow {
@@ -1169,95 +1347,64 @@ export default function WalletPage() {
           .historyRight {
             justify-items: start;
           }
-
-          .modeSwitch {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            width: 100%;
-          }
         }
       `}</style>
     </main>
   );
 }
 
-function PaymentCard({
+function PanelHeader({
   title,
-  image,
-  selected,
-  onClick,
-  openLabel,
+  text,
+  badge,
 }: {
   title: string;
-  image: string;
-  selected: boolean;
-  onClick: () => void;
-  openLabel: string;
+  text: string;
+  badge: string;
 }) {
   return (
-    <div className={`qrCard ${selected ? "selected" : ""}`} onClick={onClick}>
-      <h3>{title}</h3>
-      <Image src={image} alt={`${title} QR`} width={240} height={240} />
-      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-      <a
-        className="openQr"
-        href={image}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {openLabel}
-      </a>
-    </div>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-  note,
-  icon,
-  gold,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  icon: string;
-  gold?: boolean;
-}) {
-  return (
-    <div className="summaryCard">
-      <div className={`summaryIcon ${gold ? "gold" : ""}`}>{icon}</div>
+    <div className="panelHead">
       <div>
-        <p>{label}</p>
-        <h3>{value}</h3>
-        <small>{note}</small>
+        <h2>{title}</h2>
+        <p>{text}</p>
       </div>
+      <span className="badge">{badge}</span>
     </div>
   );
 }
 
-function HistoryPanel({
-  title,
-  empty,
-  children,
-}: {
-  title: string;
-  empty: string;
-  children: React.ReactNode;
-}) {
-  const hasItems = Array.isArray(children) ? children.length > 0 : Boolean(children);
-
+function MetricCard({ label, value, note }: { label: string; value: string; note: string }) {
   return (
-    <div className="panel">
-      <div className="panelHead">
-        <div>
-          <h2>{title}</h2>
-        </div>
+    <div className="metricCard">
+      <p>{label}</p>
+      <h3>{value}</h3>
+      <small>{note}</small>
+    </div>
+  );
+}
+
+function StepTitle({ number, title }: { number: string; title: string }) {
+  return (
+    <div className="stepTitle">
+      <span>{number}</span>
+      <strong>{title}</strong>
+    </div>
+  );
+}
+
+function QrPayment({ image, label }: { image: string; label: string }) {
+  return (
+    <div className="qrPayment">
+      <div className="qrBox">
+        <Image src={image} alt={label} width={240} height={240} />
       </div>
 
-      <div className="historyPanel">
-        {hasItems ? children : <div className="emptyState">{empty}</div>}
+      <div className="qrText">
+        <h3>{label}</h3>
+        <p>Scan this QR and send payment to JANICA MALDIVES.</p>
+        <a className="openQr" href={image} target="_blank" rel="noopener noreferrer">
+          Open Full QR
+        </a>
       </div>
     </div>
   );
@@ -1308,7 +1455,7 @@ function cleanType(value: string | null) {
 }
 
 function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase();
+  return (value || "pending").toLowerCase().replaceAll(" ", "_");
 }
 
 function formatDate(value: string | null) {
