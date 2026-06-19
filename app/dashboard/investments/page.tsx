@@ -3,57 +3,69 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Profile = {
+type InventoryItem = {
   id: string;
-  full_name: string | null;
-  email: string | null;
-  membership_status: string | null;
-  kyc_status: string | null;
-};
-
-type Wallet = {
-  id: string;
-  profile_id: string;
-  balance: number | null;
-};
-
-type TreeRow = Record<string, any>;
-
-type WalletTransaction = {
-  id: string;
-  transaction_type: string | null;
-  amount: number | null;
-  status: string | null;
-  description: string | null;
-  reference_no: string | null;
-  created_at: string | null;
-};
-
-type SellTreeRequest = {
-  id: string;
+  profile_id: string | null;
   tree_id: string | null;
-  tree_value: number | null;
-  expected_amount: number | null;
-  selling_price: number | null;
-  platform_fee: number | null;
-  net_receive: number | null;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  starting_qty: number | null;
+  remaining_qty: number | null;
+  low_stock_level: number | null;
   status: string | null;
   created_at: string | null;
 };
 
-type ViewMode = "TREE" | "GROUP" | "PACKAGE" | "LEDGER";
+type TreeRow = {
+  id: string;
+  profile_id: string | null;
+  ownership_status?: string | null;
+  availability_status?: string | null;
+};
 
-export default function InvestmentsPage() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [wallet, setWallet] = useState<Wallet | null>(null);
+type RequirementItem = {
+  category: string;
+  weeklyPerTree: number;
+  monthlyPerTree: number;
+};
+
+const CARE_REQUIREMENTS: RequirementItem[] = [
+  { category: "Fertilizer", weeklyPerTree: 1, monthlyPerTree: 4 },
+  { category: "Fungicide", weeklyPerTree: 0.5, monthlyPerTree: 2 },
+  { category: "Insecticide", weeklyPerTree: 0.25, monthlyPerTree: 1 },
+  { category: "Nutrients", weeklyPerTree: 0.5, monthlyPerTree: 2 },
+  { category: "Soil Conditioner", weeklyPerTree: 0.5, monthlyPerTree: 2 },
+];
+
+const CARE_REQUIREMENTS_PER_TREE_PER_WEEK: Record<string, number> = {
+  FERTILIZER: 1,
+  FUNGICIDE: 0.5,
+  INSECTICIDE: 0.25,
+  NUTRIENTS: 0.5,
+  BOOSTER: 0.5,
+  "SOIL CONDITIONER": 0.5,
+  "DISEASE PREVENTION": 0.25,
+};
+
+function normalizeCategory(value: string | null) {
+  return String(value || "UNCATEGORIZED").trim().toUpperCase();
+}
+
+function numberText(value: number) {
+  return Number(value || 0).toLocaleString("en-PH", {
+    maximumFractionDigits: 2,
+  });
+}
+
+export default function InventoryPage() {
+  const [items, setItems] = useState<InventoryItem[]>([]);
   const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
-  const [sellRequests, setSellRequests] = useState<SellTreeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("TREE");
+  const [viewMode, setViewMode] = useState<"ALL" | "LOW" | "READY" | "NOT_READY">("ALL");
 
-  async function loadInvestments() {
+  async function loadInventory() {
     setLoading(true);
     setMessage("");
 
@@ -70,347 +82,439 @@ export default function InvestmentsPage() {
 
     const { data: profileById } = await supabase
       .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
+      .select("id, email")
       .eq("id", user.id)
       .maybeSingle();
 
     const { data: profileByEmail } = await supabase
       .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
+      .select("id, email")
       .eq("email", email)
       .maybeSingle();
 
-    const currentProfile = profileById || profileByEmail;
+    const profile = profileById || profileByEmail;
 
-    if (!currentProfile) {
+    if (!profile) {
       setMessage("Profile not found.");
       setLoading(false);
       return;
     }
 
-    setProfile(currentProfile);
-
-    const profileId = currentProfile.id;
-
-    const { data: walletRows } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const { data: treeData, error: treeError } = await supabase
-      .from("trees")
-      .select("*")
-      .eq("profile_id", profileId)
+    const { data: inventoryData, error: inventoryError } = await supabase
+      .from("inventory")
+      .select(
+        "id, profile_id, tree_id, item_name, category, unit, starting_qty, remaining_qty, low_stock_level, status, created_at"
+      )
+      .eq("profile_id", profile.id)
       .order("created_at", { ascending: false });
 
-    if (treeError) {
-      setMessage(treeError.message);
+    if (inventoryError) {
+      setMessage("Inventory table not found yet. Run the inventory SQL table first.");
+      setItems([]);
+      setTrees([]);
       setLoading(false);
       return;
     }
 
-    const { data: transactionData } = await supabase
-      .from("wallet_transactions")
-      .select("id, transaction_type, amount, status, description, reference_no, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
+    const { data: treeData } = await supabase
+      .from("trees")
+      .select("id, profile_id, ownership_status, availability_status")
+      .eq("profile_id", profile.id);
 
-    const { data: sellData } = await supabase
-      .from("sell_tree_requests")
-      .select("id, tree_id, tree_value, expected_amount, selling_price, platform_fee, net_receive, status, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    setWallet(walletRows?.[0] || null);
+    setItems(inventoryData || []);
     setTrees(treeData || []);
-    setTransactions(transactionData || []);
-    setSellRequests(sellData || []);
     setLoading(false);
   }
 
   useEffect(() => {
-    loadInvestments();
+    loadInventory();
   }, []);
 
-  const stats = useMemo(() => {
-    const ownedTrees = trees.filter((tree) => !isSold(tree)).length;
-    const pendingSaleTrees = sellRequests.filter(
-      (item) => (item.status || "PENDING").toUpperCase() === "PENDING"
-    ).length;
-    const soldTrees = trees.filter((tree) => isSold(tree)).length;
+  const activeTreeCount = useMemo(() => {
+    return trees.filter((tree) => {
+      const ownership = String(tree.ownership_status || "OWNED").toUpperCase();
+      const availability = String(tree.availability_status || "OWNED").toUpperCase();
+      return ownership !== "SOLD" && availability !== "SOLD";
+    }).length;
+  }, [trees]);
 
-    const purchaseCapital = trees.reduce((sum, tree) => sum + getPurchasePrice(tree), 0);
-    const careCosts = trees.reduce((sum, tree) => sum + getCareCost(tree), 0);
-    const verificationCosts = trees.reduce((sum, tree) => sum + getVerificationCost(tree), 0);
-    const totalSpent = purchaseCapital + careCosts + verificationCosts;
+  function findItemByCategory(category: string) {
+    const target = category.trim().toLowerCase();
 
-    const currentValue = trees
-      .filter((tree) => !isSold(tree))
-      .reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
+    return items.find((item) => {
+      const itemCategory = String(item.category || "").trim().toLowerCase();
+      const itemName = String(item.item_name || "").trim().toLowerCase();
 
-    const projectedProfit = currentValue - totalSpent;
-    const roi = totalSpent > 0 ? (projectedProfit / totalSpent) * 100 : 0;
+      return itemCategory.includes(target) || itemName.includes(target);
+    });
+  }
 
-    const realizedSales = transactions
-      .filter((item) => (item.transaction_type || "").toUpperCase() === "TREE_SALE")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  function weeklyNeedForItem(item: InventoryItem) {
+    if (activeTreeCount <= 0) return 0;
+
+    const category = normalizeCategory(item.category);
+    const perTree = CARE_REQUIREMENTS_PER_TREE_PER_WEEK[category] || 0;
+
+    return perTree * activeTreeCount;
+  }
+
+  function weeksRemaining(item: InventoryItem) {
+    const remaining = Number(item.remaining_qty || 0);
+    const weeklyNeed = weeklyNeedForItem(item);
+
+    if (activeTreeCount <= 0) return 999;
+    if (weeklyNeed <= 0) return 999;
+
+    return remaining / weeklyNeed;
+  }
+
+  function statusInfo(item: InventoryItem) {
+    const remaining = Number(item.remaining_qty || 0);
+    const low = Number(item.low_stock_level || 0);
+    const weeks = weeksRemaining(item);
+    const isLow = low > 0 && remaining <= low;
+
+    if (remaining <= 0) {
+      return {
+        label: "Out of Stock",
+        level: "danger",
+      };
+    }
+
+    if (activeTreeCount <= 0) {
+      return {
+        label: "Stock Available",
+        level: "good",
+      };
+    }
+
+    if (weeks < 1) {
+      return {
+        label: "Not Enough for 1 Week",
+        level: "danger",
+      };
+    }
+
+    if (isLow || weeks < 4) {
+      return {
+        label: "Low Supply",
+        level: "warning",
+      };
+    }
 
     return {
-      ownedTrees,
-      pendingSaleTrees,
-      soldTrees,
-      purchaseCapital,
-      careCosts,
-      verificationCosts,
-      totalSpent,
-      currentValue,
-      projectedProfit,
-      roi,
-      realizedSales,
+      label: "Ready for 1 Month+",
+      level: "good",
     };
-  }, [trees, transactions, sellRequests]);
+  }
 
-  const treeInvestments = useMemo(() => {
-    return trees.map((tree) => buildTreeInvestment(tree));
-  }, [trees]);
+  const requirementSummary = useMemo(() => {
+    return CARE_REQUIREMENTS.map((requirement) => {
+      const stockItem = findItemByCategory(requirement.category);
+      const available = Number(stockItem?.remaining_qty || 0);
+      const unit = stockItem?.unit || "unit";
 
-  const groupInvestments = useMemo(() => {
-    return buildGroupedInvestments(trees, "GROUP");
-  }, [trees]);
+      const weeklyNeed = activeTreeCount > 0 ? requirement.weeklyPerTree * activeTreeCount : 0;
+      const monthlyNeed = activeTreeCount > 0 ? requirement.monthlyPerTree * activeTreeCount : 0;
 
-  const packageInvestments = useMemo(() => {
-    return buildGroupedInvestments(trees, "PACKAGE");
-  }, [trees]);
+      return {
+        category: requirement.category,
+        available,
+        unit,
+        weeklyNeed,
+        monthlyNeed,
+        weeklyReady: activeTreeCount <= 0 || available >= weeklyNeed,
+        monthlyReady: activeTreeCount <= 0 || available >= monthlyNeed,
+      };
+    });
+  }, [items, activeTreeCount]);
 
-  const investmentTransactions = useMemo(() => {
-    return transactions.filter((item) =>
-      [
-        "TREE_PURCHASE",
-        "PACKAGE_PURCHASE",
-        "TREE_OPERATION",
-        "TREE_SALE",
-        "MARKETPLACE_PURCHASE",
-        "MEMBERSHIP_PAYMENT",
-        "CARE_SUBSCRIPTION",
-      ].includes((item.transaction_type || "").toUpperCase())
-    );
-  }, [transactions]);
+  const missingForWeek = useMemo(() => {
+    return requirementSummary.filter((item) => activeTreeCount > 0 && !item.weeklyReady);
+  }, [requirementSummary, activeTreeCount]);
+
+  const missingForMonth = useMemo(() => {
+    return requirementSummary.filter((item) => activeTreeCount > 0 && !item.monthlyReady);
+  }, [requirementSummary, activeTreeCount]);
+
+  const subscriptionStatus = useMemo(() => {
+    if (activeTreeCount <= 0) {
+      return {
+        label: "NO TREES YET",
+        note: "Buy trees first before checking care subscription readiness.",
+        level: "neutral",
+      };
+    }
+
+    if (missingForWeek.length > 0) {
+      return {
+        label: "NOT READY",
+        note: "Not enough supplies for 1 week care subscription.",
+        level: "danger",
+      };
+    }
+
+    if (missingForMonth.length > 0) {
+      return {
+        label: "WEEK READY",
+        note: "Enough for 1 week, but low for 1 month care subscription.",
+        level: "warning",
+      };
+    }
+
+    return {
+      label: "READY",
+      note: "Enough supplies for weekly and monthly care subscription.",
+      level: "good",
+    };
+  }, [activeTreeCount, missingForWeek, missingForMonth]);
+
+  const stats = useMemo(() => {
+    const totalItems = items.length;
+
+    const active = items.filter(
+      (item) => ["ACTIVE", "AVAILABLE"].includes(String(item.status || "AVAILABLE").toUpperCase())
+    ).length;
+
+    const lowStock = items.filter((item) => {
+      const info = statusInfo(item);
+      return info.level === "warning";
+    }).length;
+
+    const notReady = items.filter((item) => {
+      const info = statusInfo(item);
+      return info.level === "danger";
+    }).length;
+
+    const ready = items.filter((item) => {
+      const info = statusInfo(item);
+      return info.level === "good";
+    }).length;
+
+    return { totalItems, active, lowStock, notReady, ready };
+  }, [items, activeTreeCount]);
+
+  const filteredItems = useMemo(() => {
+    if (viewMode === "ALL") return items;
+
+    return items.filter((item) => {
+      const info = statusInfo(item);
+
+      if (viewMode === "LOW") return info.level === "warning";
+      if (viewMode === "READY") return info.level === "good";
+      if (viewMode === "NOT_READY") return info.level === "danger";
+
+      return true;
+    });
+  }, [items, viewMode, activeTreeCount]);
 
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Investment Center V4</p>
-          <h1>Investments</h1>
+          <p className="eyebrow">Agarwood Inventory Intelligence V4</p>
+          <h1>Inventory</h1>
           <span>
-            Review your tree capital, care costs, current valuation, projected
-            profit, ROI, and investment activity. This page does not manage inventory.
+            Track supplies bought from Marketplace, check weekly/monthly care
+            readiness, and see missing supplies before subscription.
           </span>
         </div>
 
-        <div className="walletCard">
-          <p>Wallet Balance</p>
-          <strong>{peso(Number(wallet?.balance || 0))}</strong>
-          <small>{profile?.membership_status || "MEMBERSHIP"} • {profile?.kyc_status || "KYC"}</small>
+        <div className="heroCard">
+          <p>Active Trees</p>
+          <strong>{activeTreeCount}</strong>
+          <small>Used for care supply calculation</small>
         </div>
       </section>
 
+      {message && <div className="message">{message}</div>}
+
       {loading ? (
-        <div className="empty">Loading investment records...</div>
+        <div className="empty">Loading inventory...</div>
       ) : (
         <>
-          {message && <div className="message">{message}</div>}
-
           <section className="stats">
-            <Stat label="Owned Trees" value={String(stats.ownedTrees)} />
-            <Stat label="Total Capital" value={peso(stats.totalSpent)} />
-            <Stat label="Portfolio Value" value={peso(stats.currentValue)} />
-            <Stat
-              label="Projected Profit"
-              value={peso(stats.projectedProfit)}
-              good={stats.projectedProfit >= 0}
-            />
-            <Stat label="Portfolio ROI" value={`${stats.roi.toFixed(2)}%`} good={stats.roi >= 0} />
+            <Card label="Total Items" value={String(stats.totalItems)} />
+            <Card label="Active Items" value={String(stats.active)} />
+            <Card label="Low Supply" value={String(stats.lowStock)} warning={stats.lowStock > 0} />
+            <Card label="Not Ready" value={String(stats.notReady)} danger={stats.notReady > 0} />
           </section>
 
-          <section className="summaryGrid">
-            <section className="panel">
-              <PanelHead
-                title="Portfolio Cost Breakdown"
-                text="Investment computation is based on tree purchase price, care cost, and verification cost."
-              />
+          <section className={`subscriptionCard ${subscriptionStatus.level}`}>
+            <div>
+              <p>Care Subscription Readiness</p>
+              <h2>{subscriptionStatus.label}</h2>
+              <span>{subscriptionStatus.note}</span>
+            </div>
 
-              <div className="moneyGrid">
-                <Mini label="Purchase Capital" value={peso(stats.purchaseCapital)} />
-                <Mini label="Care Cost" value={peso(stats.careCosts)} />
-                <Mini label="GPS / Photo Cost" value={peso(stats.verificationCosts)} />
-                <Mini label="Total Spent" value={peso(stats.totalSpent)} />
-                <Mini label="Realized Sales" value={peso(stats.realizedSales)} />
-                <Mini label="Pending Sale Requests" value={String(stats.pendingSaleTrees)} />
+            <div className="subscriptionActions">
+              {(missingForWeek.length > 0 || missingForMonth.length > 0) && (
+                <button onClick={() => (window.location.href = "/dashboard/marketplace")}>
+                  Buy Missing Supplies
+                </button>
+              )}
+              <button className="ghost" onClick={loadInventory}>
+                Refresh
+              </button>
+            </div>
+          </section>
+
+          <section className="requirementPanel">
+            <div className="panelHead">
+              <div>
+                <h2>Tree Care Requirement Summary</h2>
+                <p>
+                  This is the fixed stock requirement used before customers can
+                  subscribe to weekly or monthly care.
+                </p>
               </div>
-            </section>
+            </div>
 
-            <section className="panel">
-              <PanelHead
-                title="Investment Snapshot"
-                text="Compare current value against total capital and care cost."
-              />
-
-              <div className="roiBox">
-                <p>Projected ROI</p>
-                <strong className={stats.roi >= 0 ? "positive" : "negative"}>
-                  {stats.roi.toFixed(2)}%
-                </strong>
-                <div className="roiTrack">
-                  <i style={{ width: `${Math.min(Math.abs(stats.roi), 100)}%` }} />
-                </div>
-                <small>
-                  ROI = projected profit divided by total spent.
-                </small>
+            {activeTreeCount <= 0 ? (
+              <div className="empty small">
+                No owned trees yet. Requirements will appear after buying trees.
               </div>
-            </section>
-          </section>
-
-          <section className="tabs">
-            <button className={viewMode === "TREE" ? "active" : ""} onClick={() => setViewMode("TREE")}>
-              By Tree
-            </button>
-            <button className={viewMode === "GROUP" ? "active" : ""} onClick={() => setViewMode("GROUP")}>
-              By Group
-            </button>
-            <button className={viewMode === "PACKAGE" ? "active" : ""} onClick={() => setViewMode("PACKAGE")}>
-              By Package
-            </button>
-            <button className={viewMode === "LEDGER" ? "active" : ""} onClick={() => setViewMode("LEDGER")}>
-              Ledger
-            </button>
-          </section>
-
-          {viewMode === "TREE" && (
-            <section className="panel">
-              <PanelHead
-                title="Tree Investment View"
-                text="Each tree shows cost, estimated value, profit/loss, and ROI."
-              />
-
-              {treeInvestments.length === 0 ? (
-                <div className="empty small">No trees found yet.</div>
-              ) : (
-                <div className="investmentList">
-                  {treeInvestments.map((item) => (
-                    <InvestmentRow key={item.id} item={item} />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          {viewMode === "GROUP" && (
-            <section className="panel">
-              <PanelHead
-                title="Group Investment View"
-                text="Grouped by tree_group_name from My Trees."
-              />
-
-              {groupInvestments.length === 0 ? (
-                <div className="empty small">No groups found yet.</div>
-              ) : (
-                <div className="investmentList">
-                  {groupInvestments.map((item) => (
-                    <GroupRow key={item.name} item={item} />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          {viewMode === "PACKAGE" && (
-            <section className="panel">
-              <PanelHead
-                title="Package Investment View"
-                text="Grouped by package_name from Marketplace package purchases."
-              />
-
-              {packageInvestments.length === 0 ? (
-                <div className="empty small">No package records found yet.</div>
-              ) : (
-                <div className="investmentList">
-                  {packageInvestments.map((item) => (
-                    <GroupRow key={item.name} item={item} />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          {viewMode === "LEDGER" && (
-            <section className="panel">
-              <PanelHead
-                title="Investment Ledger"
-                text="Wallet transaction records related to tree investment activity."
-              />
-
-              {investmentTransactions.length === 0 ? (
-                <div className="empty small">No investment ledger records yet.</div>
-              ) : (
-                <div className="ledger">
-                  {investmentTransactions.slice(0, 30).map((item) => (
-                    <div className="ledgerRow" key={item.id}>
-                      <div>
-                        <strong>{cleanType(item.transaction_type)}</strong>
-                        <p>{item.description || "Investment transaction"}</p>
-                        <small>{formatDate(item.created_at)}</small>
-                      </div>
-
-                      <div className="ledgerRight">
-                        <span className={`status ${statusClass(item.status)}`}>
-                          {item.status || "COMPLETED"}
-                        </span>
-                        <b>{peso(Number(item.amount || 0))}</b>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          <section className="panel salePanel">
-            <PanelHead
-              title="Sell Request Watch"
-              text="Sale requests are shown for investment visibility. Wallet is credited only after admin approval."
-            />
-
-            {sellRequests.length === 0 ? (
-              <div className="empty small">No sell tree requests yet.</div>
             ) : (
-              <div className="ledger">
-                {sellRequests.map((item) => {
-                  const tree = trees.find(
-                    (row) => row.id === item.tree_id || row.tree_code === item.tree_id
-                  );
+              <div className="requirementGrid">
+                {requirementSummary.map((item) => (
+                  <div
+                    className={`requirement ${
+                      item.monthlyReady ? "good" : item.weeklyReady ? "warning" : "danger"
+                    }`}
+                    key={item.category}
+                  >
+                    <strong>{item.category}</strong>
 
-                  const expectedNet = Number(
-                    item.net_receive ||
-                      item.expected_amount ||
-                      item.selling_price ||
-                      item.tree_value ||
-                      0
-                  );
+                    <div className="requirementRows">
+                      <span>Available</span>
+                      <b>
+                        {numberText(item.available)} {item.unit}
+                      </b>
+                    </div>
+
+                    <div className="requirementRows">
+                      <span>Need 1 Week</span>
+                      <b>
+                        {numberText(item.weeklyNeed)} {item.unit}
+                      </b>
+                    </div>
+
+                    <div className="requirementRows">
+                      <span>Need 1 Month</span>
+                      <b>
+                        {numberText(item.monthlyNeed)} {item.unit}
+                      </b>
+                    </div>
+
+                    <em>
+                      {item.monthlyReady
+                        ? "Ready for monthly care"
+                        : item.weeklyReady
+                        ? "Ready weekly only"
+                        : "Low supply"}
+                    </em>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="filters">
+            <button className={viewMode === "ALL" ? "active" : ""} onClick={() => setViewMode("ALL")}>
+              All Supplies
+            </button>
+            <button className={viewMode === "READY" ? "active" : ""} onClick={() => setViewMode("READY")}>
+              Ready
+            </button>
+            <button className={viewMode === "LOW" ? "active" : ""} onClick={() => setViewMode("LOW")}>
+              Low Supply
+            </button>
+            <button className={viewMode === "NOT_READY" ? "active" : ""} onClick={() => setViewMode("NOT_READY")}>
+              Not Ready
+            </button>
+          </section>
+
+          <section className="panel">
+            <div className="panelHead">
+              <div>
+                <h2>Inventory Records</h2>
+                <p>
+                  Supplies only. No wallet, no ROI, and no investment logic here.
+                </p>
+              </div>
+              <button onClick={loadInventory}>Refresh</button>
+            </div>
+
+            {items.length === 0 ? (
+              <div className="empty small">
+                No inventory records yet. Buy supplies from Marketplace first.
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div className="empty small">No supplies found for this filter.</div>
+            ) : (
+              <div className="list">
+                {filteredItems.map((item) => {
+                  const remaining = Number(item.remaining_qty || 0);
+                  const starting = Number(item.starting_qty || 0);
+                  const low = Number(item.low_stock_level || 0);
+                  const weeklyNeed = weeklyNeedForItem(item);
+                  const oneMonthNeed = weeklyNeed * 4;
+                  const weeks = weeksRemaining(item);
+                  const info = statusInfo(item);
+                  const progress =
+                    starting > 0 ? Math.max(0, Math.min(100, (remaining / starting) * 100)) : 0;
+
+                  const supportedTrees =
+                    weeklyNeed > 0 && activeTreeCount > 0
+                      ? Math.floor(remaining / (weeklyNeed / activeTreeCount))
+                      : 0;
 
                   return (
-                    <div className="ledgerRow" key={item.id}>
-                      <div>
-                        <strong>{tree?.tree_code || item.tree_id || "Tree Request"}</strong>
-                        <p>Expected Net: {peso(expectedNet)}</p>
-                        <small>{formatDate(item.created_at)}</small>
+                    <div className={`row ${info.level}`} key={item.id}>
+                      <div className="left">
+                        <div className="titleLine">
+                          <strong>{item.item_name || "Inventory Item"}</strong>
+                          <span className={`pill ${info.level}`}>{info.label}</span>
+                        </div>
+
+                        <p>
+                          {item.category || "Uncategorized"} • {item.status || "AVAILABLE"}
+                        </p>
+
+                        <div className="progressTrack">
+                          <i style={{ width: `${progress}%` }} />
+                        </div>
+
+                        <div className="metaGrid">
+                          <small>
+                            Starting: {numberText(starting)} {item.unit || "unit"}
+                          </small>
+                          <small>
+                            Low Level: {numberText(low)} {item.unit || "unit"}
+                          </small>
+                          <small>
+                            Need 1 Week: {numberText(weeklyNeed)} {item.unit || "unit"}
+                          </small>
+                          <small>
+                            Need 1 Month: {numberText(oneMonthNeed)} {item.unit || "unit"}
+                          </small>
+                          <small>
+                            Can Support: {activeTreeCount <= 0 ? "No trees" : `${supportedTrees} tree(s) weekly`}
+                          </small>
+                        </div>
                       </div>
 
-                      <div className="ledgerRight">
-                        <span className={`status ${statusClass(item.status)}`}>
-                          {item.status || "PENDING"}
+                      <div className="qty">
+                        <b>
+                          {numberText(remaining)} {item.unit || "unit"}
+                        </b>
+
+                        <span>
+                          {activeTreeCount <= 0
+                            ? "No trees yet"
+                            : weeks >= 999
+                            ? "No care formula"
+                            : `${weeks.toFixed(1)} week${weeks >= 2 ? "s" : ""} left`}
                         </span>
                       </div>
                     </div>
@@ -418,6 +522,22 @@ export default function InvestmentsPage() {
                 })}
               </div>
             )}
+          </section>
+
+          <section className="guide">
+            <h2>Care Supply Formula</h2>
+            <p>
+              Inventory is the supply checker only. Tree Operations / My Trees should
+              block care subscription when these supplies are not enough.
+            </p>
+
+            <div className="formulaGrid">
+              <Formula label="Fertilizer" value="1 unit / tree / week" />
+              <Formula label="Fungicide" value="0.5 unit / tree / week" />
+              <Formula label="Insecticide" value="0.25 unit / tree / week" />
+              <Formula label="Nutrients" value="0.5 unit / tree / week" />
+              <Formula label="Soil Conditioner" value="0.5 unit / tree / week" />
+            </div>
           </section>
         </>
       )}
@@ -456,21 +576,21 @@ export default function InvestmentsPage() {
         .hero h1 {
           margin: 0;
           font-size: 44px;
-          letter-spacing: -1.6px;
           color: #101a14;
+          letter-spacing: -1.6px;
         }
 
         .hero span {
           display: block;
           margin-top: 8px;
           color: #5f665e;
-          font-size: 15px;
-          max-width: 850px;
+          max-width: 820px;
           line-height: 1.6;
         }
 
-        .walletCard {
-          min-width: 280px;
+        .heroCard,
+        .subscriptionCard {
+          min-width: 260px;
           border-radius: 28px;
           padding: 22px;
           color: white;
@@ -480,7 +600,8 @@ export default function InvestmentsPage() {
           box-shadow: 0 24px 56px rgba(36,69,54,.24);
         }
 
-        .walletCard p {
+        .heroCard p,
+        .subscriptionCard p {
           margin: 0;
           color: rgba(255,255,255,.72);
           font-weight: 900;
@@ -489,21 +610,73 @@ export default function InvestmentsPage() {
           font-size: 12px;
         }
 
-        .walletCard strong {
+        .heroCard strong,
+        .subscriptionCard h2 {
           display: block;
-          margin-top: 10px;
-          font-size: 30px;
+          margin: 10px 0 0;
+          font-size: 36px;
         }
 
-        .walletCard small {
+        .heroCard small,
+        .subscriptionCard span {
+          display: block;
           color: rgba(255,255,255,.72);
           font-weight: 900;
+          margin-top: 6px;
+        }
+
+        .subscriptionCard {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .subscriptionCard.good {
+          background: linear-gradient(135deg, #244536, #10281f);
+        }
+
+        .subscriptionCard.warning {
+          background: linear-gradient(135deg, #8c6a3c, #5d4323);
+        }
+
+        .subscriptionCard.danger {
+          background: linear-gradient(135deg, #7a2c20, #3b1511);
+        }
+
+        .subscriptionCard.neutral {
+          background: linear-gradient(135deg, #6b6b62, #33332f);
+        }
+
+        .subscriptionActions {
+          display: grid;
+          gap: 10px;
+          min-width: 210px;
+        }
+
+        .subscriptionActions button {
+          border: 0;
+          border-radius: 999px;
+          padding: 12px 16px;
+          background: #fffdf6;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .subscriptionActions .ghost {
+          background: rgba(255,255,255,.15);
+          color: white;
         }
 
         .message,
         .empty,
-        .stat,
-        .panel {
+        .card,
+        .panel,
+        .guide,
+        .filters,
+        .requirementPanel {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
@@ -513,9 +686,9 @@ export default function InvestmentsPage() {
         .message,
         .empty {
           padding: 20px;
+          margin-bottom: 18px;
           color: #31553d;
           font-weight: 900;
-          margin-bottom: 18px;
         }
 
         .small {
@@ -526,16 +699,16 @@ export default function InvestmentsPage() {
 
         .stats {
           display: grid;
-          grid-template-columns: repeat(5, 1fr);
+          grid-template-columns: repeat(4, 1fr);
           gap: 16px;
           margin-bottom: 18px;
         }
 
-        .stat {
-          padding: 22px;
+        .card {
+          padding: 24px;
         }
 
-        .stat p {
+        .card p {
           margin: 0;
           color: #6b6b62;
           font-size: 12px;
@@ -544,253 +717,312 @@ export default function InvestmentsPage() {
           letter-spacing: .12em;
         }
 
-        .stat h3 {
+        .card h3 {
           margin: 10px 0 0;
           color: #244536;
-          font-size: 26px;
+          font-size: 32px;
         }
 
-        .stat.good h3 {
-          color: #176b3a;
+        .card.warning h3 {
+          color: #8c6a3c;
         }
 
-        .summaryGrid {
-          display: grid;
-          grid-template-columns: 1.2fr .8fr;
-          gap: 16px;
+        .card.danger h3 {
+          color: #a33c2a;
+        }
+
+        .requirementPanel,
+        .panel,
+        .guide {
+          padding: 24px;
           margin-bottom: 18px;
         }
 
-        .panel {
-          padding: 22px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-          font-size: 24px;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          line-height: 1.5;
-          font-size: 14px;
-        }
-
-        .moneyGrid {
+        .requirementGrid {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(5, 1fr);
           gap: 12px;
           margin-top: 18px;
         }
 
-        .mini {
-          border-radius: 18px;
-          background: #f3ead8;
-          padding: 15px;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .mini span {
-          display: block;
-          color: #6b6b62;
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .1em;
-        }
-
-        .mini strong {
-          display: block;
-          margin-top: 8px;
-          color: #101a14;
-          font-size: 17px;
-        }
-
-        .roiBox {
-          margin-top: 18px;
-          border-radius: 24px;
-          padding: 22px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .roiBox p {
-          margin: 0;
-          color: rgba(255,255,255,.72);
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .roiBox strong {
-          display: block;
-          margin-top: 10px;
-          font-size: 40px;
-        }
-
-        .roiTrack {
-          height: 10px;
-          border-radius: 999px;
-          background: rgba(255,255,255,.12);
-          margin: 18px 0 12px;
-          overflow: hidden;
-        }
-
-        .roiTrack i {
-          display: block;
-          height: 100%;
-          border-radius: 999px;
-          background: linear-gradient(135deg, #d6b25e, #fff3bc);
-        }
-
-        .roiBox small {
-          color: rgba(255,255,255,.70);
-          font-weight: 900;
-        }
-
-        .tabs {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 12px;
-          margin-bottom: 18px;
-        }
-
-        .tabs button {
-          border: 0;
-          border-radius: 18px;
-          padding: 15px;
-          background: rgba(255,253,246,.88);
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
-          box-shadow: 0 12px 28px rgba(82,60,27,.08);
-        }
-
-        .tabs button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .investmentList,
-        .ledger {
-          display: grid;
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .investmentRow,
-        .ledgerRow {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 18px;
-          align-items: center;
+        .requirement {
           border-radius: 20px;
           padding: 16px;
           background: #f3ead8;
           border: 1px solid rgba(92,70,35,.08);
         }
 
-        .investmentRow strong,
-        .ledgerRow strong {
+        .requirement.good {
+          border-color: rgba(49,85,61,.18);
+        }
+
+        .requirement.warning {
+          border-color: rgba(214,178,94,.45);
+        }
+
+        .requirement.danger {
+          border-color: rgba(163,60,42,.30);
+        }
+
+        .requirement strong {
+          display: block;
+          color: #101a14;
+          font-size: 16px;
+          margin-bottom: 10px;
+        }
+
+        .requirementRows {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 8px 0;
+          border-bottom: 1px solid rgba(92,70,35,.08);
+          color: #6b6b62;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .requirementRows:last-of-type {
+          border-bottom: 0;
+        }
+
+        .requirementRows b {
+          color: #244536;
+          text-align: right;
+        }
+
+        .requirement em {
+          display: inline-flex;
+          margin-top: 12px;
+          border-radius: 999px;
+          padding: 8px 10px;
+          background: rgba(49,85,61,.12);
+          color: #31553d;
+          font-style: normal;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .requirement.warning em {
+          background: rgba(214,178,94,.20);
+          color: #8c6a3c;
+        }
+
+        .requirement.danger em {
+          background: rgba(163,60,42,.12);
+          color: #a33c2a;
+        }
+
+        .filters {
+          padding: 12px;
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 10px;
+          margin-bottom: 18px;
+        }
+
+        .filters button {
+          border: 0;
+          border-radius: 999px;
+          padding: 13px 14px;
+          background: #f3ead8;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .filters button.active {
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+        }
+
+        .panelHead {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .panelHead h2,
+        .guide h2 {
+          margin: 0;
+          color: #101a14;
+        }
+
+        .panelHead p,
+        .guide p {
+          margin: 6px 0 0;
+          color: #6b6b62;
+          line-height: 1.6;
+          font-weight: 800;
+        }
+
+        .panelHead button {
+          border: 0;
+          border-radius: 999px;
+          padding: 12px 18px;
+          background: #244536;
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .list {
+          display: grid;
+          gap: 12px;
+        }
+
+        .row {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 16px;
+          align-items: center;
+          border-radius: 22px;
+          background: #f3ead8;
+          border: 1px solid rgba(92,70,35,.08);
+          padding: 18px;
+        }
+
+        .row.good {
+          border-color: rgba(49,85,61,.14);
+        }
+
+        .row.warning {
+          border-color: rgba(214,178,94,.42);
+        }
+
+        .row.danger {
+          border-color: rgba(163,60,42,.28);
+        }
+
+        .titleLine {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .row strong {
           color: #101a14;
           font-size: 17px;
         }
 
-        .investmentRow p,
-        .ledgerRow p {
-          margin: 6px 0 0;
+        .row p {
+          margin: 7px 0 0;
           color: #6b6b62;
           font-size: 13px;
           font-weight: 800;
         }
 
-        .investmentRow small,
-        .ledgerRow small {
-          display: block;
-          margin-top: 6px;
-          color: #8c6a3c;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .numbers {
-          display: grid;
-          justify-items: end;
-          gap: 6px;
-          min-width: 280px;
-        }
-
-        .numbers span {
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .numbers b {
-          font-size: 17px;
-        }
-
-        .positive {
-          color: #176b3a;
-        }
-
-        .negative {
-          color: #a33c2a;
-        }
-
-        .ledgerRight {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-        }
-
-        .ledgerRight b {
-          color: #244536;
-        }
-
-        .status {
-          display: inline-flex;
-          justify-content: center;
-          min-width: 92px;
+        .pill {
           border-radius: 999px;
-          padding: 8px 10px;
+          padding: 7px 10px;
           font-size: 11px;
           font-weight: 900;
         }
 
-        .status.pending {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-        }
-
-        .status.approved,
-        .status.completed {
+        .pill.good {
           background: rgba(49,85,61,.12);
           color: #31553d;
         }
 
-        .status.rejected,
-        .status.failed {
+        .pill.warning {
+          background: rgba(214,178,94,.20);
+          color: #8c6a3c;
+        }
+
+        .pill.danger {
           background: rgba(163,60,42,.12);
           color: #a33c2a;
         }
 
-        .salePanel {
-          margin-top: 18px;
+        .progressTrack {
+          height: 10px;
+          border-radius: 999px;
+          background: rgba(92,70,35,.10);
+          overflow: hidden;
+          margin-top: 13px;
         }
 
-        @media (max-width: 1200px) {
-          .stats,
-          .moneyGrid {
-            grid-template-columns: repeat(2, 1fr);
-          }
+        .progressTrack i {
+          display: block;
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #244536, #d6b25e);
+        }
 
-          .summaryGrid {
-            grid-template-columns: 1fr;
+        .metaGrid {
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        .metaGrid small {
+          color: #8c6a3c;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .qty {
+          display: grid;
+          justify-items: end;
+          gap: 8px;
+          min-width: 190px;
+        }
+
+        .qty b {
+          color: #244536;
+          font-size: 20px;
+          text-align: right;
+        }
+
+        .qty span {
+          border-radius: 999px;
+          padding: 8px 10px;
+          background: rgba(49,85,61,.12);
+          color: #31553d;
+          font-size: 11px;
+          font-weight: 900;
+          text-align: right;
+        }
+
+        .formulaGrid {
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        .formula {
+          border-radius: 18px;
+          background: #f3ead8;
+          padding: 15px;
+        }
+
+        .formula span {
+          display: block;
+          color: #6b6b62;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .1em;
+        }
+
+        .formula strong {
+          display: block;
+          margin-top: 8px;
+          color: #101a14;
+        }
+
+        @media (max-width: 1100px) {
+          .stats,
+          .filters,
+          .requirementGrid,
+          .metaGrid,
+          .formulaGrid {
+            grid-template-columns: repeat(2, 1fr);
           }
         }
 
@@ -799,30 +1031,34 @@ export default function InvestmentsPage() {
             padding: 18px;
           }
 
-          .hero {
-            flex-direction: column;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .walletCard {
-            min-width: 100%;
-          }
-
+          .hero,
+          .subscriptionCard,
+          .row,
           .stats,
-          .moneyGrid,
-          .tabs,
-          .investmentRow,
-          .ledgerRow {
+          .filters,
+          .requirementGrid,
+          .metaGrid,
+          .formulaGrid {
+            display: grid;
             grid-template-columns: 1fr;
           }
 
-          .numbers,
-          .ledgerRight {
-            justify-items: start;
+          .hero h1 {
+            font-size: 36px;
+          }
+
+          .heroCard,
+          .subscriptionActions {
             min-width: 0;
+          }
+
+          .qty {
+            justify-items: start;
+          }
+
+          .qty b,
+          .qty span {
+            text-align: left;
           }
         }
       `}</style>
@@ -830,213 +1066,30 @@ export default function InvestmentsPage() {
   );
 }
 
-function InvestmentRow({ item }: { item: ReturnType<typeof buildTreeInvestment> }) {
+function Card({
+  label,
+  value,
+  warning,
+  danger,
+}: {
+  label: string;
+  value: string;
+  warning?: boolean;
+  danger?: boolean;
+}) {
   return (
-    <div className="investmentRow">
-      <div>
-        <strong>{item.code}</strong>
-        <p>{item.name}</p>
-        <small>{item.groupName} • {item.packageName}</small>
-      </div>
-
-      <div className="numbers">
-        <span>Purchase: {peso(item.purchasePrice)}</span>
-        <span>Care: {peso(item.careCost)} • Verification: {peso(item.verificationCost)}</span>
-        <span>Total Spent: {peso(item.totalSpent)}</span>
-        <span>Current Value: {peso(item.currentValue)}</span>
-        <b className={item.profit >= 0 ? "positive" : "negative"}>
-          {item.profit >= 0 ? "+" : ""}
-          {peso(item.profit)} / {item.roi.toFixed(2)}%
-        </b>
-      </div>
-    </div>
-  );
-}
-
-function GroupRow({ item }: { item: ReturnType<typeof buildGroupedInvestments>[number] }) {
-  return (
-    <div className="investmentRow">
-      <div>
-        <strong>{item.name}</strong>
-        <p>
-          {item.treeCount} tree{item.treeCount === 1 ? "" : "s"}
-        </p>
-        <small>Total current value: {peso(item.currentValue)}</small>
-      </div>
-
-      <div className="numbers">
-        <span>Purchase: {peso(item.purchaseCapital)}</span>
-        <span>Care: {peso(item.careCosts)} • Verification: {peso(item.verificationCosts)}</span>
-        <span>Total Spent: {peso(item.totalSpent)}</span>
-        <span>Current Value: {peso(item.currentValue)}</span>
-        <b className={item.profit >= 0 ? "positive" : "negative"}>
-          {item.profit >= 0 ? "+" : ""}
-          {peso(item.profit)} / {item.roi.toFixed(2)}%
-        </b>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div className={`stat ${good ? "good" : ""}`}>
+    <div className={`card ${warning ? "warning" : ""} ${danger ? "danger" : ""}`}>
       <p>{label}</p>
       <h3>{value}</h3>
     </div>
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function Formula({ label, value }: { label: string; value: string }) {
   return (
-    <div className="mini">
+    <div className="formula">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
-}
-
-function PanelHead({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="panelHead">
-      <h2>{title}</h2>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function buildTreeInvestment(tree: TreeRow) {
-  const purchasePrice = getPurchasePrice(tree);
-  const careCost = getCareCost(tree);
-  const verificationCost = getVerificationCost(tree);
-  const totalSpent = purchasePrice + careCost + verificationCost;
-  const currentValue = getEstimatedValue(tree);
-  const profit = currentValue - totalSpent;
-  const roi = totalSpent > 0 ? (profit / totalSpent) * 100 : 0;
-
-  return {
-    id: tree.id,
-    code: tree.tree_code || tree.code || tree.id,
-    name: tree.custom_name || tree.display_name || tree.name || "Agarwood Tree",
-    groupName: tree.tree_group_name || "Ungrouped Trees",
-    packageName: tree.package_name || "No Package",
-    purchasePrice,
-    careCost,
-    verificationCost,
-    totalSpent,
-    currentValue,
-    profit,
-    roi,
-  };
-}
-
-function buildGroupedInvestments(trees: TreeRow[], mode: "GROUP" | "PACKAGE") {
-  const map: Record<string, TreeRow[]> = {};
-
-  trees.forEach((tree) => {
-    const key =
-      mode === "GROUP"
-        ? tree.tree_group_name || "Ungrouped Trees"
-        : tree.package_name || "No Package";
-
-    if (!map[key]) map[key] = [];
-    map[key].push(tree);
-  });
-
-  return Object.entries(map).map(([name, groupTrees]) => {
-    const purchaseCapital = groupTrees.reduce((sum, tree) => sum + getPurchasePrice(tree), 0);
-    const careCosts = groupTrees.reduce((sum, tree) => sum + getCareCost(tree), 0);
-    const verificationCosts = groupTrees.reduce((sum, tree) => sum + getVerificationCost(tree), 0);
-    const totalSpent = purchaseCapital + careCosts + verificationCosts;
-    const currentValue = groupTrees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
-    const profit = currentValue - totalSpent;
-    const roi = totalSpent > 0 ? (profit / totalSpent) * 100 : 0;
-
-    return {
-      name,
-      treeCount: groupTrees.length,
-      purchaseCapital,
-      careCosts,
-      verificationCosts,
-      totalSpent,
-      currentValue,
-      profit,
-      roi,
-    };
-  });
-}
-
-function isSold(tree: TreeRow) {
-  const ownership = String(tree.ownership_status || "").toUpperCase();
-  const availability = String(tree.availability_status || "").toUpperCase();
-
-  return ownership === "SOLD" || availability === "SOLD";
-}
-
-function getPurchasePrice(tree: TreeRow) {
-  return Number(
-    tree.purchase_price ||
-      tree.buy_price ||
-      tree.tree_price ||
-      tree.price ||
-      tree.investment_amount ||
-      0
-  );
-}
-
-function getCareCost(tree: TreeRow) {
-  return Number(
-    tree.care_cost ||
-      tree.operation_cost ||
-      tree.operations_cost ||
-      tree.total_operation_cost ||
-      0
-  );
-}
-
-function getVerificationCost(tree: TreeRow) {
-  return Number(
-    tree.verification_cost ||
-      tree.gps_photo_cost ||
-      tree.photo_fee_total ||
-      tree.gps_fee_total ||
-      tree.gps_fee ||
-      tree.photo_fee ||
-      0
-  );
-}
-
-function getEstimatedValue(tree: TreeRow) {
-  return Number(
-    tree.estimated_value ||
-      tree.current_value ||
-      tree.market_value ||
-      tree.selling_price ||
-      0
-  );
-}
-
-function cleanType(value: string | null) {
-  return String(value || "TRANSACTION").replaceAll("_", " ");
-}
-
-function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase().replaceAll(" ", "_");
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 }
