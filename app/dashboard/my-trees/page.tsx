@@ -1,12 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type TreeRow = Record<string, any>;
 type SellRequest = Record<string, any>;
-type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME" | "CARE";
+type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME";
 
 const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
 
@@ -48,13 +47,13 @@ export default function MyTreesPage() {
     const { data: profileByEmail } = await supabase
       .from("profiles")
       .select("id, email, full_name, membership_status, kyc_status")
-      .eq("email", email)
+      .eq("email", user.email || "")
       .maybeSingle();
 
     const { data: profileByEmailLower } = await supabase
       .from("profiles")
       .select("id, email, full_name, membership_status, kyc_status")
-      .eq("email", email.toLowerCase())
+      .eq("email", email)
       .maybeSingle();
 
     const { data: profileByEmailLike } = await supabase
@@ -112,13 +111,11 @@ export default function MyTreesPage() {
 
   const stats = useMemo(() => {
     const owned = trees.length;
-    const protectedTrees = trees.filter((tree) => getCareStatus(tree).type === "PROTECTED").length;
-    const needsCare = trees.filter((tree) => getCareStatus(tree).type === "NONE").length;
-    const estimatedValue = trees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
     const totalSpent = trees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
+    const estimatedValue = trees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
     const profit = estimatedValue - totalSpent;
 
-    return { owned, protectedTrees, needsCare, totalSpent, estimatedValue, profit };
+    return { owned, totalSpent, estimatedValue, profit };
   }, [trees]);
 
   const filteredTrees = useMemo(() => {
@@ -127,17 +124,11 @@ export default function MyTreesPage() {
     return trees.filter((tree) => {
       const stage = String(tree.stage || tree.growth_stage || "").toLowerCase();
       const code = String(tree.tree_code || tree.code || tree.id || "").toLowerCase();
-      const name = String(tree.custom_name || tree.display_name || tree.tree_code || tree.code || "").toLowerCase();
+      const name = String(tree.custom_name || tree.name || "").toLowerCase();
       const group = String(tree.tree_group_name || "Ungrouped Trees").toLowerCase();
-      const care = getCareStatus(tree).label.toLowerCase();
 
       const matchesSearch =
-        !q ||
-        code.includes(q) ||
-        name.includes(q) ||
-        group.includes(q) ||
-        stage.includes(q) ||
-        care.includes(q);
+        !q || code.includes(q) || name.includes(q) || group.includes(q) || stage.includes(q);
 
       const matchesStage =
         stageFilter === "ALL" ||
@@ -161,9 +152,8 @@ export default function MyTreesPage() {
       const totalSpent = groupTrees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
       const estimatedValue = groupTrees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
       const profit = estimatedValue - totalSpent;
-      const protectedCount = groupTrees.filter((tree) => getCareStatus(tree).type === "PROTECTED").length;
 
-      return { name, trees: groupTrees, totalSpent, estimatedValue, profit, protectedCount };
+      return { name, trees: groupTrees, totalSpent, estimatedValue, profit };
     });
   }, [filteredTrees]);
 
@@ -172,23 +162,14 @@ export default function MyTreesPage() {
     : { totalSpent: 0, estimatedValue: 0, profit: 0, roi: 0 };
 
   const selectedQrUrl = selectedTree
-    ? selectedTree.tree_qr_url || selectedTree.tree_verification_url || ""
+    ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
     : "";
-
-  const selectedCare = selectedTree
-    ? getCareStatus(selectedTree)
-    : { type: "NONE", label: "No Active Care Program", description: "Not enrolled", className: "none" };
 
   function openPanel(panel: PanelType) {
     if (!selectedTree) return;
 
     if (panel === "RENAME") {
-      setRenameValue(
-        selectedTree.custom_name ||
-          selectedTree.display_name ||
-          
-          "Agarwood Tree"
-      );
+      setRenameValue(selectedTree.custom_name || selectedTree.name || "Agarwood Tree");
     }
 
     setActivePanel(panel);
@@ -221,27 +202,29 @@ export default function MyTreesPage() {
     await loadTrees();
   }
 
-  function goToCarePrograms() {
-    window.location.href = "/dashboard/tree-operations";
+  function goToSellTree() {
+    if (!selectedTree) return;
+
+    const params = new URLSearchParams();
+    params.set("tree_id", String(selectedTree.id || ""));
+
+    if (selectedTree.tree_code) {
+      params.set("tree_code", String(selectedTree.tree_code));
+    }
+
+    window.location.href = `/dashboard/sell-tree?${params.toString()}`;
   }
 
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Asset Portfolio</p>
+          <p className="eyebrow">Agarwood Portfolio</p>
           <h1>My Trees</h1>
           <span>
-            Monitor your owned agarwood assets, protection status, care program,
-            projected value, QR identity, GPS verification, and sell readiness.
+            Search, group, rename, verify QR identity, track care program sync,
+            spending, and profit/loss before selling your agarwood trees.
           </span>
-        </div>
-
-        <div className="heroActions">
-          <Link href="/dashboard/marketplace">Buy More Trees</Link>
-          <Link className="primary" href="/dashboard/tree-operations">
-            Manage Care
-          </Link>
         </div>
       </section>
 
@@ -257,32 +240,19 @@ export default function MyTreesPage() {
         <>
           <section className="stats">
             <Stat label="Owned Trees" value={String(stats.owned)} />
-            <Stat label="Protected Trees" value={String(stats.protectedTrees)} good />
-            <Stat label="Needs Care" value={String(stats.needsCare)} warning={stats.needsCare > 0} />
+            <Stat label="Total Spent" value={peso(stats.totalSpent)} />
+            <Stat label="Estimated Value" value={peso(stats.estimatedValue)} />
             <Stat label="Projected Profit" value={peso(stats.profit)} good={stats.profit >= 0} />
           </section>
-
-          {stats.needsCare > 0 && (
-            <section className="careAlert">
-              <div>
-                <strong>Protect your agarwood investment</strong>
-                <p>
-                  {stats.needsCare} tree{stats.needsCare === 1 ? "" : "s"} do not have an active
-                  care program. Subscribe to a care program to keep monitoring and treatment organized.
-                </p>
-              </div>
-              <button onClick={goToCarePrograms}>Protect Trees Now</button>
-            </section>
-          )}
 
           <section className="layout">
             <aside className="treeList">
               <div className="searchBox">
-                <label>Search Portfolio</label>
+                <label>Search Trees</label>
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Tree code, name, group, stage, care status..."
+                  placeholder="Tree code, name, group, stage..."
                 />
               </div>
 
@@ -320,7 +290,6 @@ export default function MyTreesPage() {
                   ) : (
                     filteredTrees.map((tree) => {
                       const math = getTreeMath(tree);
-                      const care = getCareStatus(tree);
                       const active = selectedTree?.id === tree.id;
 
                       return (
@@ -331,9 +300,8 @@ export default function MyTreesPage() {
                         >
                           <div>
                             <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                            <p>{tree.custom_name || tree.display_name ||  "Agarwood Tree"}</p>
+                            <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
                             <small>{tree.tree_group_name || "Ungrouped Trees"}</small>
-                            <em className={`carePill ${care.className}`}>{care.label}</em>
                           </div>
                           <span className={math.profit >= 0 ? "gain" : "loss"}>
                             {peso(math.profit)}
@@ -357,7 +325,7 @@ export default function MyTreesPage() {
                         <div>
                           <strong>{group.name}</strong>
                           <p>{group.trees.length} tree{group.trees.length === 1 ? "" : "s"}</p>
-                          <small>{group.protectedCount} protected • Value {peso(group.estimatedValue)}</small>
+                          <small>Value: {peso(group.estimatedValue)}</small>
                         </div>
                         <span className={group.profit >= 0 ? "gain" : "loss"}>
                           {peso(group.profit)}
@@ -374,24 +342,25 @@ export default function MyTreesPage() {
                 <div className="detailTop">
                   <div>
                     <p className="eyebrow">Tree Asset</p>
-                    <h2>{selectedTree.custom_name || selectedTree.display_name ||  "Agarwood Tree"}</h2>
+                    <h2>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</h2>
                     <span>{selectedTree.tree_code || selectedTree.code || selectedTree.id}</span>
                     <p className="groupName">{selectedTree.tree_group_name || "Ungrouped Trees"}</p>
                   </div>
 
-                  <div className={`protectionBox ${selectedCare.className}`}>
-                    <strong>{selectedCare.label}</strong>
-                    <p>{selectedCare.description}</p>
-                    <button onClick={() => openPanel("CARE")}>
-                      {selectedCare.type === "PROTECTED" ? "View Care" : "Protect Tree"}
-                    </button>
+                  <div className="identityBox">
+                    <strong>Tree Identity</strong>
+                    <p>{selectedTree.tree_code || selectedTree.id}</p>
+                    <div className="identityActions">
+                      <button onClick={() => openPanel("RENAME")}>Rename</button>
+                      <button onClick={() => openPanel("QR")}>View QR</button>
+                    </div>
                   </div>
                 </div>
 
                 <section className="growth">
                   <div className="panelHead">
                     <div>
-                      <h3>Growth Journey</h3>
+                      <h3>Growth Guide</h3>
                       <p>Current stage is based on the tree record from Supabase.</p>
                     </div>
                   </div>
@@ -423,42 +392,28 @@ export default function MyTreesPage() {
                   <Mini label="Stage" value={selectedTree.stage || selectedTree.growth_stage || "—"} />
                   <Mini label="Age" value={getAgeText(selectedTree)} />
                   <Mini label="GPS Status" value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"} />
-                  <Mini label="Care Program" value={getCareProgramName(selectedTree)} />
-                  <Mini label="Auto Renew" value={getAutoRenewText(selectedTree)} />
-                  <Mini label="Next Renewal" value={formatDate(selectedTree.next_renewal_date || selectedTree.care_program_next_renewal)} />
-                </section>
-
-                <section className={`carePanel ${selectedCare.className}`}>
-                  <div>
-                    <strong>{selectedCare.type === "PROTECTED" ? "Active Care Protection" : "Care Protection Needed"}</strong>
-                    <p>
-                      {selectedCare.type === "PROTECTED"
-                        ? "This tree is enrolled in a care program. Keep auto-renew active to avoid coverage gaps."
-                        : "This tree has no active care program. Protect it with weekly or monthly care from Tree Operations."}
-                    </p>
-                  </div>
-
-                  <div className="carePanelActions">
-                    <Link href="/dashboard/tree-operations">
-                      {selectedCare.type === "PROTECTED" ? "Manage Care Program" : "Protect This Tree"}
-                    </Link>
-                    <Link className="secondary" href="/dashboard/marketplace">
-                      Buy Supplies
-                    </Link>
-                  </div>
+                  <Mini label="Care Plan" value={selectedTree.care_plan || selectedTree.carePlan || "Not Enrolled"} />
+                  <Mini label="Program Status" value={selectedTree.care_program_status || "NOT_ENROLLED"} />
+                  <Mini label="Coverage" value={selectedTree.care_program_coverage || "No active coverage"} />
+                  <Mini label="Next Renewal" value={formatDate(selectedTree.care_program_next_renewal)} />
+                  <Mini label="Auto Renew" value={selectedTree.auto_renew_enabled ? "ON - Display Only" : "OFF"} />
+                  <Mini label="Program Cost" value={peso(Number(selectedTree.care_program_price || 0))} />
+                  <Mini label="Valuation" value={selectedTree.valuation_status || "Awaiting Valuation"} />
+                  <Mini label="Availability" value={selectedTree.availability_status || "Owned"} />
                 </section>
 
                 <section className="moneyBox">
                   <div className="panelHead">
                     <div>
-                      <h3>Investment Tracker</h3>
+                      <h3>Tree Cost Tracker</h3>
                       <p>Shows if this tree is currently projected as profit or loss.</p>
                     </div>
                   </div>
 
                   <div className="moneyGrid">
                     <Money label="Purchase Price" value={getPurchasePrice(selectedTree)} />
-                    <Money label="Operations / Care Cost" value={getOperationCost(selectedTree)} />
+                    <Money label="Operation Cost" value={getOperationCost(selectedTree)} />
+                    <Money label="Care Program Cost" value={getCareProgramCost(selectedTree)} />
                     <Money label="GPS / Photo Fees" value={getVerificationCost(selectedTree)} />
                     <Money label="Total Spent" value={selectedMath.totalSpent} strong />
                     <Money label="Estimated Sell Value" value={selectedMath.estimatedValue} />
@@ -470,12 +425,10 @@ export default function MyTreesPage() {
                 <section className="actions">
                   <button onClick={() => openPanel("PHOTOS")}>View Photos</button>
                   <button onClick={() => openPanel("GPS")}>View GPS</button>
-                  <button onClick={() => openPanel("QR")}>Tree QR</button>
-                  <button onClick={() => openPanel("RENAME")}>Rename</button>
-                  <button onClick={goToCarePrograms} className="care">
-                    Protect / Manage Care
+                  <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
+                    Request Care
                   </button>
-                  <button onClick={() => (window.location.href = `/dashboard/sell-tree?tree_id=${encodeURIComponent(String(selectedTree.id || ""))}&tree_code=${encodeURIComponent(String(selectedTree.tree_code || selectedTree.code || ""))}`)} className="sell">
+                  <button onClick={goToSellTree} className="sell">
                     Sell Tree
                   </button>
                 </section>
@@ -488,12 +441,18 @@ export default function MyTreesPage() {
                     </div>
                   </div>
 
-                  {sellRequests.filter((item) => item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id).length === 0 ? (
+                  {sellRequests.filter(
+                    (item) =>
+                      item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
+                  ).length === 0 ? (
                     <div className="empty small">No sell request for this tree.</div>
                   ) : (
                     <div className="requestList">
                       {sellRequests
-                        .filter((item) => item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id)
+                        .filter(
+                          (item) =>
+                            item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
+                        )
                         .map((item) => (
                           <div className="requestRow" key={item.id}>
                             <div>
@@ -517,7 +476,7 @@ export default function MyTreesPage() {
                   <>
                     <h3>Tree Photos</h3>
                     <p>
-                      Photos will appear here after caretaker or operations team uploads real tree photo updates.
+                      Photos will appear here after caretaker uploads real tree photo updates.
                       No fake images are shown.
                     </p>
                     <div className="empty small">No caretaker photo uploaded yet.</div>
@@ -529,7 +488,8 @@ export default function MyTreesPage() {
                   <>
                     <h3>GPS Verification</h3>
                     <p>
-                      GPS details will appear here once field staff uploads verified plantation location data.
+                      GPS details will appear here once field staff or caretaker uploads verified
+                      plantation location data.
                     </p>
                     <div className="modalGrid">
                       <Mini label="GPS Status" value={selectedTree.gps_status || "Pending"} />
@@ -537,29 +497,6 @@ export default function MyTreesPage() {
                       <Mini label="GPS Location" value={selectedTree.gps_location || "Not uploaded"} />
                     </div>
                     <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "CARE" && (
-                  <>
-                    <h3>Care Protection</h3>
-                    <p>{selectedCare.description}</p>
-
-                    <div className="modalGrid">
-                      <Mini label="Care Status" value={selectedCare.label} />
-                      <Mini label="Program" value={getCareProgramName(selectedTree)} />
-                      <Mini label="Coverage" value={selectedTree.care_program_coverage || selectedTree.care_coverage || "No active coverage"} />
-                      <Mini label="Next Renewal" value={formatDate(selectedTree.next_renewal_date || selectedTree.care_program_next_renewal)} />
-                      <Mini label="Auto Renew" value={getAutoRenewText(selectedTree)} />
-                      <Mini label="Program Cost" value={peso(Number(selectedTree.care_program_price || selectedTree.care_plan_price || 0))} />
-                    </div>
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Close</button>
-                      <button className="primary" onClick={goToCarePrograms}>
-                        Go To Care Programs
-                      </button>
-                    </div>
                   </>
                 )}
 
@@ -578,14 +515,14 @@ export default function MyTreesPage() {
 
                       <div>
                         <strong>{selectedTree.tree_code || selectedTree.id}</strong>
-                        <p>{selectedTree.custom_name || selectedTree.display_name ||  "Agarwood Tree"}</p>
-                        <small>{selectedQrUrl || "QR verification URL not available"}</small>
+                        <p>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</p>
+                        <small>{selectedQrUrl}</small>
                       </div>
                     </div>
 
                     <div className="modalActions">
                       <button onClick={() => setActivePanel("NONE")}>Close</button>
-                      <button className="primary" onClick={() => selectedQrUrl ? window.open(selectedQrUrl, "_blank") : setMessage("QR verification URL is not available yet.")}>
+                      <button className="primary" onClick={() => window.open(selectedQrUrl, "_blank")}>
                         Open Verification Page
                       </button>
                     </div>
@@ -635,10 +572,6 @@ export default function MyTreesPage() {
         }
 
         .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 18px;
           margin-bottom: 22px;
         }
 
@@ -667,38 +600,6 @@ export default function MyTreesPage() {
           line-height: 1.6;
         }
 
-        .heroActions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
-        .heroActions a,
-        .carePanelActions a {
-          border-radius: 999px;
-          padding: 13px 16px;
-          background: rgba(255,253,246,.9);
-          color: #244536;
-          border: 1px solid rgba(92,70,35,.12);
-          text-decoration: none;
-          font-weight: 900;
-          box-shadow: 0 14px 28px rgba(82,60,27,.08);
-        }
-
-        .heroActions a.primary,
-        .carePanelActions a {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          border-color: transparent;
-        }
-
-        .carePanelActions a.secondary {
-          background: #f3ead8;
-          color: #244536;
-          border: 1px solid rgba(92,70,35,.12);
-        }
-
         .message,
         .empty,
         .stat,
@@ -706,9 +607,7 @@ export default function MyTreesPage() {
         .detail,
         .growth,
         .moneyBox,
-        .history,
-        .careAlert,
-        .carePanel {
+        .history {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
@@ -758,49 +657,9 @@ export default function MyTreesPage() {
           color: #176b3a;
         }
 
-        .stat.warning h3 {
-          color: #a33c2a;
-        }
-
-        .careAlert {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 18px;
-          padding: 20px;
-          margin-bottom: 18px;
-          background:
-            radial-gradient(circle at 94% 20%, rgba(255, 226, 154, .5), transparent 26%),
-            rgba(255,253,246,.9);
-        }
-
-        .careAlert strong {
-          display: block;
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .careAlert p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .careAlert button {
-          border: 0;
-          border-radius: 999px;
-          padding: 13px 16px;
-          background: linear-gradient(135deg, #d6b25e, #b99242);
-          color: #10281f;
-          font-weight: 900;
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
         .layout {
           display: grid;
-          grid-template-columns: 390px 1fr;
+          grid-template-columns: 380px 1fr;
           gap: 18px;
           align-items: start;
         }
@@ -809,7 +668,7 @@ export default function MyTreesPage() {
           padding: 14px;
           display: grid;
           gap: 12px;
-          max-height: 880px;
+          max-height: 840px;
           overflow: auto;
         }
 
@@ -921,26 +780,6 @@ export default function MyTreesPage() {
           white-space: nowrap;
         }
 
-        .carePill {
-          display: inline-flex;
-          margin-top: 10px;
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 11px;
-          font-style: normal;
-          font-weight: 900;
-        }
-
-        .carePill.protected { background: rgba(49,85,61,.12); color: #176b3a; }
-        .carePill.pending { background: rgba(214,178,94,.22); color: #8c6a3c; }
-        .carePill.expired,
-        .carePill.none { background: rgba(163,60,42,.12); color: #a33c2a; }
-
-        .treeItem.active .carePill {
-          background: rgba(255,255,255,.13);
-          color: #d9b45f;
-        }
-
         .gain { color: #176b3a; }
         .loss { color: #a33c2a; }
         .treeItem.active .gain,
@@ -976,42 +815,39 @@ export default function MyTreesPage() {
           font-weight: 900;
         }
 
-        .protectionBox {
-          min-width: 280px;
-          border-radius: 26px;
-          padding: 20px;
+        .identityBox {
+          min-width: 240px;
+          border-radius: 24px;
+          padding: 18px;
           color: white;
           background: linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 18px 42px rgba(36,69,54,.18);
         }
 
-        .protectionBox.none,
-        .protectionBox.expired {
-          background: linear-gradient(135deg, #7c3329, #3b1712);
-        }
-
-        .protectionBox.pending {
-          background: linear-gradient(135deg, #8c6a3c, #4e371a);
-        }
-
-        .protectionBox strong {
+        .identityBox strong {
           display: block;
-          font-size: 22px;
+          color: rgba(255,255,255,.7);
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
         }
 
-        .protectionBox p {
+        .identityBox p {
           margin: 8px 0 14px;
-          color: rgba(255,255,255,.78);
-          line-height: 1.5;
-          font-weight: 800;
+          font-size: 22px;
+          font-weight: 900;
         }
 
-        .protectionBox button {
-          width: 100%;
+        .identityActions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .identityActions button {
           border: 0;
           border-radius: 999px;
-          padding: 12px;
-          background: rgba(255,255,255,.14);
+          padding: 10px;
+          background: rgba(255,255,255,.13);
           color: white;
           font-weight: 900;
           cursor: pointer;
@@ -1019,8 +855,7 @@ export default function MyTreesPage() {
 
         .growth,
         .moneyBox,
-        .history,
-        .carePanel {
+        .history {
           padding: 20px;
           margin-top: 18px;
         }
@@ -1117,43 +952,6 @@ export default function MyTreesPage() {
           font-size: 16px;
         }
 
-        .carePanel {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          align-items: center;
-          background:
-            radial-gradient(circle at 94% 12%, rgba(255,255,255,.72), transparent 25%),
-            rgba(49,85,61,.08);
-        }
-
-        .carePanel.none,
-        .carePanel.expired {
-          background:
-            radial-gradient(circle at 94% 12%, rgba(255,255,255,.72), transparent 25%),
-            rgba(163,60,42,.08);
-        }
-
-        .carePanel strong {
-          display: block;
-          color: #101a14;
-          font-size: 21px;
-        }
-
-        .carePanel p {
-          margin: 7px 0 0;
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .carePanelActions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
         .moneyGrid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
@@ -1180,7 +978,7 @@ export default function MyTreesPage() {
 
         .actions {
           display: grid;
-          grid-template-columns: repeat(6, 1fr);
+          grid-template-columns: repeat(4, 1fr);
           gap: 12px;
           margin-top: 18px;
         }
@@ -1193,12 +991,6 @@ export default function MyTreesPage() {
           color: #244536;
           font-weight: 900;
           cursor: pointer;
-        }
-
-        .actions .care {
-          grid-column: span 2;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
         }
 
         .actions .sell {
@@ -1245,9 +1037,7 @@ export default function MyTreesPage() {
         }
 
         .modalCard {
-          width: min(680px, 100%);
-          max-height: 88vh;
-          overflow: auto;
+          width: min(600px, 100%);
           border-radius: 28px;
           padding: 24px;
           background: #fffdf6;
@@ -1350,28 +1140,11 @@ export default function MyTreesPage() {
           .layout {
             grid-template-columns: 1fr;
           }
-
-          .carePanel {
-            flex-direction: column;
-            align-items: stretch;
-          }
-
-          .carePanelActions {
-            justify-content: flex-start;
-          }
         }
 
         @media (max-width: 760px) {
           .page {
             padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-          }
-
-          .heroActions {
-            justify-content: flex-start;
           }
 
           .hero h1 {
@@ -1389,21 +1162,16 @@ export default function MyTreesPage() {
             grid-template-columns: 1fr;
           }
 
-          .detailTop,
-          .careAlert {
+          .detailTop {
             flex-direction: column;
           }
 
-          .protectionBox {
+          .identityBox {
             width: 100%;
           }
 
           .fakeQr {
             width: 100%;
-          }
-
-          .actions .care {
-            grid-column: span 1;
           }
         }
       `}</style>
@@ -1422,32 +1190,16 @@ function ModalActions({ close }: { close: () => void }) {
   );
 }
 
-function Stat({
-  label,
-  value,
-  good,
-  warning,
-}: {
-  label: string;
-  value: string;
-  good?: boolean;
-  warning?: boolean;
-}) {
+function Stat({ label, value, good }: { label: string; value: string; good?: boolean }) {
   return (
-    <div className={`stat ${good ? "good" : ""} ${warning ? "warning" : ""}`}>
+    <div className={`stat ${good ? "good" : ""}`}>
       <p>{label}</p>
       <h3>{value}</h3>
     </div>
   );
 }
 
-function Mini({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function Mini({ label, value }: { label: string; value: string }) {
   return (
     <div className="mini">
       <span>{label}</span>
@@ -1477,72 +1229,6 @@ function Money({
   );
 }
 
-function getCareStatus(tree: TreeRow) {
-  const rawStatus = String(
-    tree.care_program_status ||
-      tree.care_status ||
-      tree.protection_status ||
-      ""
-  ).toUpperCase();
-
-  const carePlan = getCareProgramName(tree);
-  const hasPlan = Boolean(carePlan && carePlan !== "Not Enrolled");
-
-  if (["ACTIVE", "PROTECTED", "ENROLLED"].includes(rawStatus) || hasPlan) {
-    return {
-      type: "PROTECTED",
-      label: "Protected",
-      className: "protected",
-      description: `${carePlan} is active for this tree.`,
-    };
-  }
-
-  if (["PENDING", "PROCESSING", "FOR_REVIEW"].includes(rawStatus)) {
-    return {
-      type: "PENDING",
-      label: "Care Pending",
-      className: "pending",
-      description: "Care program request is waiting for admin or operations processing.",
-    };
-  }
-
-  if (["EXPIRED", "CANCELLED", "INACTIVE"].includes(rawStatus)) {
-    return {
-      type: "EXPIRED",
-      label: "Care Expired",
-      className: "expired",
-      description: "Care coverage is no longer active. Renew to keep the tree protected.",
-    };
-  }
-
-  return {
-    type: "NONE",
-    label: "No Active Care Program",
-    className: "none",
-    description: "This tree has no active care program yet.",
-  };
-}
-
-function getCareProgramName(tree: TreeRow) {
-  return (
-    tree.care_program_name ||
-    tree.care_plan ||
-    tree.carePlan ||
-    tree.subscription_name ||
-    "Not Enrolled"
-  );
-}
-
-function getAutoRenewText(tree: TreeRow) {
-  const value =
-    tree.auto_renew_enabled ??
-    tree.auto_renew ??
-    tree.care_auto_renew ??
-    false;
-
-  return value ? "ON" : "OFF";
-}
-
 function getTreeMath(tree: TreeRow) {
   const totalSpent = getTotalSpent(tree);
   const estimatedValue = getEstimatedValue(tree);
@@ -1564,8 +1250,18 @@ function getVerificationCost(tree: TreeRow) {
   return Number(tree.verification_cost || tree.gps_photo_cost || tree.photo_fee_total || tree.gps_fee_total || 0);
 }
 
+function getCareProgramCost(tree: TreeRow) {
+  return Number(tree.care_program_price || 0);
+}
+
 function getTotalSpent(tree: TreeRow) {
-  return Number(tree.total_spent || getPurchasePrice(tree) + getOperationCost(tree) + getVerificationCost(tree));
+  const computedTotal =
+    getPurchasePrice(tree) +
+    getOperationCost(tree) +
+    getCareProgramCost(tree) +
+    getVerificationCost(tree);
+
+  return Number(tree.total_spent || computedTotal);
 }
 
 function getEstimatedValue(tree: TreeRow) {
@@ -1602,8 +1298,8 @@ function peso(value: number) {
   })}`;
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "Not set";
+function formatDate(value: string | null) {
+  if (!value) return "—";
 
   return new Date(value).toLocaleDateString("en-PH", {
     year: "numeric",
