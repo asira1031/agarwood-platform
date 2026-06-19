@@ -1053,6 +1053,24 @@ export default function WalletPage() {
           font-weight: 900;
         }
 
+        .openQr {
+          display: inline-flex;
+          margin-top: 14px;
+          border-radius: 999px;
+          padding: 12px 18px;
+          background: #244536;
+          color: white;
+          text-decoration: none;
+          font-weight: 900;
+          font-size: 13px;
+          transition: .2s ease;
+        }
+
+        .openQr:hover {
+          transform: translateY(-1px);
+          opacity: .92;
+        }
+
         .formGrid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
@@ -1357,6 +1375,15 @@ function QrPayment({ image, label }: { image: string; label: string }) {
       <div className="qrText">
         <h3>{label}</h3>
         <p>Scan this QR and send payment to JANICA MALDIVES.</p>
+
+        <a
+          className="openQr"
+          href={image}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open Full QR
+        </a>
       </div>
     </div>
   );
