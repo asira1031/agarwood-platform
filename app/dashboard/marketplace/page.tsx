@@ -389,6 +389,120 @@ function checkProgramInventory(product: MarketplaceProduct, inventoryItems: Inve
   };
 }
 
+
+function getPurchaseQuantity(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+  const found = name.match(/^(\d+)/);
+
+  if (found) return Number(found[1] || 1);
+
+  return 1;
+}
+
+function getTreeStageFromProduct(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+
+  if (name.includes("young seedling")) return "Young Seedling";
+  if (name.includes("seedling")) return "Seedling";
+  return "Seed";
+}
+
+function getTreeLabelFromProduct(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+
+  if (name.includes("young seedling")) return "Young Seedling";
+  if (name.includes("seedling")) return "Agarwood Seedling";
+  return "Agarwood Seed";
+}
+
+function getStarterStockQty(product: MarketplaceProduct) {
+  const quantity = getPurchaseQuantity(product);
+
+  if (quantity >= 100) return 10;
+  if (quantity >= 50) return 5;
+  if (quantity >= 10) return 2;
+
+  return 1;
+}
+
+function makeTreeCode() {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).slice(2, 7).toUpperCase();
+
+  return `AGW-${stamp}-${random}`;
+}
+
+function buildTreeRows(profileId: string, product: MarketplaceProduct, count: number) {
+  const stage = getTreeStageFromProduct(product);
+  const label = getTreeLabelFromProduct(product);
+
+  return Array.from({ length: count }).map(() => ({
+    profile_id: profileId,
+    tree_code: makeTreeCode(),
+    name: label,
+    tree_type: label,
+    stage,
+    growth_stage: stage,
+    current_stage: stage,
+    status: "ACTIVE",
+    source: "MARKETPLACE",
+    purchase_price: Number(product.price || 0) / Math.max(count, 1),
+    marketplace_product_id: product.id,
+  }));
+}
+
+function buildMinimalTreeRows(profileId: string, product: MarketplaceProduct, count: number) {
+  const label = getTreeLabelFromProduct(product);
+
+  return Array.from({ length: count }).map(() => ({
+    profile_id: profileId,
+    tree_code: makeTreeCode(),
+    name: label,
+  }));
+}
+
+function getInventoryUnit(product: MarketplaceProduct) {
+  const unit = String(product.unit || "").trim();
+
+  if (unit) return unit;
+
+  const category = normalizeSupplyCategory(product.category);
+
+  if (category === "Tree Care Programs") return "Program";
+  if (category === "Soil Products") return "Bag";
+
+  return "Unit";
+}
+
+function getStarterInventoryRows(profileId: string, product: MarketplaceProduct) {
+  const qty = getStarterStockQty(product);
+
+  return [
+    {
+      profile_id: profileId,
+      tree_id: null,
+      item_name: "Starter Organic Fertilizer",
+      category: "Fertilizers",
+      unit: "Pack",
+      starting_qty: qty,
+      remaining_qty: qty,
+      low_stock_level: 1,
+      status: "AVAILABLE",
+    },
+    {
+      profile_id: profileId,
+      tree_id: null,
+      item_name: "Starter Tree Nutrients",
+      category: "Nutrients & Boosters",
+      unit: "Pack",
+      starting_qty: qty,
+      remaining_qty: qty,
+      low_stock_level: 1,
+      status: "AVAILABLE",
+    },
+  ];
+}
+
 export default function MarketplacePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -406,6 +520,7 @@ export default function MarketplacePage() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [purchaseProcessing, setPurchaseProcessing] = useState(false);
 
   async function loadMarketplace() {
     setLoading(true);
@@ -534,6 +649,186 @@ export default function MarketplacePage() {
     setInventoryCheckResult(null);
   }
 
+
+  async function deductWallet(amount: number) {
+    if (!wallet) throw new Error("Wallet not found.");
+
+    const currentBalance = Number(wallet.balance || 0);
+    const newBalance = currentBalance - amount;
+
+    if (newBalance < 0) {
+      throw new Error("Insufficient wallet balance.");
+    }
+
+    const { error } = await supabase
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id);
+
+    if (error) throw error;
+
+    setWallet({ ...wallet, balance: newBalance });
+
+    return currentBalance;
+  }
+
+  async function restoreWallet(previousBalance: number) {
+    if (!wallet) return;
+
+    await supabase.from("wallets").update({ balance: previousBalance }).eq("id", wallet.id);
+    setWallet({ ...wallet, balance: previousBalance });
+  }
+
+  async function addInventoryStock(product: MarketplaceProduct, quantity: number) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const itemName = product.name || "Marketplace Supply";
+    const category = product.category || normalizeSupplyCategory(product.category);
+    const unit = getInventoryUnit(product);
+
+    const existingItem = inventoryItems.find((item) => {
+      return (
+        normalize(item.item_name) === normalize(itemName) &&
+        normalize(item.category) === normalize(category) &&
+        normalize(item.unit) === normalize(unit)
+      );
+    });
+
+    if (existingItem) {
+      const newRemainingQty = Number(existingItem.remaining_qty || 0) + quantity;
+
+      const { error } = await supabase
+        .from("inventory")
+        .update({
+          remaining_qty: newRemainingQty,
+          status: "AVAILABLE",
+        })
+        .eq("id", existingItem.id);
+
+      if (error) throw error;
+
+      return;
+    }
+
+    const fullPayload = {
+      profile_id: profile.id,
+      tree_id: null,
+      item_name: itemName,
+      category,
+      unit,
+      starting_qty: quantity,
+      remaining_qty: quantity,
+      low_stock_level: Number(product.low_stock_level || 1),
+      status: "AVAILABLE",
+    };
+
+    const { error } = await supabase.from("inventory").insert(fullPayload);
+
+    if (error) {
+      const fallbackPayload = {
+        profile_id: profile.id,
+        item_name: itemName,
+        category,
+        unit,
+        remaining_qty: quantity,
+        status: "AVAILABLE",
+      };
+
+      const { error: fallbackError } = await supabase.from("inventory").insert(fallbackPayload);
+
+      if (fallbackError) throw fallbackError;
+    }
+  }
+
+  async function addStarterStock(product: MarketplaceProduct) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const starterRows = getStarterInventoryRows(profile.id, product);
+
+    const { error } = await supabase.from("inventory").insert(starterRows);
+
+    if (error) {
+      const fallbackRows = starterRows.map((row) => ({
+        profile_id: row.profile_id,
+        item_name: row.item_name,
+        category: row.category,
+        unit: row.unit,
+        remaining_qty: row.remaining_qty,
+        status: row.status,
+      }));
+
+      const { error: fallbackError } = await supabase.from("inventory").insert(fallbackRows);
+
+      if (fallbackError) throw fallbackError;
+    }
+  }
+
+  async function addTreesFromProduct(product: MarketplaceProduct, quantity: number) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const fullRows = buildTreeRows(profile.id, product, quantity);
+    const { error } = await supabase.from("trees").insert(fullRows);
+
+    if (error) {
+      const minimalRows = buildMinimalTreeRows(profile.id, product, quantity);
+      const { error: fallbackError } = await supabase.from("trees").insert(minimalRows);
+
+      if (fallbackError) throw fallbackError;
+    }
+  }
+
+  async function purchaseProduct(product: MarketplaceProduct) {
+    setMessage("");
+
+    if (!profile) return setMessage("Profile not found.");
+    if (!wallet) return setMessage("Wallet not found.");
+    if (purchaseProcessing) return;
+
+    const productType = getProductType(product);
+
+    const price = Number(product.price || 0);
+    const currentBalance = Number(wallet.balance || 0);
+
+    if (price <= 0) return setMessage("Invalid product price.");
+    if (currentBalance < price) return setMessage("Insufficient wallet balance.");
+
+    setPurchaseProcessing(true);
+
+    let previousBalance: number | null = null;
+
+    try {
+      previousBalance = await deductWallet(price);
+
+      if (productType === "SUPPLY") {
+        await addInventoryStock(product, 1);
+        setMessage(`${product.name || "Supply"} purchased. Wallet deducted and inventory stock added.`);
+      }
+
+      if (productType === "TREE") {
+        await addTreesFromProduct(product, 1);
+        setMessage(`${product.name || "Tree"} purchased. Wallet deducted and tree added.`);
+      }
+
+      if (productType === "PACKAGE") {
+        const quantity = getPurchaseQuantity(product);
+        await addTreesFromProduct(product, quantity);
+        await addStarterStock(product);
+        setMessage(`${product.name || "Package"} purchased. Wallet deducted, ${quantity} trees added, and starter stock added to inventory.`);
+      }
+
+      closeModal();
+      await loadMarketplace();
+    } catch (error: any) {
+      if (previousBalance !== null) {
+        await restoreWallet(previousBalance);
+      }
+
+      setMessage(error?.message || "Purchase failed. No stable purchase was completed.");
+    } finally {
+      setPurchaseProcessing(false);
+    }
+  }
+
   const selectedCategory = selectedProduct
     ? normalizeSupplyCategory(selectedProduct.category)
     : "All Supplies";
@@ -550,8 +845,7 @@ export default function MarketplacePage() {
           <h1>Buy Trees, Packages & Supplies</h1>
           <span>
             Choose agarwood planting products, package bundles, and care supplies.
-            Step 1 is UI-only: purchase, wallet deduction, inventory checking, and
-            subscription automation will be connected in the next steps.
+            Step 7 is active: Buy Supplies deducts wallet and adds inventory, Buy Trees deducts wallet and adds trees, and Buy Packages deducts wallet, adds trees, and adds starter stock.
           </span>
         </div>
 
@@ -708,6 +1002,16 @@ export default function MarketplacePage() {
                         </div>
                       )}
 
+                      {!isProgram && (
+                        <button
+                          className="buyBtn"
+                          disabled={purchaseProcessing}
+                          onClick={() => purchaseProduct(product)}
+                        >
+                          {purchaseProcessing ? "Processing..." : `Buy Now • ${peso(Number(product.price || 0))}`}
+                        </button>
+                      )}
+
                       <button
                         className="viewBtn"
                         onClick={() => openProductDetails(product)}
@@ -791,7 +1095,7 @@ export default function MarketplacePage() {
                     </b>
                     <p>
                       {inventoryCheckResult.allowed
-                        ? "Required supplies are available. This UI flow can continue, but backend purchase and subscription saving are still disabled for Step 4."
+                        ? "Required supplies are available. This is validation display only. Activate care programs from Tree Operations."
                         : "This care program cannot continue yet because required inventory supplies are missing or out of stock."}
                     </p>
 
@@ -852,9 +1156,7 @@ export default function MarketplacePage() {
                     <b>Program Duration</b>
                     <strong>{getProgramDuration(selectedProduct)}</strong>
                     <p>
-                      Buy Once is a one-time care request preview. Subscribe is
-                      a recurring care preview only and will connect to
-                      auto-renew logic in a later step.
+                      Buy Once and Subscribe are validation previews here. Actual care program activation belongs to Tree Operations.
                     </p>
                   </section>
                 </div>
@@ -862,10 +1164,7 @@ export default function MarketplacePage() {
                 <div className="careBox">
                   <b>Care Program Actions</b>
                   <p>
-                    These buttons run inventory validation only. If supplies are
-                    missing, the UI blocks the flow and shows what the customer
-                    needs to buy first. No backend purchase, subscription, wallet,
-                    or auto-renew action is created yet.
+                    These buttons are still for care program inventory validation only. Care program activation stays in Tree Operations Step 6B. No marketplace billing, subscription table, auto-renew processing, cron job, or background job runs here.
                   </p>
 
                   <div className="careButtons">
@@ -886,9 +1185,21 @@ export default function MarketplacePage() {
               </>
             )}
 
-            <button className="disabledBuy" disabled>
-              Backend action disabled for Step 3 UI only
-            </button>
+            {selectedCategory === "Tree Care Programs" ? (
+              <button className="disabledBuy" disabled>
+                Care Program activation belongs to Tree Operations Step 6B
+              </button>
+            ) : (
+              <button
+                className="buyBtn modalBuy"
+                disabled={purchaseProcessing}
+                onClick={() => purchaseProduct(selectedProduct)}
+              >
+                {purchaseProcessing
+                  ? "Processing Purchase..."
+                  : `Buy Now • ${peso(Number(selectedProduct.price || 0))}`}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1273,6 +1584,7 @@ export default function MarketplacePage() {
         }
 
         .viewBtn,
+        .buyBtn,
         .disabledBuy,
         .careButtons button {
           width: 100%;
@@ -1283,6 +1595,21 @@ export default function MarketplacePage() {
           color: white;
           font-weight: 900;
           cursor: pointer;
+        }
+
+        .buyBtn {
+          margin-bottom: 8px;
+          background: linear-gradient(135deg, #244536, #10281f);
+        }
+
+        .buyBtn:disabled {
+          opacity: .58;
+          cursor: not-allowed;
+        }
+
+        .modalBuy {
+          margin-top: 4px;
+          margin-bottom: 0;
         }
 
         .modalOverlay {

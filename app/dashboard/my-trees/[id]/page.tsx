@@ -1429,7 +1429,13 @@ function Stat({
   );
 }
 
-function Mini({ label, value }: { label: string }) {
+function Mini({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="mini">
       <span>{label}</span>
