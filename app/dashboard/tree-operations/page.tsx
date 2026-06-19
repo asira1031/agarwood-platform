@@ -52,6 +52,20 @@ type OperationRequest = {
   auto_renew_enabled?: boolean | null;
 };
 
+type CareProgramSubscription = {
+  id: string;
+  profile_id: string;
+  tree_id: string | null;
+  care_program_name: string | null;
+  care_program_price: number | null;
+  care_program_duration: string | null;
+  status: string | null;
+  auto_renew_enabled: boolean | null;
+  started_at: string | null;
+  next_renewal_date: string | null;
+  created_at: string | null;
+};
+
 type MarketplaceProduct = {
   id: string;
   product_key: string | null;
@@ -141,6 +155,230 @@ export default function TreeOperationsPage() {
   const [selectedOperation, setSelectedOperation] = useState("Photo Update");
   const [note, setNote] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [autoRenewProcessing, setAutoRenewProcessing] = useState(false);
+
+  async function createAutoRenewWalletTransaction(
+    currentProfile: Profile,
+    walletId: string | null,
+    amount: number,
+    description: string
+  ) {
+    const payloadAttempts = [
+      {
+        profile_id: currentProfile.id,
+        wallet_id: walletId,
+        amount: -Math.abs(amount),
+        type: "DEBIT",
+        transaction_type: "DEBIT",
+        category: "TREE_CARE_PROGRAM_AUTO_RENEW",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: currentProfile.id,
+        amount: -Math.abs(amount),
+        type: "DEBIT",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: currentProfile.id,
+        amount: Math.abs(amount),
+        transaction_type: "DEBIT",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: currentProfile.id,
+        amount: Math.abs(amount),
+        description,
+        status: "COMPLETED",
+      },
+    ];
+
+    let lastError = "Auto-renew wallet transaction failed.";
+
+    for (const payload of payloadAttempts) {
+      const { error } = await supabase.from("wallet_transactions").insert(payload);
+
+      if (!error) return;
+
+      lastError = error.message;
+    }
+
+    throw new Error(lastError);
+  }
+
+  async function createAutoRenewLog(
+    subscription: CareProgramSubscription,
+    amount: number,
+    previousRenewalDate: string | null,
+    nextRenewalDate: string,
+    status: "COMPLETED" | "FAILED",
+    notes: string
+  ) {
+    const payload = {
+      profile_id: subscription.profile_id,
+      tree_id: subscription.tree_id,
+      subscription_id: subscription.id,
+      care_program_name: subscription.care_program_name,
+      care_program_price: amount,
+      previous_renewal_date: previousRenewalDate,
+      next_renewal_date: nextRenewalDate,
+      status,
+      notes,
+    };
+
+    await supabase.from("care_program_renewal_logs").insert(payload);
+  }
+
+  async function runAutoRenewEngine(
+    currentProfile: Profile,
+    currentWallet: Wallet | null
+  ) {
+    if (!currentProfile.auto_renew) {
+      setMessage("Auto-renew is OFF in Settings. No renewals processed.");
+      return;
+    }
+
+    if (!currentWallet) {
+      setMessage("Wallet not found. Auto-renew was not processed.");
+      return;
+    }
+
+    const today = new Date().toISOString();
+
+    const { data: dueSubscriptions, error: subscriptionError } = await supabase
+      .from("care_program_subscriptions")
+      .select(
+        "id, profile_id, tree_id, care_program_name, care_program_price, care_program_duration, status, auto_renew_enabled, started_at, next_renewal_date, created_at"
+      )
+      .eq("profile_id", currentProfile.id)
+      .eq("status", "ACTIVE")
+      .eq("auto_renew_enabled", true)
+      .lte("next_renewal_date", today);
+
+    if (subscriptionError) {
+      console.warn("Auto-renew subscription check error:", subscriptionError.message);
+      setMessage(subscriptionError.message);
+      return;
+    }
+
+    const subscriptions = (dueSubscriptions || []) as CareProgramSubscription[];
+
+    if (subscriptions.length === 0) {
+      setMessage("No due auto-renew subscriptions found.");
+      return;
+    }
+
+    let runningBalance = Number(currentWallet.balance || 0);
+    let renewedCount = 0;
+
+    for (const subscription of subscriptions) {
+      const amount = Number(subscription.care_program_price || 0);
+      const previousBalance = runningBalance;
+      const nextRenewalDate = getNextRenewalDate(
+        subscription.care_program_duration || "Program"
+      );
+
+      if (amount <= 0) continue;
+      if (runningBalance < amount) continue;
+
+      const deductedBalance = runningBalance - amount;
+
+      const { error: walletError } = await supabase
+        .from("wallets")
+        .update({ balance: deductedBalance })
+        .eq("id", currentWallet.id)
+        .eq("profile_id", currentProfile.id);
+
+      if (walletError) {
+        console.warn("Auto-renew wallet deduction error:", walletError.message);
+        continue;
+      }
+
+      runningBalance = deductedBalance;
+
+      try {
+        await createAutoRenewWalletTransaction(
+          currentProfile,
+          currentWallet.id,
+          amount,
+          `Auto-renew: ${subscription.care_program_name || "Tree Care Program"}`
+        );
+      } catch (error: any) {
+        await supabase
+          .from("wallets")
+          .update({ balance: previousBalance })
+          .eq("id", currentWallet.id)
+          .eq("profile_id", currentProfile.id);
+
+        runningBalance = previousBalance;
+        console.warn(error?.message || "Auto-renew transaction log failed.");
+        continue;
+      }
+
+      const { error: updateSubscriptionError } = await supabase
+        .from("care_program_subscriptions")
+        .update({
+          next_renewal_date: nextRenewalDate,
+          auto_renew_enabled: true,
+          status: "ACTIVE",
+        })
+        .eq("id", subscription.id)
+        .eq("profile_id", currentProfile.id);
+
+      if (updateSubscriptionError) {
+        console.warn(
+          "Auto-renew subscription update error:",
+          updateSubscriptionError.message
+        );
+        continue;
+      }
+
+      await createAutoRenewLog(
+        subscription,
+        amount,
+        subscription.next_renewal_date,
+        nextRenewalDate,
+        "COMPLETED",
+        "Manual auto-renew completed from Tree Operations."
+      );
+
+      renewedCount += 1;
+    }
+
+    if (renewedCount > 0) {
+      setWallet({ ...currentWallet, balance: runningBalance });
+      setMessage(`Auto-renew completed for ${renewedCount} care program subscription(s).`);
+    } else {
+      setMessage("No subscriptions were renewed. Check due dates or wallet balance.");
+    }
+  }
+
+  async function handleManualAutoRenew() {
+    setMessage("");
+
+    if (!profile) {
+      setMessage("Profile not found.");
+      return;
+    }
+
+    if (!wallet) {
+      setMessage("Wallet not found. Auto-renew was not processed.");
+      return;
+    }
+
+    setAutoRenewProcessing(true);
+
+    try {
+      await runAutoRenewEngine(profile, wallet);
+    } catch (error: any) {
+      setMessage(error?.message || "Auto-renew failed.");
+    } finally {
+      setAutoRenewProcessing(false);
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -230,8 +468,21 @@ export default function TreeOperationsPage() {
     }
 
     const ownedTrees = treeData || [];
+    let currentWallet = (walletRows?.[0] as Wallet) || null;
 
-    setWallet((walletRows?.[0] as Wallet) || null);
+
+    if (currentWallet) {
+      const { data: refreshedWalletRows } = await supabase
+        .from("wallets")
+        .select("id, profile_id, balance, created_at")
+        .eq("profile_id", currentProfile.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      currentWallet = (refreshedWalletRows?.[0] as Wallet) || currentWallet;
+    }
+
+    setWallet(currentWallet);
     setTrees(ownedTrees);
     setInventory(inventoryError ? [] : ((inventoryData as InventoryItem[]) || []));
     setRequests((requestData as OperationRequest[]) || []);
@@ -244,45 +495,41 @@ export default function TreeOperationsPage() {
     loadData();
   }, []);
 
- const careProgramOperations = useMemo<OperationItem[]>(() => {
-  return carePrograms.map(
-    (program): OperationItem => ({
-      name: program.name || "Tree Care Program",
-      category: "Care Program",
-      price: Number(program.price || 0),
-      description: program.note || "Marketplace Tree Care Program.",
-      duration: getProgramDuration(program),
-      coverage: getProgramCoverage(program),
-      status: program.stock_status || "ACTIVE",
-      sourceProduct: program,
-    })
-  );
-}, [carePrograms]);
+  const careProgramOperations = useMemo<OperationItem[]>(() => {
+    return carePrograms.map(
+      (program): OperationItem => ({
+        name: program.name || "Tree Care Program",
+        category: "Care Program",
+        price: Number(program.price || 0),
+        description: program.note || "Marketplace Tree Care Program.",
+        duration: getProgramDuration(program),
+        coverage: getProgramCoverage(program),
+        status: program.stock_status || "ACTIVE",
+        sourceProduct: program,
+      })
+    );
+  }, [carePrograms]);
 
- const operations = useMemo<OperationItem[]>(() => {
-  return [...BASE_OPERATIONS, ...careProgramOperations];
-}, [careProgramOperations]);
+  const operations = useMemo<OperationItem[]>(() => {
+    return [...BASE_OPERATIONS, ...careProgramOperations];
+  }, [careProgramOperations]);
 
   const selectedTree = useMemo(() => {
     return trees.find((tree) => tree.id === selectedTreeId) || null;
   }, [trees, selectedTreeId]);
 
   const operation = useMemo<OperationItem | undefined>(() => {
-    const found = operations.find((item) => item.name === selectedOperation);
-    return found || operations[0] || BASE_OPERATIONS[0];
+    return operations.find((item) => item.name === selectedOperation) || operations[0];
   }, [operations, selectedOperation]);
 
-  const requiredInventoryCategory = getRequiredInventoryCategory(operation);
-  const requiredInventoryQty = getRequiredInventoryQty(operation);
-
   const requiredInventoryItem = useMemo(() => {
-    if (!requiredInventoryCategory) return null;
+    if (!operation?.requiredInventoryCategory) return null;
 
     return (
       inventory.find((item) => {
         const category = String(item.category || "").toLowerCase();
         const name = String(item.item_name || "").toLowerCase();
-        const required = requiredInventoryCategory.toLowerCase();
+        const required = String(operation.requiredInventoryCategory || "").toLowerCase();
 
         return (
           Number(item.remaining_qty || 0) > 0 &&
@@ -290,12 +537,12 @@ export default function TreeOperationsPage() {
         );
       }) || null
     );
-  }, [inventory, requiredInventoryCategory]);
+  }, [inventory, operation]);
 
   const hasRequiredInventory =
     operation?.category !== "Inventory Use" ||
     (requiredInventoryItem &&
-      Number(requiredInventoryItem.remaining_qty || 0) >= requiredInventoryQty);
+      Number(requiredInventoryItem.remaining_qty || 0) >= Number(operation.requiredQty || 1));
 
   const walletBalance = Number(wallet?.balance || 0);
   const baseOperationFee = Number(operation?.price || 0);
@@ -328,7 +575,7 @@ export default function TreeOperationsPage() {
 
     if (item.category === "Care Program") {
       setMessage(
-        `${item.name} selected. Step 6B creates a care program request, then updates only the selected tree care program fields. No wallet charge, inventory deduction, subscription table, billing, auto-renew processing, or background job will run.`
+        `${item.name} selected. Step 10 creates a paid care program action. Wallet balance is checked, wallet is deducted, the request is saved, the selected tree is updated, a subscription record is created only when Subscribe is selected, then wallet transaction is recorded last.`
       );
       return;
     }
@@ -336,15 +583,111 @@ export default function TreeOperationsPage() {
     setMessage("");
   }
 
+  async function deductCareProgramWallet(amount: number) {
+    if (!wallet) throw new Error("Wallet not found.");
+
+    const currentBalance = Number(wallet.balance || 0);
+
+    if (amount <= 0) {
+      throw new Error("Invalid care program price.");
+    }
+
+    if (currentBalance < amount) {
+      throw new Error("Insufficient wallet balance.");
+    }
+
+    const newBalance = currentBalance - amount;
+
+    const { error } = await supabase
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
+
+    if (error) throw error;
+
+    setWallet({ ...wallet, balance: newBalance });
+
+    return currentBalance;
+  }
+
+  async function restoreCareProgramWallet(previousBalance: number) {
+    if (!wallet) return;
+
+    await supabase
+      .from("wallets")
+      .update({ balance: previousBalance })
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
+
+    setWallet({ ...wallet, balance: previousBalance });
+  }
+
+  async function createCareProgramWalletTransaction(
+    amount: number,
+    actionLabel: string,
+    treeLabel: string
+  ) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const description = `${actionLabel}: ${operation?.name || "Tree Care Program"} for ${treeLabel}`;
+
+    const payloadAttempts = [
+      {
+        profile_id: profile.id,
+        wallet_id: wallet?.id || null,
+        amount: -Math.abs(amount),
+        type: "DEBIT",
+        transaction_type: "DEBIT",
+        category: "TREE_CARE_PROGRAM",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: profile.id,
+        amount: -Math.abs(amount),
+        type: "DEBIT",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: profile.id,
+        amount: Math.abs(amount),
+        transaction_type: "DEBIT",
+        description,
+        status: "COMPLETED",
+      },
+      {
+        profile_id: profile.id,
+        amount: Math.abs(amount),
+        description,
+        status: "COMPLETED",
+      },
+    ];
+
+    let lastError = "Wallet transaction failed.";
+
+    for (const payload of payloadAttempts) {
+      const { error } = await supabase.from("wallet_transactions").insert(payload);
+
+      if (!error) return;
+
+      lastError = error.message;
+    }
+
+    throw new Error(lastError);
+  }
+
   async function createOperationRequest(autoRenewEnabled: boolean) {
     setMessage("");
 
     if (!profile) return setMessage("Profile not found.");
+    if (!wallet) return setMessage("Wallet not found.");
     if (!selectedTree) return setMessage("Please select a tree.");
     if (!operation) return setMessage("Please choose a care program.");
 
     if (operation.category !== "Care Program") {
-      setMessage("Step 6B is only for Tree Care Program activation on the selected tree.");
+      setMessage("Step 10 is only for paid Tree Care Program activation on the selected tree.");
       return;
     }
 
@@ -355,6 +698,18 @@ export default function TreeOperationsPage() {
     const programPrice = Number(operation.price || 0);
     const programDuration = operation.duration || "Program";
     const programCoverage = operation.coverage || "Program coverage pending";
+    const treeLabel = selectedTree.tree_code || selectedTree.id;
+    const actionLabel = autoRenewEnabled ? "Subscribe" : "Buy Once";
+
+    let previousBalance: number | null = null;
+
+    try {
+      previousBalance = await deductCareProgramWallet(programPrice);
+    } catch (error: any) {
+      setProcessing(false);
+      setMessage(error?.message || "Wallet payment failed.");
+      return;
+    }
 
     const requestPayload = {
       profile_id: profile.id,
@@ -378,8 +733,12 @@ export default function TreeOperationsPage() {
       .insert(requestPayload);
 
     if (requestError) {
+      if (previousBalance !== null) {
+        await restoreCareProgramWallet(previousBalance);
+      }
+
       setProcessing(false);
-      setMessage(requestError.message);
+      setMessage(`Wallet was restored because request creation failed: ${requestError.message}`);
       return;
     }
 
@@ -400,9 +759,55 @@ export default function TreeOperationsPage() {
       .eq("profile_id", profile.id);
 
     if (treeUpdateError) {
+      if (previousBalance !== null) {
+        await restoreCareProgramWallet(previousBalance);
+      }
+
       setProcessing(false);
       setMessage(
-        `Request was created, but selected tree update failed: ${treeUpdateError.message}`
+        `Wallet was restored because selected tree update failed: ${treeUpdateError.message}`
+      );
+      await loadData();
+      return;
+    }
+
+    if (autoRenewEnabled) {
+      const subscriptionPayload = {
+        profile_id: profile.id,
+        tree_id: selectedTree.id,
+        care_program_name: operation.name,
+        care_program_price: programPrice,
+        care_program_duration: programDuration,
+        status: "ACTIVE",
+        auto_renew_enabled: true,
+        started_at: startedAt,
+        next_renewal_date: nextRenewalDate,
+      };
+
+      const { error: subscriptionError } = await supabase
+        .from("care_program_subscriptions")
+        .insert(subscriptionPayload);
+
+      if (subscriptionError) {
+        if (previousBalance !== null) {
+          await restoreCareProgramWallet(previousBalance);
+        }
+
+        setProcessing(false);
+        setMessage(
+          `Wallet was restored because subscription record failed: ${subscriptionError.message}`
+        );
+        await loadData();
+        return;
+      }
+    }
+
+    try {
+      await createCareProgramWalletTransaction(programPrice, actionLabel, treeLabel);
+    } catch (error: any) {
+      setProcessing(false);
+      setMessage(
+        `${operation.name} main actions completed, but wallet transaction log failed: ${error?.message || "Wallet transaction failed."}`
       );
       await loadData();
       return;
@@ -415,8 +820,10 @@ export default function TreeOperationsPage() {
 
     setMessage(
       `${operation.name} activated for ${selectedTree.tree_code || selectedTree.id}. ${
-        autoRenewEnabled ? "Subscribe selected." : "Buy Once selected."
-      } Request created first, then selected tree care program fields updated. No wallet, inventory, billing, subscription table, cron job, or background job was run.`
+        autoRenewEnabled
+          ? "Subscribe selected: wallet deducted, wallet transaction recorded, request created, tree updated, and subscription record saved."
+          : "Buy Once selected: wallet deducted, wallet transaction recorded, request created, and tree updated only. No subscription record created."
+      } Wallet was deducted and wallet transaction was recorded. No inventory deduction, auto billing, auto-renew engine, cron job, or background job was run.`
     );
   }
 
@@ -428,7 +835,7 @@ export default function TreeOperationsPage() {
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
       setMessage(
-        `Preview only: ${requiredInventoryCategory || "Required supply"} is missing or low. Buy supplies from Marketplace before this is connected later.`
+        `Preview only: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace before this is connected later.`
       );
       return;
     }
@@ -436,7 +843,7 @@ export default function TreeOperationsPage() {
     setMessage(
       `${operation.name} preview checked for ${
         selectedTree.tree_code || selectedTree.id
-      }. Step 6B creates Tree Care Program requests and updates only selected tree fields.`
+      }. Step 10 paid flow is active for Tree Care Programs. Non-care services are still preview only.`
     );
   }
 
@@ -444,19 +851,19 @@ export default function TreeOperationsPage() {
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Tree Operations Sync</p>
+          <p className="eyebrow">Tree Operations Step 10</p>
           <h1>Request Tree Care Services</h1>
           <span>
             Select one of your owned trees, choose a service, and preview
             operation details. Marketplace Tree Care Programs are synced from
-            marketplace_products. Step 6B creates a request, then updates only the selected tree record.
+            marketplace_products. Step 10 keeps paid care programs active and checks due auto-renew subscriptions when Auto Renew is ON. No cron job or background job is added yet.
           </span>
         </div>
 
         <div className="walletCard">
           <p>Wallet Balance</p>
           <strong>{peso(walletBalance)}</strong>
-          <small>No wallet charge in Step 6B</small>
+          <small>Paid care + auto-renew check</small>
         </div>
       </section>
 
@@ -634,7 +1041,7 @@ export default function TreeOperationsPage() {
                   </div>
 
                   <p>
-                    This uses the Marketplace product name and price. Buy Once or Subscribe creates a request, then updates only the selected tree care program fields.
+                    This uses the Marketplace product name and price. Buy Once creates a request and updates the tree only. Subscribe creates a request, updates the tree, then saves a subscription record.
                   </p>
                 </div>
               )}
@@ -650,7 +1057,7 @@ export default function TreeOperationsPage() {
                     </p>
                   ) : (
                     <p>
-                      No {requiredInventoryCategory || "required supply"} in inventory.
+                      No {operation.requiredInventoryCategory} in inventory.
                       Please buy from Marketplace first.
                     </p>
                   )}
@@ -676,7 +1083,7 @@ export default function TreeOperationsPage() {
                   }
                   value={platformFeePreview}
                 />
-                <FeeRow label="Total Preview" value={totalPreview} strong />
+                <FeeRow label="Total Charge" value={totalPreview} strong />
                 <FeeRow label="Wallet Balance" value={walletBalance} />
               </div>
 
@@ -696,7 +1103,7 @@ export default function TreeOperationsPage() {
                     disabled={processing}
                     onClick={() => createOperationRequest(false)}
                   >
-                    {processing ? "Creating Request..." : "Buy Once"}
+                    {processing ? "Processing Payment..." : "Buy Once"}
                   </button>
 
                   <button
@@ -704,7 +1111,7 @@ export default function TreeOperationsPage() {
                     disabled={processing}
                     onClick={() => createOperationRequest(true)}
                   >
-                    {processing ? "Creating Request..." : "Subscribe"}
+                    {processing ? "Processing Payment..." : "Subscribe"}
                   </button>
                 </div>
               ) : (
@@ -717,10 +1124,17 @@ export default function TreeOperationsPage() {
                 </button>
               )}
 
+              <button
+                type="button"
+                className="submitButton"
+                disabled={processing || autoRenewProcessing}
+                onClick={handleManualAutoRenew}
+              >
+                {autoRenewProcessing ? "Running Auto Renew..." : "Run Auto Renew"}
+              </button>
+
               <p className="warning">
-                Step 6B: create tree_operation_request, then update selected tree only.
-                No wallet deduction, inventory deduction, subscription table,
-                billing, auto-renew job, cron job, or background job.
+                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads profiles.auto_renew and active care_program_subscriptions. If auto_renew_enabled is ON and next_renewal_date is due, it checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. If Auto Renew is OFF, it does nothing. Still disabled: no inventory deduction, no billing engine, no cron jobs, and no background jobs.
               </p>
             </section>
           </section>
@@ -1341,19 +1755,6 @@ export default function TreeOperationsPage() {
       `}</style>
     </main>
   );
-}
-
-
-function getRequiredInventoryCategory(operation: OperationItem | undefined) {
-  return operation && operation.category === "Inventory Use"
-    ? String(operation.requiredInventoryCategory || "")
-    : "";
-}
-
-function getRequiredInventoryQty(operation: OperationItem | undefined) {
-  return operation && operation.category === "Inventory Use"
-    ? Number(operation.requiredQty || 1)
-    : 1;
 }
 
 function getProgramDuration(program: MarketplaceProduct) {
