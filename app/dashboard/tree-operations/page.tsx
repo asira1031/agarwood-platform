@@ -53,6 +53,26 @@ type OperationItem = {
   requiredQty?: number;
 };
 
+type CareNeed = {
+  category: string;
+  requiredQty: number;
+};
+
+const CARE_NEEDS_1_WEEK: CareNeed[] = [
+  { category: "Fertilizer", requiredQty: 1 },
+  { category: "Fungicide", requiredQty: 1 },
+  { category: "Insecticide", requiredQty: 1 },
+  { category: "Nutrients", requiredQty: 1 },
+];
+
+const CARE_NEEDS_1_MONTH: CareNeed[] = [
+  { category: "Fertilizer", requiredQty: 4 },
+  { category: "Fungicide", requiredQty: 2 },
+  { category: "Insecticide", requiredQty: 2 },
+  { category: "Nutrients", requiredQty: 4 },
+  { category: "Soil Conditioner", requiredQty: 2 },
+];
+
 const OPERATIONS: OperationItem[] = [
   {
     name: "Photo Update",
@@ -76,7 +96,7 @@ const OPERATIONS: OperationItem[] = [
     name: "Managed Care Subscription",
     category: "Subscription",
     price: 1500,
-    description: "Enroll selected tree in managed care service coverage.",
+    description: "Enroll selected tree in managed care service coverage. System checks fixed stock requirement first.",
   },
   {
     name: "Apply Fertilizer",
@@ -232,6 +252,28 @@ export default function TreeOperationsPage() {
     );
   }, [inventory, operation]);
 
+  const careNeeds = useMemo(() => {
+    return subscriptionDuration === "1 Week" ? CARE_NEEDS_1_WEEK : CARE_NEEDS_1_MONTH;
+  }, [subscriptionDuration]);
+
+  const careStockCheck = useMemo(() => {
+    return careNeeds.map((need) => {
+      const stockItem = findInventoryByCategory(inventory, need.category);
+      const availableQty = Number(stockItem?.remaining_qty || 0);
+
+      return {
+        ...need,
+        stockItem,
+        availableQty,
+        unit: stockItem?.unit || "unit",
+        enough: availableQty >= need.requiredQty,
+      };
+    });
+  }, [inventory, careNeeds]);
+
+  const hasCareSubscriptionStock =
+    operation.category !== "Subscription" || careStockCheck.every((item) => item.enough);
+
   const walletBalance = Number(wallet?.balance || 0);
   const baseOperationFee =
     operation.category === "Subscription" && subscriptionDuration === "1 Week"
@@ -245,6 +287,14 @@ export default function TreeOperationsPage() {
     operation.category !== "Inventory Use" ||
     (requiredInventoryItem &&
       Number(requiredInventoryItem.remaining_qty || 0) >= Number(operation.requiredQty || 1));
+
+  const canSubmit =
+    canPay &&
+    Boolean(selectedTree) &&
+    Boolean(profile) &&
+    Boolean(wallet) &&
+    Boolean(hasRequiredInventory) &&
+    Boolean(hasCareSubscriptionStock);
 
   const stats = useMemo(() => {
     const pending = requests.filter(
@@ -267,6 +317,47 @@ export default function TreeOperationsPage() {
     };
   }, [trees, requests]);
 
+  function handleChooseOperation(item: OperationItem) {
+    setSelectedOperation(item.name);
+
+    if (item.category === "Subscription") {
+      const currentCheck = careStockCheck;
+      const missing = currentCheck.filter((stock) => !stock.enough);
+
+      if (missing.length > 0) {
+        setMessage(
+          `Care subscription needs stock check. Missing/low stock for ${subscriptionDuration}: ${missing
+            .map((stock) => `${stock.category} need ${stock.requiredQty}, available ${stock.availableQty}`)
+            .join("; ")}.`
+        );
+      } else {
+        setMessage(`Care subscription stock check passed for ${subscriptionDuration}.`);
+      }
+      return;
+    }
+
+    setMessage("");
+  }
+
+  function handleDurationChange(duration: "1 Week" | "1 Month") {
+    setSubscriptionDuration(duration);
+
+    if (operation.category !== "Subscription") return;
+
+    const check = getCareStockCheckForDuration(inventory, duration);
+    const missing = check.filter((stock) => !stock.enough);
+
+    if (missing.length > 0) {
+      setMessage(
+        `Care subscription needs stock check. Missing/low stock for ${duration}: ${missing
+          .map((stock) => `${stock.category} need ${stock.requiredQty}, available ${stock.availableQty}`)
+          .join("; ")}.`
+      );
+    } else {
+      setMessage(`Care subscription stock check passed for ${duration}.`);
+    }
+  }
+
   async function submitRequest() {
     setMessage("");
 
@@ -278,6 +369,15 @@ export default function TreeOperationsPage() {
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
       return setMessage(
         `No ${operation.requiredInventoryCategory} in inventory. Please buy from Marketplace first.`
+      );
+    }
+
+    if (operation.category === "Subscription" && !hasCareSubscriptionStock) {
+      const missing = careStockCheck.filter((item) => !item.enough);
+      return setMessage(
+        `Cannot subscribe. Missing/low stock: ${missing
+          .map((item) => `${item.category} need ${item.requiredQty} ${item.unit}, available ${item.availableQty} ${item.unit}`)
+          .join("; ")}.`
       );
     }
 
@@ -325,9 +425,20 @@ export default function TreeOperationsPage() {
       deductedInventoryUnit = requiredInventoryItem.unit;
     }
 
+    const subscriptionInventoryNotes =
+      operation.category === "Subscription"
+        ? careStockCheck
+            .map(
+              (item) =>
+                `${item.category}: need ${item.requiredQty} ${item.unit}, available ${item.availableQty} ${item.unit}`
+            )
+            .join("\n")
+        : null;
+
     const requestNotes = [
       note.trim() || null,
       operation.category === "Subscription" ? `Subscription Duration: ${subscriptionDuration}` : null,
+      operation.category === "Subscription" ? `Fixed Stock Requirement:\n${subscriptionInventoryNotes}` : null,
       deductedInventoryName ? `Inventory deducted: ${requiredQty} ${deductedInventoryUnit || ""} ${deductedInventoryName}` : null,
     ]
       .filter(Boolean)
@@ -398,7 +509,9 @@ export default function TreeOperationsPage() {
 
     setNote("");
     setMessage(
-      operation.category === "Inventory Use"
+      operation.category === "Subscription"
+        ? "Care subscription request submitted. Fixed stock requirement was checked first and request is waiting for admin or gardener processing."
+        : operation.category === "Inventory Use"
         ? "Tree operation request submitted. Inventory stock was deducted and request is waiting for admin or gardener processing."
         : "Tree operation request submitted. Waiting for admin or operations processing."
     );
@@ -473,7 +586,7 @@ export default function TreeOperationsPage() {
             <section className="panel">
               <PanelHead
                 title="2. Choose Service"
-                text="Inventory-use services require stock from Marketplace purchases."
+                text="Managed Care Subscription checks fixed stock first before submit."
               />
 
               <div className="serviceList">
@@ -483,7 +596,7 @@ export default function TreeOperationsPage() {
                     className={`serviceCard ${
                       selectedOperation === item.name ? "active" : ""
                     }`}
-                    onClick={() => setSelectedOperation(item.name)}
+                    onClick={() => handleChooseOperation(item)}
                   >
                     <span>{item.category}</span>
                     <strong>{item.name}</strong>
@@ -519,20 +632,43 @@ export default function TreeOperationsPage() {
               </div>
 
               {operation.category === "Subscription" && (
-                <div className="durationBox">
-                  <button
-                    className={subscriptionDuration === "1 Week" ? "active" : ""}
-                    onClick={() => setSubscriptionDuration("1 Week")}
-                  >
-                    1 Week
-                  </button>
-                  <button
-                    className={subscriptionDuration === "1 Month" ? "active" : ""}
-                    onClick={() => setSubscriptionDuration("1 Month")}
-                  >
-                    1 Month
-                  </button>
-                </div>
+                <>
+                  <div className="durationBox">
+                    <button
+                      className={subscriptionDuration === "1 Week" ? "active" : ""}
+                      onClick={() => handleDurationChange("1 Week")}
+                    >
+                      1 Week
+                    </button>
+                    <button
+                      className={subscriptionDuration === "1 Month" ? "active" : ""}
+                      onClick={() => handleDurationChange("1 Month")}
+                    >
+                      1 Month
+                    </button>
+                  </div>
+
+                  <div className={`inventoryCheck ${hasCareSubscriptionStock ? "ok" : "bad"}`}>
+                    <strong>Fixed Stock Check for {subscriptionDuration}</strong>
+                    <div className="careNeedList">
+                      {careStockCheck.map((item) => (
+                        <div className="careNeedRow" key={item.category}>
+                          <span>{item.category}</span>
+                          <p>
+                            Need {item.requiredQty} {item.unit} • Available{" "}
+                            {item.availableQty} {item.unit}
+                          </p>
+                          <b>{item.enough ? "OK" : "LOW"}</b>
+                        </div>
+                      ))}
+                    </div>
+                    {!hasCareSubscriptionStock && (
+                      <p>
+                        Subscription is blocked. Please buy missing supplies from Marketplace first.
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
 
               {operation.category === "Inventory Use" && (
@@ -571,11 +707,13 @@ export default function TreeOperationsPage() {
 
               <button
                 className="submitButton"
-                disabled={!canPay || processing || !hasRequiredInventory}
+                disabled={!canSubmit || processing}
                 onClick={submitRequest}
               >
                 {processing
                   ? "Submitting..."
+                  : !hasCareSubscriptionStock
+                  ? "Required Subscription Stock Missing"
                   : !hasRequiredInventory
                   ? "Required Inventory Missing"
                   : canPay
@@ -912,6 +1050,37 @@ export default function TreeOperationsPage() {
           letter-spacing: .12em;
         }
 
+        .careNeedList {
+          display: grid;
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        .careNeedRow {
+          display: grid;
+          grid-template-columns: .7fr 1fr auto;
+          gap: 8px;
+          align-items: center;
+          border-radius: 14px;
+          background: rgba(255,253,246,.7);
+          padding: 10px;
+        }
+
+        .careNeedRow span {
+          color: #101a14;
+          font-weight: 900;
+        }
+
+        .careNeedRow p {
+          margin: 0;
+          font-size: 12px;
+        }
+
+        .careNeedRow b {
+          color: #244536;
+          font-size: 12px;
+        }
+
         .durationBox {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -1105,7 +1274,8 @@ export default function TreeOperationsPage() {
             min-width: 100%;
           }
 
-          .stats {
+          .stats,
+          .careNeedRow {
             grid-template-columns: 1fr;
           }
 
@@ -1120,6 +1290,42 @@ export default function TreeOperationsPage() {
       `}</style>
     </main>
   );
+}
+
+function findInventoryByCategory(inventory: InventoryItem[], categoryName: string) {
+  const target = categoryName.trim().toLowerCase();
+
+  return (
+    inventory.find((item) => {
+      const category = String(item.category || "").trim().toLowerCase();
+      const name = String(item.item_name || "").trim().toLowerCase();
+
+      return (
+        Number(item.remaining_qty || 0) > 0 &&
+        (category.includes(target) || name.includes(target))
+      );
+    }) || null
+  );
+}
+
+function getCareStockCheckForDuration(
+  inventory: InventoryItem[],
+  duration: "1 Week" | "1 Month"
+) {
+  const needs = duration === "1 Week" ? CARE_NEEDS_1_WEEK : CARE_NEEDS_1_MONTH;
+
+  return needs.map((need) => {
+    const stockItem = findInventoryByCategory(inventory, need.category);
+    const availableQty = Number(stockItem?.remaining_qty || 0);
+
+    return {
+      ...need,
+      stockItem,
+      availableQty,
+      unit: stockItem?.unit || "unit",
+      enough: availableQty >= need.requiredQty,
+    };
+  });
 }
 
 function PanelHead({ title, text }: { title: string; text: string }) {
