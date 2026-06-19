@@ -1,300 +1,407 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-
-const plans = [
-  {
-    name: "Basic",
-    price: "₱999",
-    description: "Entry-level agarwood ownership access.",
-    features: [
-      "Membership Certificate",
-      "Access to My Forests",
-      "Ownership Dashboard",
-      "Annual Membership",
-    ],
-  },
-  {
-    name: "Premium",
-    price: "₱4,999",
-    description: "Enhanced ownership experience.",
-    features: [
-      "Everything in Basic",
-      "Priority Forest Access",
-      "Premium Reports",
-      "Investor Priority Support",
-    ],
-  },
-  {
-    name: "Legacy",
-    price: "₱9,999",
-    description: "Highest level membership.",
-    features: [
-      "Everything in Premium",
-      "Legacy Recognition",
-      "Priority Marketplace Access",
-      "Exclusive Ownership Opportunities",
-    ],
-  },
-];
 
 type Profile = {
   id: string;
-  full_name: string | null;
   email: string | null;
+  full_name: string | null;
   membership_status: string | null;
   kyc_status: string | null;
-  account_status: string | null;
+};
+
+type Wallet = {
+  id: string;
+  profile_id: string;
+  balance: number | null;
+};
+
+type MembershipPlan = {
+  id: string;
+  name: string | null;
+  price: number | null;
+  duration_days: number | null;
+  description: string | null;
+  status: string | null;
+};
+
+type MembershipOrder = {
+  id: string;
+  profile_id: string;
+  plan_id: string | null;
+  amount: number | null;
+  status: string | null;
+  payment_status: string | null;
+  created_at: string | null;
+};
+
+type Membership = {
+  id: string;
+  profile_id: string;
+  plan_id: string | null;
+  status: string | null;
+  start_date: string | null;
+  end_date: string | null;
 };
 
 export default function MembershipPage() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [selectedPlan, setSelectedPlan] = useState("");
   const [loading, setLoading] = useState(true);
-  const [submittingPlan, setSubmittingPlan] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [message, setMessage] = useState("");
 
-  async function loadProfile() {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [orders, setOrders] = useState<MembershipOrder[]>([]);
+  const [membership, setMembership] = useState<Membership | null>(null);
+
+  async function loadData() {
     setLoading(true);
+    setMessage("");
 
     const {
       data: { user },
       error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError) {
-      console.error("USER ERROR:", userError);
-    }
-
-    if (!user) {
+    if (userError || !user) {
       window.location.href = "/login";
       return;
     }
 
-    const userEmail = user.email?.trim().toLowerCase() || "";
-
-    const { data: profileById } = await supabase
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status, account_status")
+      .select("id, email, full_name, membership_status, kyc_status")
       .eq("id", user.id)
-      .maybeSingle();
+      .single();
 
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status, account_status")
-      .eq("email", userEmail)
-      .maybeSingle();
-
-    const foundProfile = profileById || profileByEmail;
-
-    if (!foundProfile) {
-      alert("Profile not found. Please contact admin.");
+    if (profileError || !profileData) {
+      setMessage(profileError?.message || "Profile not found.");
       setLoading(false);
       return;
     }
 
-    setProfile(foundProfile);
-    setSelectedPlan(foundProfile.membership_status || "");
+    setProfile(profileData);
+
+    const { data: walletData } = await supabase
+      .from("wallets")
+      .select("id, profile_id, balance")
+      .eq("profile_id", profileData.id)
+      .maybeSingle();
+
+    setWallet(walletData || null);
+
+    const { data: planData, error: planError } = await supabase
+      .from("membership_plans")
+      .select("id, name, price, duration_days, description, status")
+      .order("price", { ascending: true });
+
+    if (planError) {
+      setMessage(planError.message);
+      setLoading(false);
+      return;
+    }
+
+    setPlans((planData || []).filter((plan) => (plan.status || "ACTIVE") === "ACTIVE"));
+
+    const { data: orderData } = await supabase
+      .from("membership_orders")
+      .select("id, profile_id, plan_id, amount, status, payment_status, created_at")
+      .eq("profile_id", profileData.id)
+      .order("created_at", { ascending: false });
+
+    setOrders(orderData || []);
+
+    const { data: membershipData } = await supabase
+      .from("memberships")
+      .select("id, profile_id, plan_id, status, start_date, end_date")
+      .eq("profile_id", profileData.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setMembership(membershipData || null);
     setLoading(false);
   }
 
-  async function applyMembership(plan: string) {
-    if (!profile?.id) {
-      alert("Profile not found.");
-      return;
-    }
-
-    if (profile.kyc_status?.toUpperCase() !== "APPROVED") {
-      alert("Please complete KYC approval before applying for membership.");
-      return;
-    }
-
-    setSubmittingPlan(plan);
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        membership_status: "PENDING",
-        account_status: "PENDING",
-      })
-      .eq("id", profile.id);
-
-    if (error) {
-      console.error("MEMBERSHIP APPLY ERROR:", error);
-      alert("Failed to submit membership application.");
-      setSubmittingPlan("");
-      return;
-    }
-
-    alert(`${plan} membership application submitted for admin approval.`);
-    await loadProfile();
-    setSubmittingPlan("");
-  }
-
   useEffect(() => {
-    loadProfile();
+    loadData();
   }, []);
 
-  const membershipStatus = profile?.membership_status?.toUpperCase() || "NONE";
-  const kycStatus = profile?.kyc_status?.toUpperCase() || "NONE";
+  const walletBalance = Number(wallet?.balance || 0);
+
+  const pendingOrder = useMemo(() => {
+    return orders.find(
+      (order) =>
+        (order.status || "").toUpperCase() === "PENDING" ||
+        (order.payment_status || "").toUpperCase() === "PAID"
+    );
+  }, [orders]);
+
+  async function payMembership(plan: MembershipPlan) {
+    setMessage("");
+
+    if (!profile) {
+      setMessage("Profile not loaded.");
+      return;
+    }
+
+    if (!wallet) {
+      setMessage("Wallet not found. Please create or refresh your wallet first.");
+      return;
+    }
+
+    if (pendingOrder) {
+      setMessage("You already have a pending membership order waiting for admin approval.");
+      return;
+    }
+
+    const price = Number(plan.price || 0);
+
+    if (price <= 0) {
+      setMessage("Invalid membership plan price.");
+      return;
+    }
+
+    if (walletBalance < price) {
+      setMessage("Insufficient wallet balance. Please cash in first.");
+      return;
+    }
+
+    setProcessing(true);
+
+    const newBalance = walletBalance - price;
+
+    const { error: walletError } = await supabase
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id);
+
+    if (walletError) {
+      setMessage(walletError.message);
+      setProcessing(false);
+      return;
+    }
+
+    const { data: orderData, error: orderError } = await supabase
+      .from("membership_orders")
+      .insert({
+        profile_id: profile.id,
+        plan_id: plan.id,
+        amount: price,
+        status: "PENDING",
+        payment_status: "PAID",
+      })
+      .select("id")
+      .single();
+
+    if (orderError) {
+      await supabase.from("wallets").update({ balance: walletBalance }).eq("id", wallet.id);
+      setMessage(orderError.message);
+      setProcessing(false);
+      return;
+    }
+
+    const { error: transactionError } = await supabase.from("wallet_transactions").insert({
+      profile_id: profile.id,
+      type: "MEMBERSHIP_PAYMENT",
+      amount: price,
+      status: "COMPLETED",
+      description: `Membership payment for ${plan.name || "plan"}`,
+      reference_id: orderData?.id || null,
+    });
+
+    if (transactionError) {
+      setMessage(transactionError.message);
+      setProcessing(false);
+      await loadData();
+      return;
+    }
+
+    setMessage("Membership payment submitted. Waiting for admin approval.");
+    setProcessing(false);
+    await loadData();
+  }
 
   return (
-    <main className="min-h-screen bg-[#071f16] text-white px-6 py-10">
-      <div className="mx-auto max-w-7xl space-y-10">
-        <div>
-          <p className="text-sm uppercase tracking-[0.35em] text-[#d9b45f]">
-            Agarwood Membership Program
-          </p>
+    <main className="min-h-screen bg-[#071f16] px-6 py-10 text-white">
+      <div className="mx-auto max-w-7xl">
+        <p className="text-sm uppercase tracking-[0.35em] text-[#d9b45f]">
+          Agarwood Membership
+        </p>
 
-          <h1 className="mt-3 text-5xl font-bold">Choose Your Membership</h1>
+        <h1 className="mt-3 text-4xl font-bold">Membership Payment</h1>
 
-          <p className="mt-4 max-w-2xl text-white/60">
-            Membership unlocks forest ownership, investor privileges, and access
-            to the Agarwood ownership ecosystem.
-          </p>
-        </div>
+        <p className="mt-3 max-w-3xl text-white/60">
+          Activate your investor membership using your wallet balance. After payment,
+          admin approval is required before your membership becomes ACTIVE.
+        </p>
 
-        <section className="rounded-[28px] border border-[#d9b45f]/20 bg-white/[0.05] p-6 shadow-2xl">
-          <div className="grid gap-5 md:grid-cols-4">
-            <StatusCard
-              title="Account"
-              value={profile?.account_status || "Loading"}
-            />
-            <StatusCard title="KYC Status" value={kycStatus} />
-            <StatusCard title="Membership" value={membershipStatus} />
-            <StatusCard
-              title="Approval"
-              value={
-                membershipStatus === "ACTIVE"
-                  ? "Approved"
-                  : membershipStatus === "PENDING"
-                  ? "Waiting Admin"
-                  : membershipStatus === "REJECTED"
-                  ? "Rejected"
-                  : "Not Applied"
-              }
-            />
+        {message && (
+          <div className="mt-6 rounded-2xl border border-[#d9b45f]/30 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#f3d891]">
+            {message}
           </div>
-
-          {membershipStatus === "PENDING" && (
-            <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-4 text-yellow-200">
-              Your membership application is pending admin approval.
-            </div>
-          )}
-
-          {membershipStatus === "ACTIVE" && (
-            <div className="mt-6 rounded-2xl border border-green-400/20 bg-green-400/10 p-4 text-green-200">
-              Your membership is active. You can access investor features.
-            </div>
-          )}
-
-          {membershipStatus === "REJECTED" && (
-            <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-red-200">
-              Your membership application was rejected. Please contact support or
-              submit again.
-            </div>
-          )}
-
-          {kycStatus !== "APPROVED" && (
-            <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-400/10 p-4 text-red-200">
-              KYC approval is required before membership application.
-            </div>
-          )}
-        </section>
+        )}
 
         {loading ? (
-          <div className="rounded-[28px] border border-[#d9b45f]/20 bg-white/[0.05] p-8 text-white/70">
-            Loading membership details...
+          <div className="mt-8 rounded-3xl border border-white/10 bg-white/[0.06] p-6 text-white/60">
+            Loading membership data...
           </div>
         ) : (
-          <div className="grid gap-8 lg:grid-cols-3">
-            {plans.map((plan) => {
-              const disabled =
-                submittingPlan === plan.name ||
-                membershipStatus === "PENDING" ||
-                membershipStatus === "ACTIVE" ||
-                kycStatus !== "APPROVED";
+          <>
+            <section className="mt-8 grid gap-4 md:grid-cols-3">
+              <Card label="Wallet Balance" value={`₱${walletBalance.toLocaleString()}`} />
+              <Card label="Membership Status" value={profile?.membership_status || "INACTIVE"} />
+              <Card label="KYC Status" value={profile?.kyc_status || "NOT SUBMITTED"} />
+            </section>
 
-              return (
-                <div
-                  key={plan.name}
-                  className="rounded-[32px] border border-[#d9b45f]/20 bg-white/[0.05] p-8 shadow-2xl"
-                >
-                  <h2 className="text-3xl font-bold text-[#d9b45f]">
-                    {plan.name}
-                  </h2>
+            {membership && (
+              <section className="mt-8 rounded-[28px] border border-emerald-400/20 bg-emerald-500/10 p-6">
+                <p className="text-sm uppercase tracking-[0.25em] text-emerald-200">
+                  Current Membership
+                </p>
+                <h2 className="mt-2 text-2xl font-black">{membership.status || "UNKNOWN"}</h2>
+                <p className="mt-2 text-sm text-white/60">
+                  Start: {formatDate(membership.start_date)} • End: {formatDate(membership.end_date)}
+                </p>
+              </section>
+            )}
 
-                  <p className="mt-3 text-4xl font-bold">
-                    {plan.price}
-                    <span className="text-lg text-white/60"> / year</span>
-                  </p>
+            {pendingOrder && (
+              <section className="mt-8 rounded-[28px] border border-[#d9b45f]/30 bg-[#d9b45f]/10 p-6">
+                <p className="text-sm uppercase tracking-[0.25em] text-[#d9b45f]">
+                  Pending Admin Approval
+                </p>
+                <h2 className="mt-2 text-2xl font-black">
+                  ₱{Number(pendingOrder.amount || 0).toLocaleString()}
+                </h2>
+                <p className="mt-2 text-sm text-white/60">
+                  Your payment is already recorded. Please wait for admin approval.
+                </p>
+              </section>
+            )}
 
-                  <p className="mt-4 text-white/60">{plan.description}</p>
-
-                  <div className="mt-6 space-y-3">
-                    {plan.features.map((feature) => (
-                      <div
-                        key={feature}
-                        className="rounded-xl bg-black/20 p-3 text-sm"
-                      >
-                        ✓ {feature}
-                      </div>
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={() => applyMembership(plan.name)}
-                    disabled={disabled}
-                    className="mt-8 w-full rounded-2xl bg-[#d9b45f] px-6 py-4 font-bold text-[#071f16] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {submittingPlan === plan.name
-                      ? "Submitting..."
-                      : membershipStatus === "ACTIVE"
-                      ? "Membership Active"
-                      : membershipStatus === "PENDING"
-                      ? "Waiting Admin Approval"
-                      : kycStatus !== "APPROVED"
-                      ? "KYC Required"
-                      : "Apply Membership"}
-                  </button>
+            <section className="mt-8 grid gap-5 lg:grid-cols-3">
+              {plans.length === 0 ? (
+                <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 text-white/60">
+                  No membership plans found.
                 </div>
-              );
-            })}
-          </div>
+              ) : (
+                plans.map((plan) => {
+                  const price = Number(plan.price || 0);
+                  const disabled =
+                    processing ||
+                    !!pendingOrder ||
+                    (profile?.membership_status || "").toUpperCase() === "ACTIVE";
+
+                  return (
+                    <div
+                      key={plan.id}
+                      className="rounded-[32px] border border-white/10 bg-white/[0.06] p-6 shadow-2xl"
+                    >
+                      <p className="text-sm uppercase tracking-[0.25em] text-[#d9b45f]">
+                        Membership Plan
+                      </p>
+
+                      <h2 className="mt-3 text-2xl font-black">
+                        {plan.name || "Unnamed Plan"}
+                      </h2>
+
+                      <p className="mt-4 text-4xl font-black text-[#d9b45f]">
+                        ₱{price.toLocaleString()}
+                      </p>
+
+                      <p className="mt-2 text-sm text-white/50">
+                        Duration: {plan.duration_days || 0} days
+                      </p>
+
+                      <p className="mt-5 min-h-[80px] text-sm leading-6 text-white/60">
+                        {plan.description || "No description added."}
+                      </p>
+
+                      <button
+                        disabled={disabled}
+                        onClick={() => payMembership(plan)}
+                        className={`mt-6 w-full rounded-2xl px-6 py-4 font-black transition ${
+                          disabled
+                            ? "cursor-not-allowed bg-white/10 text-white/30"
+                            : "bg-[#d9b45f] text-[#071f16] hover:scale-[1.01]"
+                        }`}
+                      >
+                        {(profile?.membership_status || "").toUpperCase() === "ACTIVE"
+                          ? "Already Active"
+                          : pendingOrder
+                          ? "Waiting Approval"
+                          : processing
+                          ? "Processing..."
+                          : "Pay From Wallet"}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </section>
+
+            <section className="mt-8 rounded-[32px] border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-2xl font-black">Membership Orders</h2>
+
+              <div className="mt-5 grid gap-3">
+                {orders.length === 0 ? (
+                  <div className="rounded-2xl bg-black/20 p-5 text-white/50">
+                    No membership orders yet.
+                  </div>
+                ) : (
+                  orders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="grid gap-3 rounded-2xl border border-white/10 bg-black/20 p-5 md:grid-cols-4"
+                    >
+                      <div>
+                        <p className="text-xs text-white/40">Amount</p>
+                        <p className="font-black text-[#d9b45f]">
+                          ₱{Number(order.amount || 0).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/40">Status</p>
+                        <p className="font-bold">{order.status || "PENDING"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/40">Payment</p>
+                        <p className="font-bold">{order.payment_status || "UNKNOWN"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/40">Date</p>
+                        <p className="font-bold">{formatDate(order.created_at)}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+          </>
         )}
       </div>
     </main>
   );
 }
 
-function StatusCard({ title, value }: { title: string; value: string }) {
+function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-      <p className="text-sm text-white/60">{title}</p>
-      <div className="mt-3">
-        <Badge value={value} />
-      </div>
+    <div className="rounded-[28px] border border-white/10 bg-white/[0.06] p-5">
+      <p className="text-sm text-white/50">{label}</p>
+      <h3 className="mt-2 text-2xl font-black text-[#d9b45f]">{value}</h3>
     </div>
   );
 }
 
-function Badge({ value }: { value: string }) {
-  const status = value.toUpperCase();
+function formatDate(value: string | null) {
+  if (!value) return "—";
 
-  const color =
-    status === "ACTIVE" || status === "APPROVED"
-      ? "bg-green-500/20 text-green-300 border-green-500/30"
-      : status === "PENDING" || status === "WAITING ADMIN"
-      ? "bg-yellow-500/20 text-yellow-300 border-yellow-500/30"
-      : status === "REJECTED" || status === "KYC REQUIRED"
-      ? "bg-red-500/20 text-red-300 border-red-500/30"
-      : "bg-white/10 text-white/70 border-white/10";
-
-  return (
-    <span
-      className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${color}`}
-    >
-      {status}
-    </span>
-  );
+  return new Date(value).toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
