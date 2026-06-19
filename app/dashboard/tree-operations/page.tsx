@@ -10,7 +10,6 @@ type Profile = {
   id: string;
   full_name: string | null;
   email: string | null;
-  auto_renew?: boolean | null;
 };
 
 type Wallet = {
@@ -231,11 +230,6 @@ export default function TreeOperationsPage() {
     currentProfile: Profile,
     currentWallet: Wallet | null
   ) {
-    if (!currentProfile.auto_renew) {
-      setMessage("Auto-renew is OFF in Settings. No renewals processed.");
-      return;
-    }
-
     if (!currentWallet) {
       setMessage("Wallet not found. Auto-renew was not processed.");
       return;
@@ -388,21 +382,62 @@ export default function TreeOperationsPage() {
       return;
     }
 
-    const email = user.email?.trim().toLowerCase() || "";
+    const email = user.email?.trim() || "";
+    const normalizedEmail = email.toLowerCase();
 
-    const { data: profileById } = await supabase
+    const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
-      .select("id, full_name, email, auto_renew")
+      .select("id, full_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    const { data: profileByEmail } = await supabase
+    if (profileByIdError) {
+      setMessage(profileByIdError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByExactEmail, error: profileByExactEmailError } = await supabase
       .from("profiles")
-      .select("id, full_name, email, auto_renew")
+      .select("id, full_name, email")
       .eq("email", email)
       .maybeSingle();
 
-    const currentProfile = profileById || profileByEmail;
+    if (profileByExactEmailError) {
+      setMessage(profileByExactEmailError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByLowerEmail, error: profileByLowerEmailError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", normalizedEmail)
+      .maybeSingle();
+
+    if (profileByLowerEmailError) {
+      setMessage(profileByLowerEmailError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByEmailFallback, error: profileByEmailFallbackError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (profileByEmailFallbackError) {
+      setMessage(profileByEmailFallbackError.message);
+      setLoading(false);
+      return;
+    }
+
+    const currentProfile =
+      profileById ||
+      profileByExactEmail ||
+      profileByLowerEmail ||
+      profileByEmailFallback;
 
     if (!currentProfile) {
       setMessage("Profile not found.");
@@ -895,7 +930,7 @@ export default function TreeOperationsPage() {
                       <p>
                         {tree.custom_name ||
                           tree.display_name ||
-                          tree.name ||
+                          tree.tree_code ||
                           "Agarwood Tree"}
                       </p>
                       <small>
@@ -955,7 +990,7 @@ export default function TreeOperationsPage() {
                   <p>
                     {selectedTree.custom_name ||
                       selectedTree.display_name ||
-                      selectedTree.name ||
+                      selectedTree.tree_code ||
                       "Agarwood Tree"}
                   </p>
                 </div>
@@ -982,7 +1017,7 @@ export default function TreeOperationsPage() {
                     <Mini
                       label="Auto Renew"
                       value={
-                        selectedTree.auto_renew_enabled || profile?.auto_renew
+                        selectedTree.auto_renew_enabled
                           ? "ON"
                           : "OFF"
                       }
@@ -1124,7 +1159,7 @@ export default function TreeOperationsPage() {
               </button>
 
               <p className="warning">
-                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads profiles.auto_renew and active care_program_subscriptions. If auto_renew_enabled is ON and next_renewal_date is due, it checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. If Auto Renew is OFF, it does nothing. Still disabled: no inventory deduction, no billing engine, no cron jobs, and no background jobs.
+                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads active care_program_subscriptions where auto_renew_enabled is ON and next_renewal_date is due. It checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. Still disabled: no inventory deduction, no billing engine, no cron jobs, and no background jobs.
               </p>
             </section>
           </section>
