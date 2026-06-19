@@ -17,6 +17,20 @@ type Wallet = {
   balance: number | null;
 };
 
+type InventoryItem = {
+  id: string;
+  profile_id: string;
+  tree_id: string | null;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  starting_qty: number | null;
+  remaining_qty: number | null;
+  low_stock_level: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
 type OperationRequest = {
   id: string;
   profile_id: string;
@@ -35,6 +49,8 @@ type OperationItem = {
   category: "Service" | "Inventory Use" | "Subscription";
   price: number;
   description: string;
+  requiredInventoryCategory?: string;
+  requiredQty?: number;
 };
 
 const OPERATIONS: OperationItem[] = [
@@ -67,18 +83,24 @@ const OPERATIONS: OperationItem[] = [
     category: "Inventory Use",
     price: 45,
     description: "Request fertilizer application for the selected tree.",
+    requiredInventoryCategory: "Fertilizer",
+    requiredQty: 1,
   },
   {
     name: "Apply Insecticide",
     category: "Inventory Use",
     price: 45,
     description: "Request insecticide application when field team confirms need.",
+    requiredInventoryCategory: "Insecticide",
+    requiredQty: 1,
   },
   {
     name: "Apply Fungicide",
     category: "Inventory Use",
     price: 45,
     description: "Request fungicide application for fungal prevention or treatment.",
+    requiredInventoryCategory: "Fungicide",
+    requiredQty: 1,
   },
 ];
 
@@ -86,12 +108,14 @@ export default function TreeOperationsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [requests, setRequests] = useState<OperationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
   const [selectedTreeId, setSelectedTreeId] = useState("");
   const [selectedOperation, setSelectedOperation] = useState("Photo Update");
+  const [subscriptionDuration, setSubscriptionDuration] = useState<"1 Week" | "1 Month">("1 Week");
   const [note, setNote] = useState("");
   const [processing, setProcessing] = useState(false);
 
@@ -132,14 +156,12 @@ export default function TreeOperationsPage() {
 
     setProfile(currentProfile);
 
-    const { data: walletData } = await supabase
+    const { data: walletRows } = await supabase
       .from("wallets")
-      .select("id, profile_id, balance")
+      .select("id, profile_id, balance, created_at")
       .eq("profile_id", currentProfile.id)
-      .maybeSingle();
-
-    console.log("PROFILE ID:", currentProfile.id);
-    console.log("WALLET DATA:", walletData);
+      .order("created_at", { ascending: false })
+      .limit(1);
 
     const { data: treeData, error: treeError } = await supabase
       .from("trees")
@@ -153,17 +175,30 @@ export default function TreeOperationsPage() {
       return;
     }
 
+    const { data: inventoryData, error: inventoryError } = await supabase
+      .from("inventory")
+      .select("*")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false });
+
+    if (inventoryError) {
+      console.warn("Inventory load error:", inventoryError.message);
+    }
+
     const { data: requestData } = await supabase
       .from("tree_operation_requests")
-      .select("id, profile_id, tree_id, operation_type, operation_fee, platform_fee, total_amount, notes, status, created_at")
+      .select(
+        "id, profile_id, tree_id, operation_type, operation_fee, platform_fee, total_amount, notes, status, created_at"
+      )
       .eq("profile_id", currentProfile.id)
       .order("created_at", { ascending: false });
 
     const ownedTrees = treeData || [];
 
-    setWallet(walletData || null);
+    setWallet((walletRows?.[0] as Wallet) || null);
     setTrees(ownedTrees);
-    setRequests(requestData || []);
+    setInventory(inventoryError ? [] : ((inventoryData as InventoryItem[]) || []));
+    setRequests((requestData as OperationRequest[]) || []);
     setSelectedTreeId((current) => current || ownedTrees[0]?.id || "");
     setLoading(false);
   }
@@ -180,16 +215,48 @@ export default function TreeOperationsPage() {
     return OPERATIONS.find((item) => item.name === selectedOperation) || OPERATIONS[0];
   }, [selectedOperation]);
 
+  const requiredInventoryItem = useMemo(() => {
+    if (!operation.requiredInventoryCategory) return null;
+
+    return (
+      inventory.find((item) => {
+        const category = String(item.category || "").toLowerCase();
+        const name = String(item.item_name || "").toLowerCase();
+        const required = String(operation.requiredInventoryCategory || "").toLowerCase();
+
+        return (
+          Number(item.remaining_qty || 0) > 0 &&
+          (category.includes(required) || name.includes(required))
+        );
+      }) || null
+    );
+  }, [inventory, operation]);
+
   const walletBalance = Number(wallet?.balance || 0);
-  const platformFee = operation.price * 0.02;
-  const totalPay = operation.price + platformFee;
+  const baseOperationFee =
+    operation.category === "Subscription" && subscriptionDuration === "1 Week"
+      ? 500
+      : operation.price;
+  const platformFee = baseOperationFee * 0.02;
+  const totalPay = baseOperationFee + platformFee;
   const canPay = walletBalance >= totalPay;
 
+  const hasRequiredInventory =
+    operation.category !== "Inventory Use" ||
+    (requiredInventoryItem &&
+      Number(requiredInventoryItem.remaining_qty || 0) >= Number(operation.requiredQty || 1));
+
   const stats = useMemo(() => {
-    const pending = requests.filter((item) => (item.status || "PENDING").toUpperCase() === "PENDING").length;
-    const completed = requests.filter((item) => (item.status || "").toUpperCase() === "COMPLETED").length;
+    const pending = requests.filter(
+      (item) => (item.status || "PENDING").toUpperCase() === "PENDING"
+    ).length;
+    const completed = requests.filter(
+      (item) => (item.status || "").toUpperCase() === "COMPLETED"
+    ).length;
     const totalSpent = requests
-      .filter((item) => ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase()))
+      .filter((item) =>
+        ["APPROVED", "COMPLETED", "PENDING"].includes((item.status || "").toUpperCase())
+      )
       .reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
 
     return {
@@ -208,9 +275,16 @@ export default function TreeOperationsPage() {
     if (!selectedTree) return setMessage("Please select a tree.");
     if (!canPay) return setMessage("Insufficient wallet balance for this operation request.");
 
+    if (operation.category === "Inventory Use" && !hasRequiredInventory) {
+      return setMessage(
+        `No ${operation.requiredInventoryCategory} in inventory. Please buy from Marketplace first.`
+      );
+    }
+
     setProcessing(true);
 
     const newBalance = walletBalance - totalPay;
+    const requiredQty = Number(operation.requiredQty || 1);
 
     const { error: walletError } = await supabase
       .from("wallets")
@@ -223,16 +297,52 @@ export default function TreeOperationsPage() {
       return;
     }
 
+    let deductedInventoryId: string | null = null;
+    let deductedInventoryName: string | null = null;
+    let deductedInventoryUnit: string | null = null;
+
+    if (operation.category === "Inventory Use" && requiredInventoryItem) {
+      const currentRemaining = Number(requiredInventoryItem.remaining_qty || 0);
+      const nextRemaining = currentRemaining - requiredQty;
+
+      const { error: inventoryDeductError } = await supabase
+        .from("inventory")
+        .update({
+          remaining_qty: nextRemaining,
+          status: nextRemaining <= Number(requiredInventoryItem.low_stock_level || 0) ? "LOW_STOCK" : "AVAILABLE",
+        })
+        .eq("id", requiredInventoryItem.id);
+
+      if (inventoryDeductError) {
+        await supabase.from("wallets").update({ balance: walletBalance }).eq("id", wallet.id);
+        setMessage(inventoryDeductError.message);
+        setProcessing(false);
+        return;
+      }
+
+      deductedInventoryId = requiredInventoryItem.id;
+      deductedInventoryName = requiredInventoryItem.item_name;
+      deductedInventoryUnit = requiredInventoryItem.unit;
+    }
+
+    const requestNotes = [
+      note.trim() || null,
+      operation.category === "Subscription" ? `Subscription Duration: ${subscriptionDuration}` : null,
+      deductedInventoryName ? `Inventory deducted: ${requiredQty} ${deductedInventoryUnit || ""} ${deductedInventoryName}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
     const { data: requestData, error: requestError } = await supabase
       .from("tree_operation_requests")
       .insert({
         profile_id: profile.id,
         tree_id: selectedTree.id,
         operation_type: operation.name,
-        operation_fee: operation.price,
+        operation_fee: baseOperationFee,
         platform_fee: platformFee,
         total_amount: totalPay,
-        notes: note.trim() || null,
+        notes: requestNotes || null,
         status: "PENDING",
       })
       .select("id")
@@ -240,9 +350,32 @@ export default function TreeOperationsPage() {
 
     if (requestError) {
       await supabase.from("wallets").update({ balance: walletBalance }).eq("id", wallet.id);
+
+      if (deductedInventoryId && requiredInventoryItem) {
+        await supabase
+          .from("inventory")
+          .update({
+            remaining_qty: Number(requiredInventoryItem.remaining_qty || 0),
+            status: requiredInventoryItem.status || "AVAILABLE",
+          })
+          .eq("id", deductedInventoryId);
+      }
+
       setMessage(requestError.message);
       setProcessing(false);
       return;
+    }
+
+    if (deductedInventoryId && deductedInventoryName) {
+      await supabase.from("inventory_usage_logs").insert({
+        profile_id: profile.id,
+        tree_id: selectedTree.id,
+        inventory_id: deductedInventoryId,
+        item_name: deductedInventoryName,
+        qty_used: requiredQty,
+        unit: deductedInventoryUnit || null,
+        used_by: "Customer Operation Request",
+      });
     }
 
     const { error: txError } = await supabase.from("wallet_transactions").insert({
@@ -251,7 +384,9 @@ export default function TreeOperationsPage() {
       amount: totalPay,
       status: "COMPLETED",
       reference_no: requestData?.id || null,
-      description: `${operation.name} request for ${selectedTree.tree_code || selectedTree.id}`,
+      description: `${operation.name} request for ${
+        selectedTree.tree_code || selectedTree.id
+      }`,
     });
 
     if (txError) {
@@ -262,7 +397,11 @@ export default function TreeOperationsPage() {
     }
 
     setNote("");
-    setMessage("Tree operation request submitted. Waiting for admin or operations processing.");
+    setMessage(
+      operation.category === "Inventory Use"
+        ? "Tree operation request submitted. Inventory stock was deducted and request is waiting for admin or gardener processing."
+        : "Tree operation request submitted. Waiting for admin or operations processing."
+    );
     setProcessing(false);
     await loadData();
   }
@@ -275,7 +414,7 @@ export default function TreeOperationsPage() {
           <h1>Request Tree Care Services</h1>
           <span>
             Select one of your owned trees, choose a service, review the fee,
-            and submit a real operation request for admin or caretaker processing.
+            and submit a real operation request for admin or gardener processing.
           </span>
         </div>
 
@@ -334,20 +473,26 @@ export default function TreeOperationsPage() {
             <section className="panel">
               <PanelHead
                 title="2. Choose Service"
-                text="These are request types. Admin or field staff will process them."
+                text="Inventory-use services require stock from Marketplace purchases."
               />
 
               <div className="serviceList">
                 {OPERATIONS.map((item) => (
                   <button
                     key={item.name}
-                    className={`serviceCard ${selectedOperation === item.name ? "active" : ""}`}
+                    className={`serviceCard ${
+                      selectedOperation === item.name ? "active" : ""
+                    }`}
                     onClick={() => setSelectedOperation(item.name)}
                   >
                     <span>{item.category}</span>
                     <strong>{item.name}</strong>
                     <p>{item.description}</p>
-                    <b>{peso(item.price)}</b>
+                    <b>
+                      {item.category === "Subscription"
+                        ? "₱ 500.00 / week or ₱ 1,500.00 / month"
+                        : peso(item.price)}
+                    </b>
                   </button>
                 ))}
               </div>
@@ -355,7 +500,7 @@ export default function TreeOperationsPage() {
 
             <section className="panel">
               <PanelHead
-                title="3. Fee Review"
+                title="3. Fee & Inventory Review"
                 text="Wallet is charged when request is submitted."
               />
 
@@ -373,8 +518,43 @@ export default function TreeOperationsPage() {
                 <p>{operation.description}</p>
               </div>
 
+              {operation.category === "Subscription" && (
+                <div className="durationBox">
+                  <button
+                    className={subscriptionDuration === "1 Week" ? "active" : ""}
+                    onClick={() => setSubscriptionDuration("1 Week")}
+                  >
+                    1 Week
+                  </button>
+                  <button
+                    className={subscriptionDuration === "1 Month" ? "active" : ""}
+                    onClick={() => setSubscriptionDuration("1 Month")}
+                  >
+                    1 Month
+                  </button>
+                </div>
+              )}
+
+              {operation.category === "Inventory Use" && (
+                <div className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}>
+                  <strong>Inventory Check</strong>
+                  {hasRequiredInventory && requiredInventoryItem ? (
+                    <p>
+                      Available: {requiredInventoryItem.item_name} —{" "}
+                      {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
+                      {requiredInventoryItem.unit || ""}
+                    </p>
+                  ) : (
+                    <p>
+                      No {operation.requiredInventoryCategory} in inventory.
+                      Please buy from Marketplace first.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="feeBox">
-                <FeeRow label="Operation Fee" value={operation.price} />
+                <FeeRow label="Operation Fee" value={baseOperationFee} />
                 <FeeRow label="Platform Fee 2%" value={platformFee} />
                 <FeeRow label="Total Pay" value={totalPay} strong />
                 <FeeRow label="Wallet Balance" value={walletBalance} />
@@ -391,10 +571,16 @@ export default function TreeOperationsPage() {
 
               <button
                 className="submitButton"
-                disabled={!canPay || processing}
+                disabled={!canPay || processing || !hasRequiredInventory}
                 onClick={submitRequest}
               >
-                {processing ? "Submitting..." : canPay ? "Submit Operation Request" : "Insufficient Wallet Balance"}
+                {processing
+                  ? "Submitting..."
+                  : !hasRequiredInventory
+                  ? "Required Inventory Missing"
+                  : canPay
+                  ? "Submit Operation Request"
+                  : "Insufficient Wallet Balance"}
               </button>
 
               {!canPay && (
@@ -672,7 +858,9 @@ export default function TreeOperationsPage() {
 
         .selectedBox,
         .operationBox,
-        .feeBox {
+        .feeBox,
+        .inventoryCheck,
+        .durationBox {
           border-radius: 22px;
           background: #f3ead8;
           border: 1px solid rgba(92,70,35,.08);
@@ -699,11 +887,50 @@ export default function TreeOperationsPage() {
         }
 
         .selectedBox p,
-        .operationBox p {
+        .operationBox p,
+        .inventoryCheck p {
           margin: 8px 0 0;
           color: #6b6b62;
           line-height: 1.5;
           font-weight: 800;
+        }
+
+        .inventoryCheck.ok {
+          background: rgba(49,85,61,.10);
+          color: #31553d;
+        }
+
+        .inventoryCheck.bad {
+          background: rgba(163,60,42,.10);
+          color: #a33c2a;
+        }
+
+        .inventoryCheck strong {
+          display: block;
+          font-size: 13px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        .durationBox {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .durationBox button {
+          border: 1px solid rgba(92,70,35,.12);
+          border-radius: 16px;
+          padding: 12px;
+          background: rgba(255,253,246,.8);
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .durationBox button.active {
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
         }
 
         .feeRow {
@@ -811,6 +1038,7 @@ export default function TreeOperationsPage() {
           margin-top: 6px;
           color: #8c6a3c;
           font-weight: 900;
+          white-space: pre-line;
         }
 
         .requestRight {
@@ -912,7 +1140,15 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function FeeRow({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
+function FeeRow({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+}) {
   return (
     <div className={`feeRow ${strong ? "strong" : ""}`}>
       <span>{label}</span>
