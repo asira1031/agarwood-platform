@@ -16,6 +16,7 @@ type Wallet = {
   id: string;
   profile_id: string;
   balance: number | null;
+  created_at?: string | null;
 };
 
 type CashInRequest = {
@@ -102,91 +103,140 @@ export default function WalletPage() {
   const [payoutName, setPayoutName] = useState("");
   const [payoutNumber, setPayoutNumber] = useState("");
   const [message, setMessage] = useState("");
+  const [processing, setProcessing] = useState(false);
+
+  async function getOrCreateWallet(profileId: string) {
+    const { data: walletRows, error: walletLoadError } = await supabase
+      .from("wallets")
+      .select("id, profile_id, balance, created_at")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (walletLoadError) throw walletLoadError;
+
+    if (walletRows && walletRows.length > 0) {
+      return walletRows[0] as Wallet;
+    }
+
+    const { data: createdWallet, error: createWalletError } = await supabase
+      .from("wallets")
+      .insert({
+        profile_id: profileId,
+        balance: 0,
+      })
+      .select("id, profile_id, balance, created_at")
+      .single();
+
+    if (createWalletError) throw createWalletError;
+
+    return createdWallet as Wallet;
+  }
 
   async function loadWallet() {
-    setLoading(true);
-    setMessage("");
+    try {
+      setLoading(true);
+      setMessage("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
+      if (userError) throw userError;
 
-    const email = user.email?.trim().toLowerCase() || "";
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
 
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .eq("id", user.id)
-      .maybeSingle();
+      const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .eq("email", email)
-      .maybeSingle();
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, membership_status, kyc_status")
+        .eq("id", user.id)
+        .maybeSingle();
 
-    const currentProfile = profileById || profileByEmail;
+      let currentProfile = profileById as Profile | null;
 
-    if (!currentProfile) {
+      if (!currentProfile && email) {
+        const { data: profileByEmail } = await supabase
+          .from("profiles")
+          .select("id, full_name, email, membership_status, kyc_status")
+          .eq("email", email)
+          .maybeSingle();
+
+        currentProfile = profileByEmail as Profile | null;
+      }
+
+      if (!currentProfile) {
+        setMessage("Profile not found.");
+        setLoading(false);
+        return;
+      }
+
+      setProfile(currentProfile);
+
+      const profileId = currentProfile.id;
+      const walletData = await getOrCreateWallet(profileId);
+
+      const { data: cashInData } = await supabase
+        .from("cashin_requests")
+        .select("id, amount, payment_method, reference_no, receipt_url, status, created_at")
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      const { data: withdrawalData, error: withdrawalError } = await supabase
+        .from("withdrawal_requests")
+        .select(
+          "id, amount, processing_fee, net_receive, status, created_at, payout_method, payout_account_name, payout_account_number"
+        )
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      if (withdrawalError) {
+        console.warn("withdrawal_requests load error:", withdrawalError.message);
+      }
+
+      const { data: transactionData } = await supabase
+        .from("wallet_transactions")
+        .select("id, transaction_type, amount, status, reference_no, description, created_at")
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      const { data: orderData, error: orderError } = await supabase
+        .from("membership_orders")
+        .select("id, amount, status, payment_status, created_at")
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      if (orderError) {
+        console.warn("membership_orders load error:", orderError.message);
+      }
+
+      const { data: sellData, error: sellError } = await supabase
+        .from("sell_tree_requests")
+        .select("id, expected_amount, selling_price, status, created_at")
+        .eq("profile_id", profileId)
+        .order("created_at", { ascending: false });
+
+      if (sellError) {
+        console.warn("sell_tree_requests load error:", sellError.message);
+      }
+
+      setWallet(walletData);
+      setCashIns((cashInData as CashInRequest[]) || []);
+      setWithdrawals(withdrawalError ? [] : ((withdrawalData as WithdrawalRequest[]) || []));
+      setTransactions((transactionData as WalletTransaction[]) || []);
+      setMembershipOrders(orderError ? [] : ((orderData as MembershipOrder[]) || []));
+      setSellTreeRequests(sellError ? [] : ((sellData as SellTreeRequest[]) || []));
+    } catch (error: any) {
+      console.error("Wallet load error:", error);
+      setMessage(error?.message || "Unable to load wallet.");
+    } finally {
       setLoading(false);
-      setMessage("Profile not found.");
-      return;
     }
-
-    setProfile(currentProfile);
-
-    const profileId = currentProfile.id;
-
-    const { data: walletData } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance")
-      .eq("profile_id", profileId)
-      .maybeSingle();
-
-    const { data: cashInData } = await supabase
-      .from("cashin_requests")
-      .select("id, amount, payment_method, reference_no, receipt_url, status, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    const { data: withdrawalData } = await supabase
-      .from("withdrawal_requests")
-      .select(
-        "id, amount, processing_fee, net_receive, status, created_at, payout_method, payout_account_name, payout_account_number"
-      )
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    const { data: transactionData } = await supabase
-      .from("wallet_transactions")
-      .select("id, transaction_type, amount, status, reference_no, description, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    const { data: orderData } = await supabase
-      .from("membership_orders")
-      .select("id, amount, status, payment_status, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    const { data: sellData } = await supabase
-      .from("sell_tree_requests")
-      .select("id, expected_amount, selling_price, status, created_at")
-      .eq("profile_id", profileId)
-      .order("created_at", { ascending: false });
-
-    setWallet(walletData || null);
-    setCashIns(cashInData || []);
-    setWithdrawals(withdrawalData || []);
-    setTransactions(transactionData || []);
-    setMembershipOrders(orderData || []);
-    setSellTreeRequests(sellData || []);
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -203,16 +253,18 @@ export default function WalletPage() {
   const withdrawNet = withdrawNumber - withdrawFee;
 
   const stats = useMemo(() => {
-    const totalCashIn = cashIns
-      .filter((item) => ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase()))
+    const totalCashIn = transactions
+      .filter((item) => ["CASH_IN", "CASHIN", "CASH_IN_APPROVED"].includes((item.transaction_type || "").toUpperCase()))
+      .filter((item) => ["APPROVED", "COMPLETED", "SUCCESS"].includes((item.status || "").toUpperCase()))
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-    const totalWithdrawn = withdrawals
-      .filter((item) => ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase()))
+    const totalWithdrawn = transactions
+      .filter((item) => ["WITHDRAW", "WITHDRAWAL", "CASH_OUT", "CASHOUT"].includes((item.transaction_type || "").toUpperCase()))
+      .filter((item) => ["APPROVED", "COMPLETED", "SUCCESS", "PENDING"].includes((item.status || "").toUpperCase()))
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     return { totalCashIn, totalWithdrawn };
-  }, [cashIns, withdrawals]);
+  }, [transactions]);
 
   const pendingItems = useMemo<PendingItem[]>(() => {
     const pendingStatuses = ["PENDING", "PROCESSING", "UNDER_REVIEW", "UNDER REVIEW"];
@@ -267,90 +319,157 @@ export default function WalletPage() {
   }, [cashIns, withdrawals, membershipOrders, sellTreeRequests]);
 
   async function submitCashIn() {
-    setMessage("");
+    try {
+      setMessage("");
+      setProcessing(true);
 
-    if (!profile) return setMessage("Profile not found.");
+      if (!profile) return setMessage("Profile not found.");
+      if (!wallet) return setMessage("Wallet not found.");
 
-    const amount = Number(cashInAmount);
+      const amount = Number(cashInAmount);
 
-    if (!amount || amount < 100) {
-      return setMessage("Minimum cash-in amount is ₱100.");
+      if (!amount || amount < 100) {
+        return setMessage("Minimum cash-in amount is ₱100.");
+      }
+
+      if (!paymentMethod) {
+        return setMessage("Please select payment method.");
+      }
+
+      if (!cashInReference.trim()) {
+        return setMessage("Reference number is required after payment.");
+      }
+
+      const newBalance = Number(wallet.balance || 0) + amount;
+
+      const { error: walletError } = await supabase
+        .from("wallets")
+        .update({ balance: newBalance })
+        .eq("id", wallet.id);
+
+      if (walletError) throw walletError;
+
+      const { error: cashInError } = await supabase.from("cashin_requests").insert({
+        profile_id: profile.id,
+        amount,
+        payment_method: paymentMethod,
+        account_name: PAYMENT_ACCOUNT_NAME,
+        reference_no: cashInReference.trim(),
+        receipt_url: receiptUrl.trim() || null,
+        status: "COMPLETED",
+      });
+
+      if (cashInError) throw cashInError;
+
+      const { error: txError } = await supabase.from("wallet_transactions").insert({
+        profile_id: profile.id,
+        transaction_type: "CASH_IN",
+        amount,
+        status: "COMPLETED",
+        reference_no: cashInReference.trim(),
+        description: `Cash-in via ${paymentMethod}`,
+      });
+
+      if (txError) throw txError;
+
+      setCashInAmount("");
+      setPaymentMethod("");
+      setCashInReference("");
+      setReceiptUrl("");
+      setActiveAction("NONE");
+      setWallet((prev) => (prev ? { ...prev, balance: newBalance } : prev));
+      setMessage(`Cash-in completed. Wallet balance increased by ${peso(amount)}.`);
+      await loadWallet();
+    } catch (error: any) {
+      console.error("Cash-in error:", error);
+      setMessage(error?.message || "Cash-in failed.");
+    } finally {
+      setProcessing(false);
     }
-
-    if (!paymentMethod) {
-      return setMessage("Please select payment method.");
-    }
-
-    if (!cashInReference.trim()) {
-      return setMessage("Reference number is required after payment.");
-    }
-
-    const { error } = await supabase.from("cashin_requests").insert({
-      profile_id: profile.id,
-      amount,
-      payment_method: paymentMethod,
-      account_name: PAYMENT_ACCOUNT_NAME,
-      reference_no: cashInReference.trim(),
-      receipt_url: receiptUrl.trim() || null,
-      status: "PENDING",
-    });
-
-    if (error) return setMessage(error.message);
-
-    setCashInAmount("");
-    setPaymentMethod("");
-    setCashInReference("");
-    setReceiptUrl("");
-    setActiveAction("NONE");
-    setMessage("Cash-in request submitted. Waiting for admin verification.");
-    await loadWallet();
   }
 
   async function submitWithdrawal() {
-    setMessage("");
+    try {
+      setMessage("");
+      setProcessing(true);
 
-    if (!profile) return setMessage("Profile not found.");
+      if (!profile) return setMessage("Profile not found.");
+      if (!wallet) return setMessage("Wallet not found.");
 
-    if (!canWithdraw) {
-      return setMessage("Withdrawal locked. Membership must be ACTIVE and KYC must be APPROVED.");
+      if (!canWithdraw) {
+        return setMessage("Withdrawal locked. Membership must be ACTIVE and KYC must be APPROVED.");
+      }
+
+      if (!withdrawNumber || withdrawNumber < 100) {
+        return setMessage("Minimum withdrawal amount is ₱100.");
+      }
+
+      if (withdrawNumber > walletBalance) {
+        return setMessage("Insufficient wallet balance.");
+      }
+
+      if (!payoutMethod) {
+        return setMessage("Please select payout method.");
+      }
+
+      if (!payoutName.trim() || !payoutNumber.trim()) {
+        return setMessage("Payout account name and number are required.");
+      }
+
+      const newBalance = walletBalance - withdrawNumber;
+
+      const { error: walletError } = await supabase
+        .from("wallets")
+        .update({ balance: newBalance })
+        .eq("id", wallet.id);
+
+      if (walletError) throw walletError;
+
+      const { data: withdrawalData, error: withdrawError } = await supabase
+        .from("withdrawal_requests")
+        .insert({
+          profile_id: profile.id,
+          amount: withdrawNumber,
+          processing_fee: withdrawFee,
+          net_receive: withdrawNet,
+          payout_method: payoutMethod,
+          payout_account_name: payoutName.trim(),
+          payout_account_number: payoutNumber.trim(),
+          status: "PENDING",
+        })
+        .select("id")
+        .single();
+
+      if (withdrawError) {
+        await supabase.from("wallets").update({ balance: walletBalance }).eq("id", wallet.id);
+        throw withdrawError;
+      }
+
+      const { error: txError } = await supabase.from("wallet_transactions").insert({
+        profile_id: profile.id,
+        transaction_type: "WITHDRAWAL",
+        amount: withdrawNumber,
+        status: "PENDING",
+        reference_no: withdrawalData?.id || null,
+        description: `Withdrawal request via ${payoutMethod}. Net receive ${peso(withdrawNet)}.`,
+      });
+
+      if (txError) throw txError;
+
+      setWithdrawAmount("");
+      setPayoutMethod("");
+      setPayoutName("");
+      setPayoutNumber("");
+      setActiveAction("NONE");
+      setWallet((prev) => (prev ? { ...prev, balance: newBalance } : prev));
+      setMessage(`Withdrawal request submitted. Wallet balance decreased by ${peso(withdrawNumber)}.`);
+      await loadWallet();
+    } catch (error: any) {
+      console.error("Withdrawal error:", error);
+      setMessage(error?.message || "Withdrawal failed.");
+    } finally {
+      setProcessing(false);
     }
-
-    if (!withdrawNumber || withdrawNumber < 100) {
-      return setMessage("Minimum withdrawal amount is ₱100.");
-    }
-
-    if (withdrawNumber > walletBalance) {
-      return setMessage("Insufficient wallet balance.");
-    }
-
-    if (!payoutMethod) {
-      return setMessage("Please select payout method.");
-    }
-
-    if (!payoutName.trim() || !payoutNumber.trim()) {
-      return setMessage("Payout account name and number are required.");
-    }
-
-    const { error } = await supabase.from("withdrawal_requests").insert({
-      profile_id: profile.id,
-      amount: withdrawNumber,
-      processing_fee: withdrawFee,
-      net_receive: withdrawNet,
-      payout_method: payoutMethod,
-      payout_account_name: payoutName.trim(),
-      payout_account_number: payoutNumber.trim(),
-      status: "PENDING",
-    });
-
-    if (error) return setMessage(error.message);
-
-    setWithdrawAmount("");
-    setPayoutMethod("");
-    setPayoutName("");
-    setPayoutNumber("");
-    setActiveAction("NONE");
-    setMessage("Withdrawal request submitted. Waiting for admin approval.");
-    await loadWallet();
   }
 
   return (
@@ -381,8 +500,8 @@ export default function WalletPage() {
               <div className="balanceSeal">₱</div>
             </div>
 
-            <MetricCard label="Total Cash-In" value={peso(stats.totalCashIn)} note="Approved cash-ins" />
-            <MetricCard label="Total Withdrawn" value={peso(stats.totalWithdrawn)} note="Completed withdrawals" />
+            <MetricCard label="Total Cash-In" value={peso(stats.totalCashIn)} note="Completed cash-ins" />
+            <MetricCard label="Total Withdrawn" value={peso(stats.totalWithdrawn)} note="Submitted withdrawals" />
           </section>
 
           <section className="actionCards">
@@ -416,7 +535,7 @@ export default function WalletPage() {
               <PanelHeader
                 title="Cash-In Request"
                 text="Select amount first. After choosing an amount, select where you paid and submit the reference number."
-                badge="Payment → Admin Verification"
+                badge="Instant Wallet Credit"
               />
 
               <div className="stepBox">
@@ -499,8 +618,8 @@ export default function WalletPage() {
                     </label>
                   </div>
 
-                  <button className="primaryButton" onClick={submitCashIn}>
-                    Submit Cash-In Request
+                  <button className="primaryButton" onClick={submitCashIn} disabled={processing}>
+                    {processing ? "Processing..." : "Submit Cash-In"}
                   </button>
                 </div>
               )}
@@ -512,7 +631,7 @@ export default function WalletPage() {
               <PanelHeader
                 title="Withdrawal Request"
                 text="Select amount first, then tell us where to send your cash-out. A 2% processing fee is applied."
-                badge="Admin Approval Required"
+                badge="Balance Deducted on Submit"
               />
 
               <div className="ruleGrid">
@@ -612,8 +731,8 @@ export default function WalletPage() {
                         </div>
                       </div>
 
-                      <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw}>
-                        Submit Withdrawal Request
+                      <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw || processing}>
+                        {processing ? "Processing..." : "Submit Withdrawal Request"}
                       </button>
 
                       {!canWithdraw && (
@@ -1376,12 +1495,7 @@ function QrPayment({ image, label }: { image: string; label: string }) {
         <h3>{label}</h3>
         <p>Scan this QR and send payment to JANICA MALDIVES.</p>
 
-        <a
-          className="openQr"
-          href={image}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
+        <a className="openQr" href={image} target="_blank" rel="noopener noreferrer">
           Open Full QR
         </a>
       </div>
@@ -1418,14 +1532,14 @@ function HistoryRow({
 }
 
 function peso(value: number) {
-  return `₱ ${value.toLocaleString("en-PH", {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
 
 function pesoNoDecimal(value: number) {
-  return `₱${value.toLocaleString("en-PH")}`;
+  return `₱${Number(value || 0).toLocaleString("en-PH")}`;
 }
 
 function cleanType(value: string | null) {

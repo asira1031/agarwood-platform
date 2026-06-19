@@ -36,6 +36,8 @@ type SellTreeRequest = {
   tree_value: number | null;
   platform_fee: number | null;
   net_receive: number | null;
+  expected_amount?: number | null;
+  selling_price?: number | null;
   status: string | null;
   created_at: string | null;
 };
@@ -50,6 +52,23 @@ type WithdrawalRequest = {
   created_at: string | null;
 };
 
+const EARNING_TYPES = [
+  "TREE_SALE",
+  "SELL_TREE",
+  "REFERRAL_BONUS",
+  "EARNING",
+  "ROI",
+  "DIVIDEND",
+];
+
+const EXPENSE_TYPES = [
+  "MARKETPLACE_PURCHASE",
+  "TREE_OPERATION",
+  "WITHDRAWAL",
+  "MEMBERSHIP",
+  "MEMBERSHIP_PAYMENT",
+];
+
 export default function EarningsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -57,115 +76,149 @@ export default function EarningsPage() {
   const [sellRequests, setSellRequests] = useState<SellTreeRequest[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
 
-  useEffect(() => {
-    async function loadRealData() {
-      setLoading(true);
+  async function loadRealData() {
+    setLoading(true);
+    setMessage("");
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-
-      const email = user.email?.trim().toLowerCase() || "";
-
-      const { data: profileById } = await supabase
-        .from("profiles")
-        .select("id, full_name, email, membership_status, kyc_status")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const { data: profileByEmail } = await supabase
-        .from("profiles")
-        .select("id, full_name, email, membership_status, kyc_status")
-        .eq("email", email)
-        .maybeSingle();
-
-      const currentProfile = profileById || profileByEmail;
-
-      if (!currentProfile) {
-        setLoading(false);
-        return;
-      }
-
-      setProfile(currentProfile);
-
-      const profileId = currentProfile.id;
-
-      const { data: walletData } = await supabase
-        .from("wallets")
-        .select("id, profile_id, balance")
-        .eq("profile_id", profileId)
-        .maybeSingle();
-
-      const { data: transactionData } = await supabase
-        .from("wallet_transactions")
-        .select(
-          "id, profile_id, transaction_type, amount, status, reference_no, description, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
-
-      const { data: sellData } = await supabase
-        .from("sell_tree_requests")
-        .select(
-          "id, profile_id, tree_id, tree_value, platform_fee, net_receive, status, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
-
-      const { data: withdrawalData } = await supabase
-        .from("withdrawal_requests")
-        .select(
-          "id, profile_id, amount, processing_fee, net_receive, status, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
-
-      setWallet(walletData || null);
-      setTransactions(transactionData || []);
-      setSellRequests(sellData || []);
-      setWithdrawals(withdrawalData || []);
-      setLoading(false);
+    if (!user) {
+      window.location.href = "/login";
+      return;
     }
 
+    const email = user.email?.trim().toLowerCase() || "";
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, membership_status, kyc_status")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, membership_status, kyc_status")
+      .eq("email", email)
+      .maybeSingle();
+
+    const currentProfile = profileById || profileByEmail;
+
+    if (!currentProfile) {
+      setMessage("Profile not found.");
+      setLoading(false);
+      return;
+    }
+
+    setProfile(currentProfile);
+
+    const profileId = currentProfile.id;
+
+    const { data: walletRows } = await supabase
+      .from("wallets")
+      .select("id, profile_id, balance, created_at")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const { data: transactionData, error: transactionError } = await supabase
+      .from("wallet_transactions")
+      .select(
+        "id, profile_id, transaction_type, amount, status, reference_no, description, created_at"
+      )
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    const { data: sellData } = await supabase
+      .from("sell_tree_requests")
+      .select("*")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    const { data: withdrawalData } = await supabase
+      .from("withdrawal_requests")
+      .select(
+        "id, profile_id, amount, processing_fee, net_receive, status, created_at"
+      )
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    if (transactionError) {
+      setMessage(transactionError.message);
+    }
+
+    setWallet(walletRows?.[0] || null);
+    setTransactions(transactionData || []);
+    setSellRequests(sellData || []);
+    setWithdrawals(withdrawalData || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
     loadRealData();
   }, []);
 
   const totals = useMemo(() => {
-    const treeSaleTransactions = transactions.filter(
-      (item) => item.transaction_type === "TREE_SALE"
+    const completed = transactions.filter(
+      (item) => (item.status || "").toUpperCase() === "COMPLETED"
     );
 
-    const referralTransactions = transactions.filter(
-      (item) => item.transaction_type === "REFERRAL_BONUS"
+    const earningTransactions = completed.filter((item) =>
+      EARNING_TYPES.includes((item.transaction_type || "").toUpperCase())
     );
 
-    const completedEarnings = transactions
+    const expenseTransactions = completed.filter((item) =>
+      EXPENSE_TYPES.includes((item.transaction_type || "").toUpperCase())
+    );
+
+    const totalEarnings = earningTransactions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    const totalExpenses = expenseTransactions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    const totalTreeSales = completed
+      .filter((item) =>
+        ["TREE_SALE", "SELL_TREE"].includes(
+          (item.transaction_type || "").toUpperCase()
+        )
+      )
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const totalReferral = completed
+      .filter(
+        (item) => (item.transaction_type || "").toUpperCase() === "REFERRAL_BONUS"
+      )
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const marketplaceExpenses = completed
       .filter(
         (item) =>
-          item.status === "COMPLETED" &&
-          ["TREE_SALE", "REFERRAL_BONUS"].includes(item.transaction_type || "")
+          (item.transaction_type || "").toUpperCase() === "MARKETPLACE_PURCHASE"
       )
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const pendingSellNet = sellRequests
-      .filter((item) => item.status === "PENDING")
-      .reduce((sum, item) => sum + Number(item.net_receive || 0), 0);
-
-    const totalTreeSales = treeSaleTransactions.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
-    );
-
-    const totalReferral = referralTransactions.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
-    );
+      .filter((item) => (item.status || "").toUpperCase() === "PENDING")
+      .reduce(
+        (sum, item) =>
+          sum +
+          Number(
+            item.net_receive ||
+              item.expected_amount ||
+              item.selling_price ||
+              item.tree_value ||
+              0
+          ),
+        0
+      );
 
     const totalPlatformFees = sellRequests.reduce(
       (sum, item) => sum + Number(item.platform_fee || 0),
@@ -173,14 +226,21 @@ export default function EarningsPage() {
     );
 
     const totalWithdrawn = withdrawals
-      .filter((item) => item.status === "COMPLETED")
+      .filter((item) =>
+        ["APPROVED", "COMPLETED"].includes((item.status || "").toUpperCase())
+      )
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
+    const netEarnings = totalEarnings - totalExpenses;
+
     return {
-      completedEarnings,
-      pendingSellNet,
+      totalEarnings,
+      totalExpenses,
+      netEarnings,
       totalTreeSales,
       totalReferral,
+      marketplaceExpenses,
+      pendingSellNet,
       totalPlatformFees,
       totalWithdrawn,
     };
@@ -194,15 +254,16 @@ export default function EarningsPage() {
     <main className="earningsPage">
       <section className="hero">
         <div>
-          <p className="eyebrow">Real Database Connected</p>
+          <p className="eyebrow">Real Supabase Earnings</p>
           <h1>Earnings Center</h1>
           <span>
-            Earnings are now loaded from Supabase wallet transactions, sell tree
-            requests, withdrawal requests, and wallet balance.
+            Earnings are calculated from completed wallet transaction ledger.
+            Cash-in is not counted as income.
           </span>
         </div>
 
         <div className="heroActions">
+          <button onClick={loadRealData}>Refresh</button>
           <Link href="/dashboard/sell-tree">Sell Tree</Link>
           <Link href="/dashboard/wallet" className="primary">
             Wallet / Withdraw
@@ -210,23 +271,25 @@ export default function EarningsPage() {
         </div>
       </section>
 
+      {message && <div className="messageBox">{message}</div>}
+
       {loading ? (
         <div className="loadingBox">Loading real earnings data...</div>
       ) : (
         <>
           <section className="cards">
             <SummaryCard
-              icon="💳"
-              label="Wallet Balance"
-              value={peso(walletBalance)}
-              note="From wallets table"
+              icon="💰"
+              label="Total Earnings"
+              value={peso(totals.totalEarnings)}
+              note="TREE_SALE + REFERRAL + ROI"
               gold
             />
             <SummaryCard
               icon="🌳"
               label="Tree Sale Earnings"
               value={peso(totals.totalTreeSales)}
-              note="Completed TREE_SALE transactions"
+              note="Completed tree sale payouts"
             />
             <SummaryCard
               icon="👥"
@@ -235,11 +298,38 @@ export default function EarningsPage() {
               note="Completed referral bonuses"
             />
             <SummaryCard
-              icon="🏛️"
-              label="Platform Fees"
-              value={peso(totals.totalPlatformFees)}
-              note="2% fees from sell requests"
+              icon="📉"
+              label="Marketplace Expenses"
+              value={peso(totals.marketplaceExpenses)}
+              note="Completed purchases"
+            />
+          </section>
+
+          <section className="cards">
+            <SummaryCard
+              icon="💳"
+              label="Wallet Balance"
+              value={peso(walletBalance)}
+              note="Latest wallet row"
               gold
+            />
+            <SummaryCard
+              icon="📊"
+              label="Net Earnings"
+              value={peso(totals.netEarnings)}
+              note="Earnings minus expenses"
+            />
+            <SummaryCard
+              icon="⏳"
+              label="Pending Sell Net"
+              value={peso(totals.pendingSellNet)}
+              note="Waiting admin approval"
+            />
+            <SummaryCard
+              icon="🏧"
+              label="Total Withdrawn"
+              value={peso(totals.totalWithdrawn)}
+              note="Approved/completed withdrawals"
             />
           </section>
 
@@ -249,8 +339,8 @@ export default function EarningsPage() {
                 <div>
                   <h2>Wallet Transactions</h2>
                   <p>
-                    Real transaction records from{" "}
-                    <strong>wallet_transactions</strong>.
+                    Earnings: TREE_SALE, REFERRAL_BONUS, ROI, DIVIDEND. Expenses:
+                    MARKETPLACE_PURCHASE, TREE_OPERATION, WITHDRAWAL, MEMBERSHIP.
                   </p>
                 </div>
                 <Link href="/dashboard/transactions">View Transactions ›</Link>
@@ -267,29 +357,53 @@ export default function EarningsPage() {
                         <th>Type</th>
                         <th>Description</th>
                         <th>Amount</th>
+                        <th>Class</th>
                         <th>Status</th>
                         <th>Date</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {transactions.map((item) => (
-                        <tr key={item.id}>
-                          <td>
-                            <strong>{item.reference_no || "—"}</strong>
-                          </td>
-                          <td>{cleanType(item.transaction_type)}</td>
-                          <td>{item.description || "—"}</td>
-                          <td>
-                            <strong>{peso(Number(item.amount || 0))}</strong>
-                          </td>
-                          <td>
-                            <span className={`status ${statusClass(item.status)}`}>
-                              {item.status || "UNKNOWN"}
-                            </span>
-                          </td>
-                          <td>{formatDate(item.created_at)}</td>
-                        </tr>
-                      ))}
+                      {transactions.map((item) => {
+                        const type = (item.transaction_type || "").toUpperCase();
+                        const isEarning = EARNING_TYPES.includes(type);
+                        const isExpense = EXPENSE_TYPES.includes(type);
+
+                        return (
+                          <tr key={item.id}>
+                            <td>
+                              <strong>{item.reference_no || "—"}</strong>
+                            </td>
+                            <td>{cleanType(item.transaction_type)}</td>
+                            <td>{item.description || "—"}</td>
+                            <td>
+                              <strong>{peso(Number(item.amount || 0))}</strong>
+                            </td>
+                            <td>
+                              <span
+                                className={`classBadge ${
+                                  isEarning
+                                    ? "earning"
+                                    : isExpense
+                                    ? "expense"
+                                    : "neutral"
+                                }`}
+                              >
+                                {isEarning
+                                  ? "Earning"
+                                  : isExpense
+                                  ? "Expense"
+                                  : "Other"}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`status ${statusClass(item.status)}`}>
+                                {item.status || "UNKNOWN"}
+                              </span>
+                            </td>
+                            <td>{formatDate(item.created_at)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -322,15 +436,15 @@ export default function EarningsPage() {
               </div>
 
               <div className="pendingBox">
-                <p>Pending Sell Tree Net</p>
-                <strong>{peso(totals.pendingSellNet)}</strong>
-                <small>Pending admin approval.</small>
+                <p>Total Earnings</p>
+                <strong>{peso(totals.totalEarnings)}</strong>
+                <small>Completed earning ledger only.</small>
               </div>
 
               <div className="pendingBox">
-                <p>Total Withdrawn</p>
-                <strong>{peso(totals.totalWithdrawn)}</strong>
-                <small>Completed withdrawal requests.</small>
+                <p>Total Expenses</p>
+                <strong>{peso(totals.totalExpenses)}</strong>
+                <small>Marketplace, operations, membership, withdrawals.</small>
               </div>
             </aside>
           </section>
@@ -352,14 +466,34 @@ export default function EarningsPage() {
                     <div className="requestCard" key={item.id}>
                       <div>
                         <strong>{item.tree_id || "No Tree ID"}</strong>
-                        <p>Tree Value: {peso(Number(item.tree_value || 0))}</p>
+                        <p>
+                          Tree Value:{" "}
+                          {peso(
+                            Number(
+                              item.tree_value ||
+                                item.selling_price ||
+                                item.expected_amount ||
+                                0
+                            )
+                          )}
+                        </p>
                         <p>Platform Fee: {peso(Number(item.platform_fee || 0))}</p>
                       </div>
                       <div>
                         <span className={`status ${statusClass(item.status)}`}>
                           {item.status || "UNKNOWN"}
                         </span>
-                        <b>{peso(Number(item.net_receive || 0))}</b>
+                        <b>
+                          {peso(
+                            Number(
+                              item.net_receive ||
+                                item.expected_amount ||
+                                item.selling_price ||
+                                item.tree_value ||
+                                0
+                            )
+                          )}
+                        </b>
                       </div>
                     </div>
                   ))}
@@ -453,7 +587,8 @@ export default function EarningsPage() {
           flex-wrap: wrap;
         }
 
-        .heroActions a {
+        .heroActions a,
+        .heroActions button {
           border-radius: 14px;
           padding: 13px 18px;
           text-decoration: none;
@@ -462,6 +597,7 @@ export default function EarningsPage() {
           border: 1px solid rgba(92,70,35,.10);
           font-weight: 900;
           box-shadow: 0 14px 30px rgba(82,60,27,.08);
+          cursor: pointer;
         }
 
         .heroActions a.primary {
@@ -470,14 +606,20 @@ export default function EarningsPage() {
         }
 
         .loadingBox,
-        .emptyState {
+        .emptyState,
+        .messageBox {
           border-radius: 22px;
           background: rgba(255,253,246,.86);
           border: 1px solid rgba(92,70,35,.08);
-          padding: 28px;
+          padding: 22px;
           color: #6b6b62;
           font-weight: 900;
           box-shadow: 0 18px 42px rgba(82,60,27,.09);
+          margin-bottom: 18px;
+        }
+
+        .messageBox {
+          color: #a33c2a;
         }
 
         .cards {
@@ -573,6 +715,7 @@ export default function EarningsPage() {
           margin: 6px 0 0;
           color: #6b6b62;
           font-size: 14px;
+          line-height: 1.5;
         }
 
         .panelHead a {
@@ -589,7 +732,7 @@ export default function EarningsPage() {
         table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 850px;
+          min-width: 940px;
         }
 
         th {
@@ -614,7 +757,8 @@ export default function EarningsPage() {
           color: #101a14;
         }
 
-        .status {
+        .status,
+        .classBadge {
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -642,6 +786,21 @@ export default function EarningsPage() {
         .status.failed {
           background: rgba(163,60,42,.12);
           color: #a33c2a;
+        }
+
+        .classBadge.earning {
+          background: rgba(49,85,61,.12);
+          color: #31553d;
+        }
+
+        .classBadge.expense {
+          background: rgba(163,60,42,.12);
+          color: #a33c2a;
+        }
+
+        .classBadge.neutral {
+          background: rgba(107,107,98,.12);
+          color: #6b6b62;
         }
 
         .sidePanel {
@@ -861,7 +1020,7 @@ function EmptyState({ message }: { message: string }) {
 }
 
 function peso(value: number) {
-  return `₱ ${value.toLocaleString("en-PH", {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -873,7 +1032,7 @@ function cleanType(value: string | null) {
 }
 
 function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase();
+  return (value || "pending").toLowerCase().replaceAll(" ", "_");
 }
 
 function formatDate(value: string | null) {
