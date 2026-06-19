@@ -1,104 +1,305 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
+type ChatMessage = {
+  id: string;
+  sender_type: "CUSTOMER" | "AI" | "ADMIN" | "SYSTEM";
+  message: string;
+  created_at: string;
+};
+
+type SupportTicket = {
+  id: string;
+  customer_id: string | null;
+  customer_email: string | null;
+  subject: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
 
 type FAQ = {
-  category: string;
+  keywords: string[];
   question: string;
   answer: string;
 };
 
 const faqs: FAQ[] = [
   {
-    category: "Membership",
+    keywords: ["membership", "member", "annual", "renew"],
     question: "How does membership work?",
     answer:
-      "Membership gives you platform and app access. It is separate from tree care fees. Tree maintenance services are handled under Care Subscription or individual Tree Operations.",
+      "Membership gives you access to the Agarwood investor dashboard and platform services. Tree care fees and operation services are separate from membership.",
   },
   {
-    category: "Care Plan",
+    keywords: ["care", "subscription", "auto renew", "renewal"],
     question: "How does care subscription work?",
     answer:
-      "Care Subscription covers maintenance services such as watering, fertilizer handling, photo updates, GPS verification, and scheduled care monitoring depending on your plan.",
+      "Care Subscription covers scheduled tree care such as monitoring, watering, fertilizer handling, photo updates, and GPS verification depending on your active plan.",
   },
   {
-    category: "Photo Updates",
+    keywords: ["photo", "picture", "update", "tree photo"],
     question: "Why is my tree photo not updated?",
     answer:
-      "Photo updates require an active Photo Update service or active Care Subscription. Seedling-stage trees may also have limited visible updates because they are still in early growth.",
+      "Photo updates require an active photo update service or active care subscription. Some young trees may also have limited visible updates during early growth.",
   },
   {
-    category: "GPS",
+    keywords: ["gps", "location", "verify", "verification"],
     question: "How does GPS verification work?",
     answer:
-      "GPS verification confirms the recorded location of your tree. It only shows verified after the GPS service has been paid, completed, and uploaded by operations.",
+      "GPS verification confirms the recorded location of your tree after the service is completed and uploaded by operations.",
   },
   {
-    category: "Wallet",
+    keywords: ["wallet", "withdraw", "cash out", "earnings"],
     question: "How do I withdraw earnings?",
     answer:
-      "Go to Wallet, enter the withdraw amount, review the 2% processing fee, then confirm. The page must show Withdraw Amount, Processing Fee 2%, and Net Receive.",
+      "Go to Wallet, enter your withdrawal amount, review the 2% processing fee, then confirm. The page should show Withdraw Amount, Processing Fee, and Net Receive.",
   },
   {
-    category: "Tree Sales",
+    keywords: ["sell", "tree sale", "sell tree", "cash"],
     question: "How do I sell a tree?",
     answer:
-      "When eligible, Sell Tree must show Tree Value, Platform Fee 2%, and Net Receive before confirmation.",
+      "Go to Sell Tree, choose an eligible tree, review the tree value, platform fee, and net receive amount before submitting your request.",
   },
   {
-    category: "Marketplace",
+    keywords: ["marketplace", "buy", "fertilizer", "product"],
     question: "How do I buy fertilizer?",
     answer:
-      "Fertilizer and other products are bought from Marketplace. Service items like watering, photo update, GPS verification, and managed care belong in Tree Operations.",
+      "Fertilizer and other products are bought from Marketplace. Service items like watering, GPS verification, and photo updates belong in Tree Operations.",
   },
   {
-    category: "Operations",
+    keywords: ["task", "operation", "tree operation", "schedule"],
     question: "How do task orders work?",
     answer:
-      "Task Orders show required tree operations, scheduled date, tree ID, and whether the task is covered by Care Plan or awaiting schedule/payment.",
+      "Task orders show required tree operations, scheduled dates, tree ID, and whether the service is covered by your care plan or needs payment.",
   },
 ];
 
-const suggestedQuestions = faqs.map((faq) => faq.question);
+const quickSuggestions = faqs.map((item) => item.question);
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getAiAnswer(input: string) {
+  const text = input.toLowerCase().trim();
+
+  const matched = faqs.find((faq) => {
+    return (
+      faq.question.toLowerCase().includes(text) ||
+      faq.keywords.some((keyword) => text.includes(keyword))
+    );
+  });
+
+  if (matched) return matched.answer;
+
+  return "I can help with membership, wallet, tree operations, GPS, photo updates, marketplace, and sell tree requests. If this concern needs human review, you can continue to live chat and an admin support agent will receive your ticket.";
+}
 
 export default function SupportPage() {
-  const [query, setQuery] = useState("");
-  const [selectedQuestion, setSelectedQuestion] = useState(suggestedQuestions[0]);
-  const [showLiveChat, setShowLiveChat] = useState(false);
-  const [chatStarted, setChatStarted] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const [ticket, setTicket] = useState<SupportTicket | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      sender_type: "AI",
+      message:
+        "Welcome to Agarwood Concierge. Ask me about membership, wallet, tree operations, GPS verification, photo updates, marketplace, or selling a tree.",
+      created_at: new Date().toISOString(),
+    },
+  ]);
+  const [loadingTicket, setLoadingTicket] = useState(false);
+  const [liveChatOpen, setLiveChatOpen] = useState(false);
+  const [errorText, setErrorText] = useState("");
 
-  const matchedAnswer = useMemo(() => {
-    const searchText = (query.trim() || selectedQuestion).toLowerCase();
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-    const exact = faqs.find(
-      (item) => item.question.toLowerCase() === searchText
-    );
+  const filteredSuggestions = useMemo(() => {
+    const text = input.toLowerCase().trim();
 
-    if (exact) return exact;
+    if (!text) return quickSuggestions.slice(0, 4);
 
-    const loose = faqs.find((item) => {
-      return (
-        item.question.toLowerCase().includes(searchText) ||
-        item.answer.toLowerCase().includes(searchText) ||
-        item.category.toLowerCase().includes(searchText)
+    return quickSuggestions
+      .filter((question) => question.toLowerCase().includes(text))
+      .slice(0, 4);
+  }, [input]);
+
+  useEffect(() => {
+    async function loadUser() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      setUserId(user?.id || null);
+      setUserEmail(user?.email || null);
+    }
+
+    loadUser();
+  }, []);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!ticket?.id) return;
+
+    const channel = supabase
+      .channel(`support-ticket-${ticket.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "support_messages",
+          filter: `ticket_id=eq.${ticket.id}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as {
+            id: string;
+            sender_type: "CUSTOMER" | "AI" | "ADMIN" | "SYSTEM";
+            message: string;
+            created_at: string;
+          };
+
+          setMessages((current) => {
+            const exists = current.some((msg) => msg.id === newMessage.id);
+            if (exists) return current;
+
+            return [
+              ...current,
+              {
+                id: newMessage.id,
+                sender_type: newMessage.sender_type,
+                message: newMessage.message,
+                created_at: newMessage.created_at,
+              },
+            ];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [ticket?.id]);
+
+  function addLocalMessage(sender_type: ChatMessage["sender_type"], message: string) {
+    setMessages((current) => [
+      ...current,
+      {
+        id: makeId(),
+        sender_type,
+        message,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+  }
+
+  async function sendAiQuestion(customText?: string) {
+    const text = (customText || input).trim();
+    if (!text) return;
+
+    setInput("");
+    setErrorText("");
+
+    addLocalMessage("CUSTOMER", text);
+
+    setTimeout(() => {
+      addLocalMessage("AI", getAiAnswer(text));
+    }, 250);
+  }
+
+  async function createLiveTicket(firstMessage?: string) {
+    try {
+      setLoadingTicket(true);
+      setErrorText("");
+
+      const messageToSend =
+        firstMessage?.trim() ||
+        input.trim() ||
+        "Customer requested live chat support.";
+
+      const subject =
+        messageToSend.length > 70
+          ? `${messageToSend.slice(0, 70)}...`
+          : messageToSend;
+
+      const { data: newTicket, error: ticketError } = await supabase
+        .from("support_tickets")
+        .insert({
+          customer_id: userId,
+          customer_email: userEmail,
+          subject,
+          status: "OPEN",
+        })
+        .select("*")
+        .single();
+
+      if (ticketError) throw ticketError;
+
+      const { error: messageError } = await supabase
+        .from("support_messages")
+        .insert({
+          ticket_id: newTicket.id,
+          sender_type: "CUSTOMER",
+          sender_id: userId,
+          sender_email: userEmail,
+          message: messageToSend,
+        });
+
+      if (messageError) throw messageError;
+
+      setTicket(newTicket);
+      setLiveChatOpen(true);
+      setInput("");
+
+      addLocalMessage(
+        "SYSTEM",
+        `Live chat ticket created. Ticket ID: ${newTicket.id.slice(0, 8).toUpperCase()}`
       );
-    });
+    } catch (error) {
+      console.error(error);
+      setErrorText(
+        "Hindi nagawa yung live chat ticket. Check muna kung created na yung support_tickets at support_messages tables sa Supabase."
+      );
+    } finally {
+      setLoadingTicket(false);
+    }
+  }
 
-    return (
-      loose || {
-        category: "Concierge",
-        question: query || "Ask a question",
-        answer:
-          "I could not find an exact answer in the support knowledge base. You may continue to live chat and our support team will assist you.",
-      }
-    );
-  }, [query, selectedQuestion]);
+  async function sendLiveMessage() {
+    const text = input.trim();
+    if (!text) return;
 
-  function chooseQuestion(question: string) {
-    setSelectedQuestion(question);
-    setQuery(question);
-    setShowLiveChat(false);
-    setChatStarted(false);
+    if (!ticket?.id) {
+      await createLiveTicket(text);
+      return;
+    }
+
+    try {
+      setErrorText("");
+
+      const { error } = await supabase.from("support_messages").insert({
+        ticket_id: ticket.id,
+        sender_type: "CUSTOMER",
+        sender_id: userId,
+        sender_email: userEmail,
+        message: text,
+      });
+
+      if (error) throw error;
+
+      setInput("");
+    } catch (error) {
+      console.error(error);
+      setErrorText("Hindi nasend yung message. Try again.");
+    }
   }
 
   return (
@@ -118,13 +319,13 @@ export default function SupportPage() {
         <section className="content">
           <header className="header">
             <div>
-              <h1>Support</h1>
-              <p>Ask questions, get instant answers, or continue to live chat.</p>
+              <h1>Customer Service</h1>
+              <p>Ask the AI assistant first, then continue to admin live chat when needed.</p>
             </div>
 
             <div className="supportBadge">
               <span>SUPPORT STATUS</span>
-              <strong>Concierge Online</strong>
+              <strong>{liveChatOpen ? "Live Chat Active" : "AI Concierge Online"}</strong>
               <b>💬</b>
             </div>
           </header>
@@ -134,180 +335,151 @@ export default function SupportPage() {
               <div className="panelHead">
                 <div>
                   <h2>AI Concierge Assistant</h2>
-                  <p>Choose a question or type your concern below.</p>
+                  <p>Suggested questions appear inside the chat area while typing.</p>
                 </div>
-                <span>Q&A Mode</span>
+                <span>{liveChatOpen ? "Admin Chat Mode" : "AI Q&A Mode"}</span>
               </div>
 
               <div className="chatWindow">
-                <div className="message bot">
-                  <div className="bubble">
-                    Welcome to Agarwood Concierge. How can I help with your
-                    membership, care plan, tree operations, wallet, or GPS updates?
-                  </div>
-                </div>
-
-                <div className="message user">
-                  <div className="bubble">{matchedAnswer.question}</div>
-                </div>
-
-                <div className="message bot">
-                  <div className="bubble">
-                    <strong>{matchedAnswer.category}</strong>
-                    <p>{matchedAnswer.answer}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="inputArea">
-                <input
-                  value={query}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setShowLiveChat(false);
-                    setChatStarted(false);
-                  }}
-                  placeholder="Ask about care plan, GPS, withdrawals, photo updates..."
-                />
-                <button type="button">Ask</button>
-              </div>
-
-              <div className="helpfulBox">
-                <p>Did this answer your question?</p>
-                <div>
-                  <button
-                    type="button"
-                    className="yesBtn"
-                    onClick={() => {
-                      setShowLiveChat(false);
-                      setChatStarted(false);
-                    }}
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`message ${
+                      message.sender_type === "CUSTOMER"
+                        ? "user"
+                        : message.sender_type === "ADMIN"
+                        ? "admin"
+                        : message.sender_type === "SYSTEM"
+                        ? "system"
+                        : "bot"
+                    }`}
                   >
-                    👍 Yes
-                  </button>
-                  <button
-                    type="button"
-                    className="noBtn"
-                    onClick={() => {
-                      setShowLiveChat(true);
-                      setChatStarted(false);
-                    }}
-                  >
-                    👎 Continue to Live Chat
-                  </button>
-                </div>
+                    <div className="bubble">
+                      {message.sender_type === "ADMIN" && <strong>Admin Support</strong>}
+                      {message.sender_type === "AI" && <strong>AI Concierge</strong>}
+                      {message.sender_type === "SYSTEM" && <strong>System</strong>}
+                      <p>{message.message}</p>
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
               </div>
-            </section>
 
-            <aside className="rightPanel">
-              <Card title="Suggested Questions" icon="✨">
-                <div className="questionList">
-                  {suggestedQuestions.map((question) => (
+              {!liveChatOpen && filteredSuggestions.length > 0 && (
+                <div className="suggestionBox">
+                  {filteredSuggestions.map((question) => (
                     <button
-                      type="button"
                       key={question}
-                      className={selectedQuestion === question ? "activeQuestion" : ""}
-                      onClick={() => chooseQuestion(question)}
+                      type="button"
+                      onClick={() => {
+                        setInput(question);
+                        sendAiQuestion(question);
+                      }}
                     >
                       {question}
                     </button>
                   ))}
                 </div>
-              </Card>
+              )}
 
-              <Card title="Live Chat Redirect" icon="🟢">
-                {!showLiveChat ? (
+              <div className="inputArea">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      if (liveChatOpen) {
+                        sendLiveMessage();
+                      } else {
+                        sendAiQuestion();
+                      }
+                    }
+                  }}
+                  placeholder={
+                    liveChatOpen
+                      ? "Type your message to admin support..."
+                      : "Ask about wallet, GPS, membership, tree operations..."
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (liveChatOpen) {
+                      sendLiveMessage();
+                    } else {
+                      sendAiQuestion();
+                    }
+                  }}
+                >
+                  Send
+                </button>
+              </div>
+
+              {errorText && <div className="errorBox">{errorText}</div>}
+
+              {!liveChatOpen && (
+                <div className="helpfulBox">
+                  <p>Need human support?</p>
+                  <button
+                    type="button"
+                    onClick={() => createLiveTicket()}
+                    disabled={loadingTicket}
+                  >
+                    {loadingTicket ? "Creating Ticket..." : "Continue to Admin Live Chat"}
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <aside className="rightPanel">
+              <section className="card">
+                <div className="cardHead">
+                  <h2>Live Chat</h2>
+                  <div className="cardIcon">🟢</div>
+                </div>
+
+                {!liveChatOpen ? (
                   <div className="liveState">
-                    <h3>Need more help?</h3>
+                    <h3>Admin Support Available</h3>
                     <p>
-                      If the AI answer does not solve your concern, continue to
-                      live chat with support.
+                      If the AI answer does not solve your concern, create a live ticket.
+                      Admin will receive your message on the admin support page.
                     </p>
-                    <button type="button" onClick={() => setShowLiveChat(true)}>
-                      Continue to Live Chat
-                    </button>
-                  </div>
-                ) : !chatStarted ? (
-                  <div className="liveState">
-                    <h3>Live Chat Ready</h3>
-                    <p>Ticket ID: AG-SUP-2026-001</p>
-                    <p>Estimated wait time: 3 minutes</p>
-                    <button type="button" onClick={() => setChatStarted(true)}>
-                      Start Live Chat
+                    <button
+                      type="button"
+                      onClick={() => createLiveTicket()}
+                      disabled={loadingTicket}
+                    >
+                      {loadingTicket ? "Creating..." : "Start Admin Live Chat"}
                     </button>
                   </div>
                 ) : (
-                  <div className="liveChatBox">
-                    <div className="liveHeader">
-                      <strong>Live Support Lounge</strong>
-                      <span>Connected</span>
-                    </div>
-
-                    <div className="liveMessages">
-                      <p>
-                        <b>Support:</b> Hello, I reviewed your AI support
-                        question. Please describe the remaining issue.
-                      </p>
-                      <p>
-                        <b>You:</b> I need more help with this concern.
-                      </p>
-                    </div>
-
-                    <input placeholder="Type your message..." />
+                  <div className="liveState">
+                    <h3>Ticket Connected</h3>
+                    <p>
+                      Ticket ID:{" "}
+                      <strong>{ticket?.id ? ticket.id.slice(0, 8).toUpperCase() : "ACTIVE"}</strong>
+                    </p>
+                    <p>Status: {ticket?.status || "OPEN"}</p>
+                    <p>Admin replies will appear directly in the chat window.</p>
                   </div>
                 )}
-              </Card>
+              </section>
+
+              <section className="card">
+                <div className="cardHead">
+                  <h2>Support Guide</h2>
+                  <div className="cardIcon">✨</div>
+                </div>
+
+                <div className="guideList">
+                  <p>1. Ask the AI assistant first.</p>
+                  <p>2. Continue to Admin Live Chat if needed.</p>
+                  <p>3. Your ticket will be visible to admin.</p>
+                  <p>4. Admin replies will appear in this chat.</p>
+                </div>
+              </section>
             </aside>
-
-            <section className="knowledgeBase">
-              <div className="panelHead">
-                <div>
-                  <h2>Knowledge Base</h2>
-                  <p>Quick support topics for agarwood investors.</p>
-                </div>
-                <span>FAQ</span>
-              </div>
-
-              <div className="faqGrid">
-                {faqs.map((item) => (
-                  <details key={item.question}>
-                    <summary>
-                      <span>{item.category}</span>
-                      {item.question}
-                    </summary>
-                    <p>{item.answer}</p>
-                  </details>
-                ))}
-              </div>
-            </section>
-
-            <section className="supportHistory">
-              <div className="panelHead">
-                <div>
-                  <h2>Support History</h2>
-                  <p>Recent support and operations inquiries.</p>
-                </div>
-                <span>Recent</span>
-              </div>
-
-              <div className="historyRows">
-                <HistoryRow
-                  code="AG-SUP-2026-001"
-                  title="Photo update concern"
-                  status="Waiting for live chat"
-                />
-                <HistoryRow
-                  code="AG-SUP-2026-0009"
-                  title="GPS verification explanation"
-                  status="Resolved"
-                />
-                <HistoryRow
-                  code="AG-SUP-2026-0008"
-                  title="Care plan renewal"
-                  status="Resolved"
-                />
-              </div>
-            </section>
           </section>
         </section>
       </section>
@@ -394,13 +566,19 @@ export default function SupportPage() {
           font-style: italic;
         }
 
+        .supportBadge,
+        .chatPanel,
+        .card {
+          border-radius: 16px;
+          background:
+            linear-gradient(145deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025));
+          border: 1px solid rgba(217, 176, 83, .32);
+          box-shadow: 0 18px 40px rgba(0, 0, 0, .22);
+        }
+
         .supportBadge {
-          min-width: 250px;
+          min-width: 260px;
           padding: 18px 22px;
-          border-radius: 15px;
-          background: rgba(255, 255, 255, .055);
-          border: 1px solid rgba(217, 176, 83, .38);
-          box-shadow: inset 0 0 25px rgba(217, 176, 83, .08);
           position: relative;
         }
 
@@ -422,7 +600,6 @@ export default function SupportPage() {
           position: absolute;
           right: 18px;
           top: 22px;
-          color: #d9b053;
         }
 
         .grid {
@@ -432,25 +609,14 @@ export default function SupportPage() {
         }
 
         .chatPanel,
-        .knowledgeBase,
-        .supportHistory,
         .card {
-          border-radius: 16px;
           padding: 20px;
-          background:
-            linear-gradient(145deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025));
-          border: 1px solid rgba(217, 176, 83, .32);
-          box-shadow: 0 18px 40px rgba(0, 0, 0, .22);
         }
 
         .rightPanel {
           display: grid;
           gap: 16px;
-        }
-
-        .knowledgeBase,
-        .supportHistory {
-          grid-column: 1 / -1;
+          align-content: start;
         }
 
         .panelHead,
@@ -499,7 +665,8 @@ export default function SupportPage() {
         }
 
         .chatWindow {
-          min-height: 365px;
+          height: 515px;
+          overflow-y: auto;
           padding: 18px;
           border-radius: 16px;
           background:
@@ -519,6 +686,10 @@ export default function SupportPage() {
           justify-content: flex-end;
         }
 
+        .message.system {
+          justify-content: center;
+        }
+
         .bubble {
           max-width: 78%;
           padding: 14px 16px;
@@ -527,7 +698,8 @@ export default function SupportPage() {
           line-height: 1.5;
         }
 
-        .message.bot .bubble {
+        .message.bot .bubble,
+        .message.admin .bubble {
           background: rgba(255, 255, 255, .075);
           border: 1px solid rgba(217, 176, 83, .18);
         }
@@ -536,6 +708,14 @@ export default function SupportPage() {
           color: #062819;
           background: linear-gradient(135deg, #f3d376, #b98222);
           font-weight: 900;
+        }
+
+        .message.system .bubble {
+          max-width: 90%;
+          text-align: center;
+          background: rgba(133, 239, 145, .08);
+          border: 1px solid rgba(133, 239, 145, .24);
+          color: #bfffc7;
         }
 
         .bubble strong {
@@ -548,6 +728,29 @@ export default function SupportPage() {
           margin: 0;
         }
 
+        .suggestionBox {
+          margin-top: 12px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .suggestionBox button {
+          border: 1px solid rgba(217, 176, 83, .25);
+          border-radius: 999px;
+          padding: 9px 12px;
+          background: rgba(255, 255, 255, .055);
+          color: rgba(255, 248, 221, .82);
+          cursor: pointer;
+          font-weight: 800;
+          font-size: 12px;
+        }
+
+        .suggestionBox button:hover {
+          color: #062819;
+          background: linear-gradient(135deg, #f3d376, #b98222);
+        }
+
         .inputArea {
           display: grid;
           grid-template-columns: 1fr 110px;
@@ -555,8 +758,7 @@ export default function SupportPage() {
           margin-top: 14px;
         }
 
-        .inputArea input,
-        .liveChatBox input {
+        .inputArea input {
           width: 100%;
           border: 1px solid rgba(217, 176, 83, .3);
           background: rgba(255, 255, 255, .06);
@@ -566,12 +768,12 @@ export default function SupportPage() {
           outline: none;
         }
 
-        .inputArea input::placeholder,
-        .liveChatBox input::placeholder {
+        .inputArea input::placeholder {
           color: rgba(255, 248, 221, .45);
         }
 
         .inputArea button,
+        .helpfulBox button,
         .liveState button {
           border: 0;
           border-radius: 12px;
@@ -579,6 +781,13 @@ export default function SupportPage() {
           background: linear-gradient(135deg, #f3d376, #b98222);
           font-weight: 900;
           cursor: pointer;
+        }
+
+        .inputArea button:disabled,
+        .helpfulBox button:disabled,
+        .liveState button:disabled {
+          opacity: .6;
+          cursor: not-allowed;
         }
 
         .helpfulBox {
@@ -598,50 +807,18 @@ export default function SupportPage() {
           color: rgba(255, 248, 221, .72);
         }
 
-        .helpfulBox div {
-          display: flex;
-          gap: 10px;
+        .helpfulBox button {
+          padding: 12px 14px;
         }
 
-        .yesBtn,
-        .noBtn {
-          border: 1px solid rgba(217, 176, 83, .32);
-          border-radius: 10px;
-          padding: 10px 12px;
-          cursor: pointer;
-          font-weight: 900;
-        }
-
-        .yesBtn {
-          color: #062819;
-          background: #e7c76c;
-        }
-
-        .noBtn {
-          color: #e7c76c;
-          background: transparent;
-        }
-
-        .questionList {
-          display: grid;
-          gap: 10px;
-        }
-
-        .questionList button {
-          text-align: left;
+        .errorBox {
+          margin-top: 12px;
           padding: 12px;
           border-radius: 12px;
-          border: 1px solid rgba(217, 176, 83, .2);
-          background: rgba(255, 255, 255, .045);
-          color: rgba(255, 248, 221, .82);
-          cursor: pointer;
-          font-weight: 800;
-        }
-
-        .questionList button.activeQuestion,
-        .questionList button:hover {
-          color: #062819;
-          background: linear-gradient(135deg, #f3d376, #b98222);
+          color: #ffd2d2;
+          background: rgba(255, 80, 80, .12);
+          border: 1px solid rgba(255, 80, 80, .25);
+          font-size: 13px;
         }
 
         .liveState h3 {
@@ -650,9 +827,14 @@ export default function SupportPage() {
           font-family: Georgia, "Times New Roman", serif;
         }
 
-        .liveState p {
+        .liveState p,
+        .guideList p {
           color: rgba(255, 248, 221, .68);
           line-height: 1.5;
+        }
+
+        .liveState strong {
+          color: #fff8dd;
         }
 
         .liveState button {
@@ -661,112 +843,17 @@ export default function SupportPage() {
           margin-top: 8px;
         }
 
-        .liveChatBox {
-          border-radius: 14px;
-          background: rgba(0, 0, 0, .16);
-          border: 1px solid rgba(217, 176, 83, .2);
-          padding: 14px;
-        }
-
-        .liveHeader {
-          display: flex;
-          justify-content: space-between;
-          padding-bottom: 10px;
-          margin-bottom: 10px;
-          border-bottom: 1px solid rgba(217, 176, 83, .18);
-        }
-
-        .liveHeader strong {
-          color: #e7c76c;
-        }
-
-        .liveHeader span {
-          color: #85ef91;
-          font-weight: 900;
-          font-size: 12px;
-        }
-
-        .liveMessages {
+        .guideList {
           display: grid;
           gap: 8px;
-          margin-bottom: 12px;
         }
 
-        .liveMessages p {
+        .guideList p {
           margin: 0;
           padding: 10px;
           border-radius: 10px;
-          background: rgba(255, 255, 255, .055);
-          color: rgba(255, 248, 221, .76);
-          font-size: 13px;
-          line-height: 1.4;
-        }
-
-        .faqGrid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        details {
-          border-radius: 14px;
-          padding: 14px;
-          border: 1px solid rgba(217, 176, 83, .18);
           background: rgba(255, 255, 255, .045);
-        }
-
-        summary {
-          cursor: pointer;
-          color: #fff8dd;
-          font-weight: 900;
-          line-height: 1.4;
-        }
-
-        summary span {
-          display: block;
-          color: #e7c76c;
-          font-size: 11px;
-          letter-spacing: .5px;
-          margin-bottom: 5px;
-        }
-
-        details p {
-          margin: 12px 0 0;
-          color: rgba(255, 248, 221, .68);
-          font-size: 13px;
-          line-height: 1.5;
-        }
-
-        .historyRows {
-          display: grid;
-          gap: 10px;
-        }
-
-        .historyRow {
-          display: grid;
-          grid-template-columns: 160px 1fr auto;
-          gap: 12px;
-          align-items: center;
-          padding: 13px;
-          border-radius: 13px;
-          background: rgba(255, 255, 255, .045);
-          border: 1px solid rgba(217, 176, 83, .16);
-        }
-
-        .historyRow span {
-          color: #e7c76c;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .historyRow strong {
-          font-size: 14px;
-        }
-
-        .historyRow b {
-          color: #85ef91;
-          font-size: 12px;
-          text-align: right;
+          border: 1px solid rgba(217, 176, 83, .12);
         }
 
         @media (max-width: 1100px) {
@@ -780,11 +867,6 @@ export default function SupportPage() {
 
           .grid {
             grid-template-columns: 1fr;
-          }
-
-          .knowledgeBase,
-          .supportHistory {
-            grid-column: auto;
           }
         }
 
@@ -811,63 +893,11 @@ export default function SupportPage() {
             padding: 13px;
           }
 
-          .helpfulBox div,
-          .faqGrid {
-            grid-template-columns: 1fr;
-            display: grid;
-          }
-
-          .historyRow {
-            grid-template-columns: 1fr;
-          }
-
-          .historyRow b {
-            text-align: left;
-          }
-
           .bubble {
             max-width: 92%;
           }
         }
       `}</style>
     </main>
-  );
-}
-
-function Card({
-  title,
-  icon,
-  children,
-}: {
-  title: string;
-  icon: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="card">
-      <div className="cardHead">
-        <h2>{title}</h2>
-        <div className="cardIcon">{icon}</div>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function HistoryRow({
-  code,
-  title,
-  status,
-}: {
-  code: string;
-  title: string;
-  status: string;
-}) {
-  return (
-    <div className="historyRow">
-      <span>{code}</span>
-      <strong>{title}</strong>
-      <b>{status}</b>
-    </div>
   );
 }
