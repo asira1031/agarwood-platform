@@ -244,39 +244,45 @@ export default function TreeOperationsPage() {
     loadData();
   }, []);
 
-  const careProgramOperations = useMemo(() => {
-    return carePrograms.map((program) => ({
+ const careProgramOperations = useMemo<OperationItem[]>(() => {
+  return carePrograms.map(
+    (program): OperationItem => ({
       name: program.name || "Tree Care Program",
-      category: "Care Program" as const,
+      category: "Care Program",
       price: Number(program.price || 0),
       description: program.note || "Marketplace Tree Care Program.",
       duration: getProgramDuration(program),
       coverage: getProgramCoverage(program),
       status: program.stock_status || "ACTIVE",
       sourceProduct: program,
-    }));
-  }, [carePrograms]);
+    })
+  );
+}, [carePrograms]);
 
-  const operations = useMemo(() => {
-    return [...BASE_OPERATIONS, ...careProgramOperations];
-  }, [careProgramOperations]);
+ const operations = useMemo<OperationItem[]>(() => {
+  return [...BASE_OPERATIONS, ...careProgramOperations];
+}, [careProgramOperations]);
 
   const selectedTree = useMemo(() => {
     return trees.find((tree) => tree.id === selectedTreeId) || null;
   }, [trees, selectedTreeId]);
 
-  const operation = useMemo(() => {
-    return operations.find((item) => item.name === selectedOperation) || operations[0];
+  const operation = useMemo<OperationItem | undefined>(() => {
+    const found = operations.find((item) => item.name === selectedOperation);
+    return found || operations[0] || BASE_OPERATIONS[0];
   }, [operations, selectedOperation]);
 
+  const requiredInventoryCategory = getRequiredInventoryCategory(operation);
+  const requiredInventoryQty = getRequiredInventoryQty(operation);
+
   const requiredInventoryItem = useMemo(() => {
-    if (!operation?.requiredInventoryCategory) return null;
+    if (!requiredInventoryCategory) return null;
 
     return (
       inventory.find((item) => {
         const category = String(item.category || "").toLowerCase();
         const name = String(item.item_name || "").toLowerCase();
-        const required = String(operation.requiredInventoryCategory || "").toLowerCase();
+        const required = requiredInventoryCategory.toLowerCase();
 
         return (
           Number(item.remaining_qty || 0) > 0 &&
@@ -284,12 +290,12 @@ export default function TreeOperationsPage() {
         );
       }) || null
     );
-  }, [inventory, operation]);
+  }, [inventory, requiredInventoryCategory]);
 
   const hasRequiredInventory =
     operation?.category !== "Inventory Use" ||
     (requiredInventoryItem &&
-      Number(requiredInventoryItem.remaining_qty || 0) >= Number(operation.requiredQty || 1));
+      Number(requiredInventoryItem.remaining_qty || 0) >= requiredInventoryQty);
 
   const walletBalance = Number(wallet?.balance || 0);
   const baseOperationFee = Number(operation?.price || 0);
@@ -422,7 +428,7 @@ export default function TreeOperationsPage() {
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
       setMessage(
-        `Preview only: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace before this is connected later.`
+        `Preview only: ${requiredInventoryCategory || "Required supply"} is missing or low. Buy supplies from Marketplace before this is connected later.`
       );
       return;
     }
@@ -644,7 +650,7 @@ export default function TreeOperationsPage() {
                     </p>
                   ) : (
                     <p>
-                      No {operation.requiredInventoryCategory} in inventory.
+                      No {requiredInventoryCategory || "required supply"} in inventory.
                       Please buy from Marketplace first.
                     </p>
                   )}
@@ -1335,6 +1341,19 @@ export default function TreeOperationsPage() {
       `}</style>
     </main>
   );
+}
+
+
+function getRequiredInventoryCategory(operation: OperationItem | undefined) {
+  return operation && operation.category === "Inventory Use"
+    ? String(operation.requiredInventoryCategory || "")
+    : "";
+}
+
+function getRequiredInventoryQty(operation: OperationItem | undefined) {
+  return operation && operation.category === "Inventory Use"
+    ? Number(operation.requiredQty || 1)
+    : 1;
 }
 
 function getProgramDuration(program: MarketplaceProduct) {
