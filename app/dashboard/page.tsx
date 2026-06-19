@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Profile = {
@@ -11,11 +11,101 @@ type Profile = {
   membership_status: string | null;
   kyc_status: string | null;
   account_status: string | null;
+  care_subscription_status?: string | null;
+  care_status?: string | null;
+  [key: string]: any;
 };
+
+type Wallet = {
+  id: string;
+  profile_id: string;
+  balance: number | null;
+  created_at: string | null;
+};
+
+type TreeRow = {
+  id: string;
+  profile_id: string;
+  package_id?: string | null;
+  tree_type?: string | null;
+  status?: string | null;
+  species?: string | null;
+  code?: string | null;
+  tree_code?: string | null;
+  gps_verified?: boolean | null;
+  created_at?: string | null;
+  [key: string]: any;
+};
+
+type InventoryItem = {
+  id: string;
+  profile_id: string;
+  tree_id: string | null;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  starting_qty: number | null;
+  remaining_qty: number | null;
+  low_stock_level: number | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type WalletTransaction = {
+  id: string;
+  transaction_type: string | null;
+  amount: number | null;
+  status: string | null;
+  description: string | null;
+  created_at: string | null;
+};
+
+type TreeOperationRequest = {
+  id: string;
+  profile_id?: string | null;
+  tree_id?: string | null;
+  operation_type?: string | null;
+  service_type?: string | null;
+  item_name?: string | null;
+  total_amount?: number | null;
+  amount?: number | null;
+  status?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  scheduled_date?: string | null;
+  [key: string]: any;
+};
+
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function cleanStatus(value: string | null | undefined) {
+  return value ? String(value).toUpperCase() : "PENDING";
+}
 
 export default function DashboardPage() {
   const [stage, setStage] = useState(3);
+  const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
+  const [operationRequests, setOperationRequests] = useState<TreeOperationRequest[]>([]);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -26,10 +116,20 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    async function loadProfile() {
+    loadDashboard();
+  }, []);
+
+  async function loadDashboard() {
+    try {
+      setLoading(true);
+      setErrorMessage("");
+
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
 
       if (!user) {
         window.location.href = "/login";
@@ -37,33 +137,163 @@ export default function DashboardPage() {
       }
 
       const email = user.email?.trim().toLowerCase() || "";
+      let activeProfile: Profile | null = null;
 
       const { data: profileById } = await supabase
         .from("profiles")
-        .select(
-          "id, full_name, email, membership_status, kyc_status, account_status"
-        )
+        .select("*")
         .eq("id", user.id)
+        .limit(1)
         .maybeSingle();
 
-      const { data: profileByEmail } = await supabase
-        .from("profiles")
-        .select(
-          "id, full_name, email, membership_status, kyc_status, account_status"
-        )
-        .eq("email", email)
-        .maybeSingle();
+      if (profileById) {
+        activeProfile = profileById as Profile;
+      } else if (email) {
+        const { data: profileByEmail } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("email", email)
+          .limit(1)
+          .maybeSingle();
 
-      setProfile(profileById || profileByEmail);
+        activeProfile = (profileByEmail as Profile) || null;
+      }
+
+      if (!activeProfile) {
+        setErrorMessage("Profile not found. Please contact support.");
+        return;
+      }
+
+      setProfile(activeProfile);
+
+      const walletResult = await supabase
+        .from("wallets")
+        .select("id, profile_id, balance, created_at")
+        .eq("profile_id", activeProfile.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const treesResult = await supabase
+        .from("trees")
+        .select("*")
+        .eq("profile_id", activeProfile.id);
+
+      const inventoryResult = await supabase
+        .from("inventory")
+        .select("*")
+        .eq("profile_id", activeProfile.id)
+        .order("created_at", { ascending: false });
+
+      const transactionsResult = await supabase
+        .from("wallet_transactions")
+        .select("id, transaction_type, amount, status, description, created_at")
+        .eq("profile_id", activeProfile.id)
+        .order("created_at", { ascending: false })
+        .limit(6);
+
+      const operationsResult = await supabase
+        .from("tree_operation_requests")
+        .select("*")
+        .eq("profile_id", activeProfile.id)
+        .order("created_at", { ascending: false })
+        .limit(6);
+
+      if (walletResult.error) console.warn("Wallet load error:", walletResult.error.message);
+      if (treesResult.error) console.warn("Trees load error:", treesResult.error.message);
+      if (inventoryResult.error) console.warn("Inventory load error:", inventoryResult.error.message);
+      if (transactionsResult.error) console.warn("Transactions load error:", transactionsResult.error.message);
+      if (operationsResult.error) console.warn("Operations load error:", operationsResult.error.message);
+
+      setWallet((walletResult.data?.[0] as Wallet) || null);
+      setTrees(treesResult.error ? [] : ((treesResult.data as TreeRow[]) || []));
+      setInventory(inventoryResult.error ? [] : ((inventoryResult.data as InventoryItem[]) || []));
+      setWalletTransactions(
+        transactionsResult.error ? [] : ((transactionsResult.data as WalletTransaction[]) || [])
+      );
+      setOperationRequests(
+        operationsResult.error ? [] : ((operationsResult.data as TreeOperationRequest[]) || [])
+      );
+    } catch (error: any) {
+      console.error("Dashboard load error:", error);
+      setErrorMessage(error?.message || "Unable to load dashboard.");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    loadProfile();
-  }, []);
-
-  const displayName = profile?.full_name || "Agarwood Investor";
+  const displayName = profile?.full_name || profile?.email || "Agarwood Investor";
   const initials = getInitials(displayName);
-  const membershipStatus = profile?.membership_status || "ACTIVE";
-  const careSubscription = "ACTIVE";
+
+  const individualTrees = useMemo(() => {
+    return trees.filter((tree) => {
+      const hasPackageId = Boolean(tree.package_id);
+      const treeType = String(tree.tree_type || "").toUpperCase();
+      return !hasPackageId && treeType !== "PACKAGE";
+    }).length;
+  }, [trees]);
+
+  const packageTrees = Math.max(trees.length - individualTrees, 0);
+
+  const lowStockItems = useMemo(() => {
+    return inventory.filter((item) => {
+      const remaining = Number(item.remaining_qty || 0);
+      const lowLevel = Number(item.low_stock_level || 0);
+      return remaining <= lowLevel;
+    });
+  }, [inventory]);
+
+  const walletBalance = Number(wallet?.balance || 0);
+  const membershipStatus = cleanStatus(profile?.membership_status);
+  const kycStatus = cleanStatus(profile?.kyc_status || profile?.account_status);
+  const careSubscription = cleanStatus(
+    profile?.care_subscription_status || profile?.care_status
+  );
+
+  const latestTreeDate = trees
+    .map((tree) => tree.created_at)
+    .filter(Boolean)
+    .sort((a, b) => new Date(String(b)).getTime() - new Date(String(a)).getTime())[0];
+
+  const gpsVerifiedCount = trees.filter((tree) => tree.gps_verified === true).length;
+
+  const recentActivity = useMemo(() => {
+    const walletRows = walletTransactions.map((tx) => ({
+      id: `wallet-${tx.id}`,
+      icon: "💳",
+      title: tx.transaction_type || "Wallet Transaction",
+      description: tx.description || `${peso(Number(tx.amount || 0))} wallet activity`,
+      date: formatDate(tx.created_at),
+      status: cleanStatus(tx.status),
+      kind: "ok",
+    }));
+
+    const operationRows = operationRequests.map((op) => ({
+      id: `operation-${op.id}`,
+      icon: "🌿",
+      title: op.operation_type || op.service_type || op.item_name || "Tree Operation",
+      description: op.notes || `${peso(Number(op.total_amount || op.amount || 0))} operation request`,
+      date: formatDate(op.created_at),
+      status: cleanStatus(op.status),
+      kind:
+        String(op.status || "").toUpperCase() === "PENDING"
+          ? "warning"
+          : String(op.status || "").toUpperCase() === "REJECTED"
+          ? "danger"
+          : "ok",
+    }));
+
+    return [...walletRows, ...operationRows].slice(0, 6);
+  }, [walletTransactions, operationRequests]);
+
+  if (loading) {
+    return (
+      <main className="dashboardPage">
+        <section className="content">
+          <div className="loadingBox">Loading dashboard...</div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="dashboardPage">
@@ -78,14 +308,15 @@ export default function DashboardPage() {
               Manage your agarwood investments, membership access, care services,
               wallet activity, and tree updates.
             </small>
+            {errorMessage && <div className="errorBox">{errorMessage}</div>}
           </div>
 
           <div className="headerActions">
             <button>
-              🔔<i>5</i>
+              🔔<i>{recentActivity.length}</i>
             </button>
             <button>
-              ✉️<i>2</i>
+              ✉️<i>{operationRequests.length}</i>
             </button>
             <div className="topAvatar">{initials}</div>
           </div>
@@ -95,26 +326,26 @@ export default function DashboardPage() {
           <Card
             icon="🌳"
             title="Owned Trees"
-            value="128"
-            sub="78 individual • 50 package"
+            value={String(trees.length)}
+            sub={`${individualTrees} individual • ${packageTrees} package`}
           />
           <Card
             icon="🎖️"
             title="Membership"
             value={membershipStatus}
-            sub="184 days remaining"
+            sub={`KYC: ${kycStatus}`}
             gold
           />
           <Card
             icon="🛡️"
             title="Care Subscription"
             value={careSubscription}
-            sub="Covered until Jul 18"
+            sub="Real profile care status"
           />
           <Card
             icon="💳"
             title="Wallet Balance"
-            value="₱ 12,340"
+            value={peso(walletBalance)}
             sub="Available balance"
           />
         </section>
@@ -125,41 +356,13 @@ export default function DashboardPage() {
             <h4>Educational development stages</h4>
 
             {[
-              [
-                "Seedling",
-                "0 - 6 Months",
-                "Early root stage; photo may be limited",
-                true,
-              ],
-              [
-                "Sapling",
-                "6 - 18 Months",
-                "Visible stem and leaves begin",
-                true,
-              ],
-              [
-                "Young Tree",
-                "1.5 - 3 Years",
-                "Active growth and care monitoring",
-                true,
-              ],
-              [
-                "Mature Tree",
-                "3 - 7 Years",
-                "Trunk mass and value development",
-                false,
-              ],
-              [
-                "Harvest Ready",
-                "7+ Years",
-                "Eligible for sell or harvest review",
-                false,
-              ],
+              ["Seedling", "0 - 6 Months", "Early root stage; photo may be limited", true],
+              ["Sapling", "6 - 18 Months", "Visible stem and leaves begin", true],
+              ["Young Tree", "1.5 - 3 Years", "Active growth and care monitoring", true],
+              ["Mature Tree", "3 - 7 Years", "Trunk mass and value development", false],
+              ["Harvest Ready", "7+ Years", "Eligible for sell or harvest review", false],
             ].map((x, i) => (
-              <div
-                className={`step ${i === 2 ? "current" : ""}`}
-                key={x[0] as string}
-              >
+              <div className={`step ${i === 2 ? "current" : ""}`} key={x[0] as string}>
                 <span>{x[3] ? "✓" : "•"}</span>
                 <div>
                   <strong>{x[0]}</strong>
@@ -209,15 +412,15 @@ export default function DashboardPage() {
 
             <div className="progressGlass">
               <div>
-                <strong>Guide Progress</strong>
-                <span>42%</span>
+                <strong>Guide Stage</strong>
+                <span>{stage}/5</span>
               </div>
               <div className="bar">
-                <i />
+                <i style={{ width: `${stage * 20}%` }} />
               </div>
               <p>
-                <b>Estimated Harvest Stage</b>
-                <span>1 Year, 8 Months</span>
+                <b>Educational Growth Guide</b>
+                <span>Visualization only</span>
               </p>
             </div>
           </div>
@@ -230,38 +433,69 @@ export default function DashboardPage() {
 
             <div className="treeOverviewHero">
               <div>
-                <strong>128</strong>
+                <strong>{trees.length}</strong>
                 <span>Owned Trees</span>
               </div>
             </div>
 
             <div className="overviewRows">
-              <OverviewRow label="Individual Trees" value="78" />
-              <OverviewRow label="Package Trees" value="50" />
-              <OverviewRow label="Latest Photo Update" value="Jun 18" />
-              <OverviewRow label="GPS Verification" value="Verified" />
-              <OverviewRow label="Care Subscription" value="Active" />
-              <OverviewRow label="Trees Needing Attention" value="5" alert />
+              <OverviewRow label="Individual Trees" value={String(individualTrees)} />
+              <OverviewRow label="Package Trees" value={String(packageTrees)} />
+              <OverviewRow label="Latest Tree Added" value={formatDate(latestTreeDate)} />
+              <OverviewRow
+                label="GPS Verification"
+                value={
+                  trees.length === 0
+                    ? "No Trees"
+                    : gpsVerifiedCount === trees.length
+                    ? "Verified"
+                    : `${gpsVerifiedCount}/${trees.length}`
+                }
+              />
+              <OverviewRow label="Care Subscription" value={careSubscription} />
+              <OverviewRow
+                label="Low Stock Items"
+                value={String(lowStockItems.length)}
+                alert={lowStockItems.length > 0}
+              />
             </div>
           </div>
 
           <div className="inventory panel">
             <div className="panelHead">
               <h3>Inventory</h3>
-              <Link href="/dashboard/marketplace">Buy More ›</Link>
+              <Link href="/dashboard/inventory">Open Inventory ›</Link>
             </div>
 
             <div className="inventoryList">
-              <InventoryRow icon="🌱" name="Organic Fertilizer" qty="18 Bags" />
-              <InventoryRow icon="🧪" name="Growth Booster" qty="12 Bottles" />
-              <InventoryRow icon="🪲" name="Insecticide" qty="6 Bottles" warning />
-              <InventoryRow icon="🌿" name="Fungicide" qty="8 Bottles" />
-              <InventoryRow icon="🪴" name="Soil Conditioner" qty="10 Bags" />
+              {inventory.length === 0 ? (
+                <div className="emptyState">No inventory records yet.</div>
+              ) : (
+                inventory.slice(0, 5).map((item) => {
+                  const remaining = Number(item.remaining_qty || 0);
+                  const lowLevel = Number(item.low_stock_level || 0);
+                  const isLow = remaining <= lowLevel;
+
+                  return (
+                    <InventoryRow
+                      key={item.id}
+                      icon={getInventoryIcon(item.category)}
+                      name={item.item_name || "Unnamed Item"}
+                      qty={`${remaining.toLocaleString("en-PH")} ${item.unit || ""}`}
+                      category={item.category || "Inventory item"}
+                      warning={isLow}
+                    />
+                  );
+                })
+              )}
             </div>
 
             <small>
-              Insecticide is near low stock. Buy supplies from Marketplace when
-              needed.
+              {inventory.length === 0
+                ? "Inventory data will appear here once records are added."
+                : lowStockItems.length > 0
+                ? `${lowStockItems.length} item(s) are near or below low stock level.`
+                : "All visible inventory items are above low stock level."}
             </small>
           </div>
 
@@ -272,46 +506,26 @@ export default function DashboardPage() {
             </div>
 
             <p className="taskIntro">
-              Scheduled care requirements for your trees. If subscribed,
-              required items and service handling may be covered by your care
-              plan.
+              Recent tree operation requests connected to your Supabase records.
             </p>
 
             <div className="taskList">
-              <TaskOrder
-                code="TO-001"
-                icon="🌱"
-                title="Organic Fertilizer"
-                tree="Tree AG-003"
-                date="Jun 20"
-                status="Covered by Care Plan"
-                covered
-              />
-              <TaskOrder
-                code="TO-002"
-                icon="🧪"
-                title="Growth Booster"
-                tree="Tree AG-008"
-                date="Jun 25"
-                status="Covered by Care Plan"
-                covered
-              />
-              <TaskOrder
-                code="TO-003"
-                icon="🪲"
-                title="Insecticide"
-                tree="Tree AG-011"
-                date="Jul 01"
-                status="Awaiting Schedule"
-              />
-              <TaskOrder
-                code="TO-004"
-                icon="🌿"
-                title="Fungicide"
-                tree="Tree AG-014"
-                date="Jul 08"
-                status="Awaiting Schedule"
-              />
+              {operationRequests.length === 0 ? (
+                <div className="emptyState">No tree operation requests yet.</div>
+              ) : (
+                operationRequests.slice(0, 4).map((op) => (
+                  <TaskOrder
+                    key={op.id}
+                    code={String(op.id).slice(0, 8).toUpperCase()}
+                    icon="🌿"
+                    title={op.operation_type || op.service_type || op.item_name || "Tree Operation"}
+                    tree={op.tree_id ? `Tree ${String(op.tree_id).slice(0, 8)}` : "Customer Tree"}
+                    date={formatDate(op.scheduled_date || op.created_at)}
+                    status={cleanStatus(op.status)}
+                    covered={String(op.status || "").toUpperCase() === "APPROVED"}
+                  />
+                ))
+              )}
             </div>
 
             <div className="subscriptionBox">
@@ -331,23 +545,20 @@ export default function DashboardPage() {
               <Link href="/dashboard/transactions">View all ›</Link>
             </div>
 
-            {[
-              ["💧", "Tree AG-001", "Watering missed", "2 days ago", "danger"],
-              ["🌱", "Tree AG-003", "Fertilizer scheduled", "Jun 20", "warning"],
-              ["👨‍🌾", "Caretaker Report", "Care report uploaded", "Today", "ok"],
-              ["📍", "Tree AG-002", "GPS verified", "Completed", "ok"],
-              ["🎖️", "Membership", "Active membership access", "184 days", "ok"],
-              ["👥", "Referral Bonus", "Referral reward credited", "+ ₱ 750", "ok"],
-            ].map((a) => (
-              <div className={`activityRow ${a[4]}`} key={`${a[1]}-${a[2]}`}>
-                <span>{a[0]}</span>
-                <div>
-                  <strong>{a[1]}</strong>
-                  <p>{a[2]}</p>
+            {recentActivity.length === 0 ? (
+              <div className="emptyState">No recent activity yet.</div>
+            ) : (
+              recentActivity.map((a) => (
+                <div className={`activityRow ${a.kind}`} key={a.id}>
+                  <span>{a.icon}</span>
+                  <div>
+                    <strong>{a.title}</strong>
+                    <p>{a.description}</p>
+                  </div>
+                  <b>{a.status || a.date}</b>
                 </div>
-                <b>{a[3]}</b>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </section>
 
@@ -374,6 +585,28 @@ export default function DashboardPage() {
             radial-gradient(circle at 20% 4%, rgba(255, 226, 154, .55), transparent 24%),
             radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .72), transparent 28%),
             linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+        }
+
+        .loadingBox, .errorBox, .emptyState {
+          border-radius: 16px;
+          background: rgba(255, 253, 246, .78);
+          border: 1px solid rgba(92, 70, 35, .10);
+          padding: 16px;
+          color: #6b6255;
+          font-weight: 800;
+        }
+
+        .loadingBox {
+          min-height: 70vh;
+          display: grid;
+          place-items: center;
+          font-size: 18px;
+        }
+
+        .errorBox {
+          margin-top: 12px;
+          color: #a33c2a;
+          background: rgba(255, 235, 230, .72);
         }
 
         .header {
@@ -892,11 +1125,10 @@ export default function DashboardPage() {
 
         .bar i {
           display: block;
-          width: 42%;
           height: 100%;
           border-radius: inherit;
           background: linear-gradient(90deg, #f4d37a, #bda77b);
-          animation: loadBar 2.4s ease-out infinite alternate;
+          transition: width .4s ease;
         }
 
         .portfolio {
@@ -1201,11 +1433,6 @@ export default function DashboardPage() {
           50% { transform: translateY(-22px) rotate(15deg); opacity: .9; }
         }
 
-        @keyframes loadBar {
-          from { width: 35%; }
-          to { width: 42%; }
-        }
-
         @keyframes driftMist {
           0%, 100% { transform: translateX(-22px); }
           50% { transform: translateX(28px); }
@@ -1276,11 +1503,13 @@ function InventoryRow({
   icon,
   name,
   qty,
+  category,
   warning,
 }: {
   icon: string;
   name: string;
   qty: string;
+  category: string;
   warning?: boolean;
 }) {
   return (
@@ -1288,7 +1517,7 @@ function InventoryRow({
       <span className="icon">{icon}</span>
       <div>
         <strong>{name}</strong>
-        <p>Marketplace supply</p>
+        <p>{category}</p>
       </div>
       <b>{qty}</b>
     </div>
@@ -1319,7 +1548,7 @@ function TaskOrder({
         <span className="taskCode">{code}</span>
         <strong>{title}</strong>
         <p>
-          {tree} • Scheduled {date}
+          {tree} • {date}
         </p>
       </div>
       <b>{status}</b>
@@ -1327,9 +1556,22 @@ function TaskOrder({
   );
 }
 
+function getInventoryIcon(category: string | null | undefined) {
+  const value = String(category || "").toLowerCase();
+
+  if (value.includes("fertilizer")) return "🌱";
+  if (value.includes("booster")) return "🧪";
+  if (value.includes("insect")) return "🪲";
+  if (value.includes("fung")) return "🌿";
+  if (value.includes("soil")) return "🪴";
+
+  return "📦";
+}
+
 function getInitials(name: string) {
   return name
     .split(" ")
+    .filter(Boolean)
     .map((part) => part[0])
     .join("")
     .slice(0, 2)

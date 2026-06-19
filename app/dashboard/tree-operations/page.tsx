@@ -138,6 +138,9 @@ export default function TreeOperationsPage() {
       .eq("profile_id", currentProfile.id)
       .maybeSingle();
 
+    console.log("PROFILE ID:", currentProfile.id);
+    console.log("WALLET DATA:", walletData);
+
     const { data: treeData, error: treeError } = await supabase
       .from("trees")
       .select("*")
