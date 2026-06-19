@@ -176,6 +176,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: currentProfile.id,
+        wallet_id: null,
         amount: -Math.abs(amount),
         type: "DEBIT",
         description,
@@ -183,6 +184,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: currentProfile.id,
+        wallet_id: null,
         amount: Math.abs(amount),
         transaction_type: "DEBIT",
         description,
@@ -190,6 +192,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: currentProfile.id,
+        wallet_id: null,
         amount: Math.abs(amount),
         description,
         status: "COMPLETED",
@@ -645,6 +648,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: profile.id,
+        wallet_id: null,
         amount: -Math.abs(amount),
         type: "DEBIT",
         description,
@@ -652,6 +656,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: profile.id,
+        wallet_id: null,
         amount: Math.abs(amount),
         transaction_type: "DEBIT",
         description,
@@ -659,6 +664,7 @@ export default function TreeOperationsPage() {
       },
       {
         profile_id: profile.id,
+        wallet_id: null,
         amount: Math.abs(amount),
         description,
         status: "COMPLETED",
