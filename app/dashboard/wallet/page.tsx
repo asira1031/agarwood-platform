@@ -76,7 +76,9 @@ type PendingItem = {
 };
 
 const PAYMENT_ACCOUNT_NAME = "JANICA MALDIVES";
-const AMOUNTS = [500, 1000, 5000, 10000, 50000];
+const AMOUNTS = [500, 1000, 2000, 5000, 10000, 50000];
+const CASH_IN_METHODS = ["GCASH", "MAYA", "BPI"];
+const PAYOUT_METHODS = ["GCASH", "MAYA", "BANK_TRANSFER"];
 
 export default function WalletPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -393,7 +395,7 @@ export default function WalletPage() {
             >
               <span>Cash In</span>
               <strong>Add funds to wallet</strong>
-              <small>GCash, Maya, or Bank Transfer</small>
+              <small>GCash, Maya, or BPI</small>
             </button>
 
             <button
@@ -448,7 +450,7 @@ export default function WalletPage() {
                   <StepTitle number="2" title="Choose Payment Method" />
 
                   <div className="methodGrid">
-                    {["GCASH", "MAYA", "BANK_TRANSFER"].map((method) => (
+                    {CASH_IN_METHODS.map((method) => (
                       <button
                         key={method}
                         className={paymentMethod === method ? "selected" : ""}
@@ -473,21 +475,9 @@ export default function WalletPage() {
                     </div>
                   </div>
 
-                  {paymentMethod === "GCASH" && (
-                    <QrPayment image="/payments/gcash.png" label="GCash QR" />
-                  )}
-
-                  {paymentMethod === "MAYA" && (
-                    <QrPayment image="/payments/maya.png" label="Maya QR" />
-                  )}
-
-                  {paymentMethod === "BANK_TRANSFER" && (
-                    <div className="bankBox">
-                      <strong>Bank Transfer</strong>
-                      <p>Account Name: {PAYMENT_ACCOUNT_NAME}</p>
-                      <small>Bank account details can be added later.</small>
-                    </div>
-                  )}
+                  {paymentMethod === "GCASH" && <QrPayment image="/payments/gcash.png" label="GCash QR" />}
+                  {paymentMethod === "MAYA" && <QrPayment image="/payments/maya.png" label="Maya QR" />}
+                  {paymentMethod === "BPI" && <QrPayment image="/payments/bpi.png" label="BPI QR" />}
 
                   <div className="formGrid">
                     <label>
@@ -574,7 +564,7 @@ export default function WalletPage() {
                   <StepTitle number="2" title="Where Should We Send Your Cash-Out?" />
 
                   <div className="methodGrid">
-                    {["GCASH", "MAYA", "BANK_TRANSFER"].map((method) => (
+                    {PAYOUT_METHODS.map((method) => (
                       <button
                         key={method}
                         className={payoutMethod === method ? "selected" : ""}
@@ -1058,42 +1048,7 @@ export default function WalletPage() {
         }
 
         .qrText p {
-          margin: 0 0 14px;
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .openQr {
-          display: inline-flex;
-          border-radius: 999px;
-          padding: 12px 16px;
-          background: #244536;
-          color: white;
-          text-decoration: none;
-          font-weight: 900;
-          font-size: 13px;
-        }
-
-        .bankBox {
-          border-radius: 20px;
-          background: rgba(255,253,246,.72);
-          border: 1px solid rgba(92,70,35,.10);
-          padding: 20px;
-          margin-bottom: 16px;
-        }
-
-        .bankBox strong {
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .bankBox p {
-          margin: 8px 0;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .bankBox small {
+          margin: 0;
           color: #6b6b62;
           font-weight: 900;
         }
@@ -1402,9 +1357,6 @@ function QrPayment({ image, label }: { image: string; label: string }) {
       <div className="qrText">
         <h3>{label}</h3>
         <p>Scan this QR and send payment to JANICA MALDIVES.</p>
-        <a className="openQr" href={image} target="_blank" rel="noopener noreferrer">
-          Open Full QR
-        </a>
       </div>
     </div>
   );
