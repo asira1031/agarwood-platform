@@ -1,655 +1,820 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
-type ToggleKey =
-  | "membershipAutoRenew"
-  | "careAutoRenew"
-  | "taskReminder"
-  | "careReminder"
-  | "membershipReminder"
-  | "walletAlert"
-  | "referralAlert"
-  | "gpsAlert"
-  | "photoAlert"
-  | "emailAlert";
+type Profile = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  membership_status: string | null;
+  membership_expiry: string | null;
+  auto_renew: boolean | null;
+  email_alerts: boolean | null;
+  sms_alerts: boolean | null;
+  task_alerts: boolean | null;
+  gps_alerts: boolean | null;
+};
+
+type Wallet = {
+  id: string;
+  profile_id: string;
+  balance: number | null;
+};
+
+const MEMBERSHIP_FEE = 999;
 
 export default function SettingsPage() {
-  const [toggles, setToggles] = useState<Record<ToggleKey, boolean>>({
-    membershipAutoRenew: true,
-    careAutoRenew: true,
-    taskReminder: true,
-    careReminder: true,
-    membershipReminder: true,
-    walletAlert: true,
-    referralAlert: true,
-    gpsAlert: true,
-    photoAlert: true,
-    emailAlert: false,
-  });
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
 
-  const walletBalance = 25430;
-  const membershipRenewal = 999;
-  const careRenewal = 2500;
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
 
-  const projectedDeduction = useMemo(() => {
-    let total = 0;
-    if (toggles.membershipAutoRenew) total += membershipRenewal;
-    if (toggles.careAutoRenew) total += careRenewal;
-    return total;
-  }, [toggles.membershipAutoRenew, toggles.careAutoRenew]);
+  const [autoRenew, setAutoRenew] = useState(false);
+  const [emailAlerts, setEmailAlerts] = useState(true);
+  const [smsAlerts, setSmsAlerts] = useState(false);
+  const [taskAlerts, setTaskAlerts] = useState(true);
+  const [gpsAlerts, setGpsAlerts] = useState(true);
 
-  const enoughBalance = walletBalance >= projectedDeduction;
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
-  function toggle(key: ToggleKey) {
-    setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
+  const [loading, setLoading] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingRenew, setSavingRenew] = useState(false);
+  const [savingAlerts, setSavingAlerts] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [processingRenewal, setProcessingRenewal] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function loadSettings() {
+    setLoading(true);
+    setNotice("");
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      setNotice(userError.message);
+      setLoading(false);
+      return;
+    }
+
+    if (!user) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const email = user.email?.trim().toLowerCase() || "";
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select(
+        "id, full_name, email, phone, membership_status, membership_expiry, auto_renew, email_alerts, sms_alerts, task_alerts, gps_alerts"
+      )
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select(
+        "id, full_name, email, phone, membership_status, membership_expiry, auto_renew, email_alerts, sms_alerts, task_alerts, gps_alerts"
+      )
+      .eq("email", email)
+      .maybeSingle();
+
+    const currentProfile = profileById || profileByEmail;
+
+    if (!currentProfile) {
+      setNotice("Profile not found.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: walletRows } = await supabase
+      .from("wallets")
+      .select("id, profile_id, balance, created_at")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    setProfile(currentProfile);
+    setWallet(walletRows?.[0] || null);
+
+    setFullName(currentProfile.full_name || "");
+    setPhone(currentProfile.phone || "");
+    setAutoRenew(Boolean(currentProfile.auto_renew));
+    setEmailAlerts(currentProfile.email_alerts ?? true);
+    setSmsAlerts(currentProfile.sms_alerts ?? false);
+    setTaskAlerts(currentProfile.task_alerts ?? true);
+    setGpsAlerts(currentProfile.gps_alerts ?? true);
+
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const walletBalance = useMemo(() => Number(wallet?.balance || 0), [wallet]);
+
+  const membershipExpiryLabel = useMemo(() => {
+    if (!profile?.membership_expiry) return "Not set";
+
+    return new Date(profile.membership_expiry).toLocaleDateString("en-PH", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  }, [profile]);
+
+  async function saveAccount() {
+    if (!profile || savingProfile) return;
+
+    setSavingProfile(true);
+    setNotice("");
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+      })
+      .eq("id", profile.id);
+
+    if (error) {
+      setNotice(error.message);
+      setSavingProfile(false);
+      return;
+    }
+
+    setNotice("Account details saved successfully.");
+    await loadSettings();
+    setSavingProfile(false);
+  }
+
+  async function saveAutoRenew(nextValue: boolean) {
+    if (!profile || savingRenew) return;
+
+    setSavingRenew(true);
+    setNotice("");
+    setAutoRenew(nextValue);
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ auto_renew: nextValue })
+      .eq("id", profile.id);
+
+    if (error) {
+      setNotice(error.message);
+      setAutoRenew(!nextValue);
+      setSavingRenew(false);
+      return;
+    }
+
+    setNotice(nextValue ? "Auto Renew enabled. Renewal will use wallet balance." : "Auto Renew disabled.");
+    await loadSettings();
+    setSavingRenew(false);
+  }
+
+  async function saveNotifications() {
+    if (!profile || savingAlerts) return;
+
+    setSavingAlerts(true);
+    setNotice("");
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        email_alerts: emailAlerts,
+        sms_alerts: smsAlerts,
+        task_alerts: taskAlerts,
+        gps_alerts: gpsAlerts,
+      })
+      .eq("id", profile.id);
+
+    if (error) {
+      setNotice(error.message);
+      setSavingAlerts(false);
+      return;
+    }
+
+    setNotice("Notification preferences saved.");
+    await loadSettings();
+    setSavingAlerts(false);
+  }
+
+  async function changePassword() {
+    if (changingPassword) return;
+
+    setNotice("");
+
+    if (!newPassword || !confirmPassword) {
+      setNotice("Enter your new password and confirmation.");
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setNotice("New password must be at least 6 characters.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setNotice("New password and confirm password do not match.");
+      return;
+    }
+
+    setChangingPassword(true);
+
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (error) {
+      setNotice(error.message);
+      setChangingPassword(false);
+      return;
+    }
+
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setNotice("Password updated successfully.");
+    setChangingPassword(false);
+  }
+
+  async function renewMembershipNow() {
+    if (!profile || !wallet || processingRenewal) return;
+
+    setProcessingRenewal(true);
+    setNotice("");
+
+    if (walletBalance < MEMBERSHIP_FEE) {
+      setNotice("Renewal failed. Your wallet balance is not enough for ₱999 membership renewal.");
+      setProcessingRenewal(false);
+      return;
+    }
+
+    const nextExpiry = getNextMembershipExpiry(profile.membership_expiry);
+
+    const { error: walletError } = await supabase
+      .from("wallets")
+      .update({ balance: walletBalance - MEMBERSHIP_FEE })
+      .eq("id", wallet.id);
+
+    if (walletError) {
+      setNotice(walletError.message);
+      setProcessingRenewal(false);
+      return;
+    }
+
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: profile.id,
+      wallet_id: wallet.id,
+      transaction_type: "MEMBERSHIP_RENEWAL",
+      amount: MEMBERSHIP_FEE,
+      status: "COMPLETED",
+      reference_no: `RENEW-${Date.now()}`,
+      description: "Annual membership renewal deducted from wallet",
+    });
+
+    if (txError) {
+      setNotice(txError.message);
+      setProcessingRenewal(false);
+      return;
+    }
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({
+        membership_status: "ACTIVE",
+        membership_expiry: nextExpiry,
+        auto_renew: true,
+      })
+      .eq("id", profile.id);
+
+    if (profileError) {
+      setNotice(profileError.message);
+      setProcessingRenewal(false);
+      return;
+    }
+
+    setNotice("Membership renewed successfully. ₱999 was deducted from your wallet.");
+    await loadSettings();
+    setProcessingRenewal(false);
   }
 
   return (
     <main className="page">
-      <section className="shell">
-        <aside className="sideQuote">
-          <div>
-            <p>Grow Wealth</p>
-            <p>Through</p>
-            <p>Sustainable</p>
-            <p>Agarwood</p>
-            <p>Ownership</p>
-          </div>
-          <span>🌿</span>
-        </aside>
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Customer Settings</p>
+          <h1>Settings</h1>
+          <span>
+            Manage your account, wallet auto-renewal, security, and notification preferences.
+          </span>
+        </div>
 
-        <section className="content">
-          <header className="header">
-            <div>
-              <h1>Settings</h1>
-              <p>Manage your account, renewal preferences, alerts, and security.</p>
-            </div>
-
-            <div className="walletCard">
-              <span>WALLET BALANCE</span>
-              <strong>₱ {walletBalance.toLocaleString()}.00</strong>
-              <b>💼</b>
-            </div>
-          </header>
-
-          <section className="grid">
-            <Card title="Account Settings" icon="👤">
-              <div className="profileBlock">
-                <div className="avatar">AI</div>
-                <div>
-                  <h3>Agarwood Investor</h3>
-                  <p>Client Account</p>
-                </div>
-              </div>
-
-              <Field label="Full Name" value="Agarwood Investor" />
-              <Field label="Email Address" value="client@agarwood.demo" />
-              <Field label="Phone Number" value="+63 900 000 0000" />
-
-              <button className="goldBtn">Update Profile</button>
-            </Card>
-
-            <Card title="Membership Settings" icon="🏛️">
-              <StatusRow label="Plan" value="Investor Membership" />
-              <StatusRow label="Platform Access" value="ACTIVE" active />
-              <StatusRow label="Renewal Date" value="July 18, 2026" />
-
-              <RenewBox
-                title="Auto Renew Membership"
-                text="Wallet will automatically deduct platform access fee."
-                active={toggles.membershipAutoRenew}
-                onClick={() => toggle("membershipAutoRenew")}
-              />
-
-              <button className="outlineBtn">Renew Membership</button>
-            </Card>
-
-            <Card title="Care Subscription" icon="🛡️">
-              <StatusRow label="Care Status" value="ACTIVE" active />
-              <StatusRow label="Renewal Date" value="July 18, 2026" />
-              <StatusRow label="Coverage" value="Managed Tree Care" />
-
-              <div className="coverage">
-                <span>✓ Watering</span>
-                <span>✓ Fertilizer</span>
-                <span>✓ Photo Updates</span>
-                <span>✓ GPS Verification</span>
-              </div>
-
-              <RenewBox
-                title="Auto Renew Care Plan"
-                text="Automatically renews tree maintenance service."
-                active={toggles.careAutoRenew}
-                onClick={() => toggle("careAutoRenew")}
-              />
-            </Card>
-
-            <Card title="Auto Renew Protection" icon="💳" wide>
-              <div className="walletGrid">
-                <MiniStat label="Wallet Balance" value={`₱${walletBalance.toLocaleString()}`} />
-                <MiniStat label="Membership Renewal" value={`₱${membershipRenewal.toLocaleString()}`} />
-                <MiniStat label="Care Renewal" value={`₱${careRenewal.toLocaleString()}`} />
-                <MiniStat label="Projected Deduction" value={`₱${projectedDeduction.toLocaleString()}`} />
-              </div>
-
-              <div className={enoughBalance ? "protection good" : "protection bad"}>
-                <strong>{enoughBalance ? "✓ Sufficient Balance" : "⚠ Insufficient Balance"}</strong>
-                <p>
-                  {enoughBalance
-                    ? "Your wallet can cover the next enabled auto-renew payments."
-                    : "Please add funds before renewal to avoid service interruption."}
-                </p>
-              </div>
-            </Card>
-
-            <Card title="Notification Preferences" icon="🔔" wide>
-              <div className="toggleGrid">
-                <ToggleRow label="Email Alerts" active={toggles.emailAlert} onClick={() => toggle("emailAlert")} />
-                <ToggleRow label="Task Order Alerts" active={toggles.taskReminder} onClick={() => toggle("taskReminder")} />
-                <ToggleRow label="Care Plan Reminders" active={toggles.careReminder} onClick={() => toggle("careReminder")} />
-                <ToggleRow label="Membership Reminders" active={toggles.membershipReminder} onClick={() => toggle("membershipReminder")} />
-                <ToggleRow label="Wallet Alerts" active={toggles.walletAlert} onClick={() => toggle("walletAlert")} />
-                <ToggleRow label="Referral Alerts" active={toggles.referralAlert} onClick={() => toggle("referralAlert")} />
-                <ToggleRow label="GPS Verification Alerts" active={toggles.gpsAlert} onClick={() => toggle("gpsAlert")} />
-                <ToggleRow label="Photo Update Alerts" active={toggles.photoAlert} onClick={() => toggle("photoAlert")} />
-              </div>
-            </Card>
-
-            <Card title="Care Preferences" icon="🌳">
-              <SelectRow label="Default Care Mode" value="Manual Approval" />
-              <SelectRow label="Photo Update Frequency" value="Monthly" />
-              <SelectRow label="GPS Verification" value="Quarterly" />
-              <SelectRow label="Task Scheduling" value="Notify Before Action" />
-            </Card>
-
-            <Card title="Security" icon="🔐">
-              <StatusRow label="Password" value="Protected" active />
-              <StatusRow label="Two-Factor Auth" value="Not Enabled" />
-              <StatusRow label="Login History" value="Available" />
-
-              <button className="goldBtn">Change Password</button>
-              <button className="outlineBtn">Enable 2FA</button>
-            </Card>
-
-            <Card title="Wallet & Fee Rules" icon="📜" wide>
-              <div className="feeGrid">
-                <FeeItem title="Membership Fee" desc="Platform / app access only" />
-                <FeeItem title="Care Fee" desc="Tree maintenance and operations service" />
-                <FeeItem title="Sell Tree Fee" desc="2% platform fee before net receive" />
-                <FeeItem title="Withdraw Fee" desc="2% processing fee before net receive" />
-              </div>
-            </Card>
-
-            <Card title="Danger Zone" icon="🚪" wide danger>
-              <div className="dangerRow">
-                <div>
-                  <strong>Sign Out</strong>
-                  <p>End your current session on this device.</p>
-                </div>
-                <button className="dangerBtn">Sign Out</button>
-              </div>
-            </Card>
-          </section>
-        </section>
+        <div className="heroActions">
+          <button onClick={loadSettings}>Refresh</button>
+          <Link href="/dashboard/wallet">Wallet</Link>
+          <Link href="/dashboard">Dashboard</Link>
+        </div>
       </section>
 
-      <style jsx>{`
+      {notice && <div className="notice">{notice}</div>}
+
+      {loading ? (
+        <div className="empty">Loading settings...</div>
+      ) : (
+        <section className="settingsGrid">
+          <div className="panel accountPanel">
+            <div className="panelHead">
+              <div>
+                <p className="sectionLabel">Account</p>
+                <h2>Profile Information</h2>
+              </div>
+              <span>Editable</span>
+            </div>
+
+            <label>
+              Full Name
+              <input value={fullName} onChange={(event) => setFullName(event.target.value)} />
+            </label>
+
+            <label>
+              Email
+              <input value={profile?.email || ""} disabled />
+            </label>
+
+            <label>
+              Phone
+              <input value={phone} onChange={(event) => setPhone(event.target.value)} />
+            </label>
+
+            <button className="primaryButton" onClick={saveAccount} disabled={savingProfile}>
+              {savingProfile ? "Saving..." : "Save Account Changes"}
+            </button>
+          </div>
+
+          <div className="panel membershipPanel">
+            <div className="panelHead">
+              <div>
+                <p className="sectionLabel">Membership</p>
+                <h2>Auto Renew</h2>
+              </div>
+              <span>{profile?.membership_status || "UNKNOWN"}</span>
+            </div>
+
+            <div className="balanceCard">
+              <p>Wallet Balance</p>
+              <h3>{peso(walletBalance)}</h3>
+              <small>Membership renewal fee: {peso(MEMBERSHIP_FEE)}</small>
+            </div>
+
+            <div className="infoRows">
+              <div>
+                <span>Status</span>
+                <strong>{profile?.membership_status || "UNKNOWN"}</strong>
+              </div>
+              <div>
+                <span>Expiry</span>
+                <strong>{membershipExpiryLabel}</strong>
+              </div>
+            </div>
+
+            <div className="toggleRow">
+              <div>
+                <strong>Auto Renew from Wallet</strong>
+                <p>
+                  When enabled, renewal should deduct membership fee from your wallet balance.
+                </p>
+              </div>
+
+              <button
+                className={`toggle ${autoRenew ? "on" : ""}`}
+                onClick={() => saveAutoRenew(!autoRenew)}
+                disabled={savingRenew}
+              >
+                <span />
+              </button>
+            </div>
+
+            <button
+              className="goldButton"
+              onClick={renewMembershipNow}
+              disabled={!wallet || processingRenewal}
+            >
+              {processingRenewal ? "Processing..." : "Renew Now from Wallet"}
+            </button>
+          </div>
+
+          <div className="panel securityPanel">
+            <div className="panelHead">
+              <div>
+                <p className="sectionLabel">Security</p>
+                <h2>Change Password</h2>
+              </div>
+              <span>Protected</span>
+            </div>
+
+            <label>
+              Current Password
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                placeholder="Optional for Supabase session update"
+              />
+            </label>
+
+            <label>
+              New Password
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+              />
+            </label>
+
+            <label>
+              Confirm New Password
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+            </label>
+
+            <button className="primaryButton" onClick={changePassword} disabled={changingPassword}>
+              {changingPassword ? "Updating..." : "Update Password"}
+            </button>
+          </div>
+
+          <div className="panel notificationsPanel">
+            <div className="panelHead">
+              <div>
+                <p className="sectionLabel">Notifications</p>
+                <h2>Alert Preferences</h2>
+              </div>
+              <span>Customer</span>
+            </div>
+
+            <SwitchRow
+              title="Email Alerts"
+              note="Membership, wallet, tree, and support email updates."
+              value={emailAlerts}
+              onChange={setEmailAlerts}
+            />
+
+            <SwitchRow
+              title="SMS Alerts"
+              note="Important wallet and account updates by SMS."
+              value={smsAlerts}
+              onChange={setSmsAlerts}
+            />
+
+            <SwitchRow
+              title="Task Alerts"
+              note="Task order status and farm operation updates."
+              value={taskAlerts}
+              onChange={setTaskAlerts}
+            />
+
+            <SwitchRow
+              title="GPS Alerts"
+              note="GPS verification and tree location status updates."
+              value={gpsAlerts}
+              onChange={setGpsAlerts}
+            />
+
+            <button className="primaryButton" onClick={saveNotifications} disabled={savingAlerts}>
+              {savingAlerts ? "Saving..." : "Save Notification Settings"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      <style>{`
+        * { box-sizing: border-box; }
+
         .page {
           min-height: 100vh;
-          background: #f5f1e8;
-          padding: 0;
-          font-family: Arial, Helvetica, sans-serif;
-        }
-
-        .shell {
-          min-height: 100vh;
-          max-width: 1440px;
-          margin: auto;
-          display: grid;
-          grid-template-columns: 150px 1fr;
-          background:
-            radial-gradient(circle at 92% 8%, rgba(205, 164, 75, .2), transparent 28%),
-            linear-gradient(135deg, #03170f, #062819 48%, #021108);
-          border-left: 8px solid #062819;
-          border-right: 8px solid #062819;
+          padding: 30px;
           color: #fff8dd;
-        }
-
-        .sideQuote {
-          min-height: 100vh;
-          padding: 24px 14px;
-          border-right: 1px solid rgba(217, 176, 83, .35);
-          display: flex;
-          flex-direction: column;
-          justify-content: flex-end;
+          font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at bottom, rgba(80, 135, 65, .35), transparent 32%),
-            rgba(0, 0, 0, .12);
+            radial-gradient(circle at 15% 8%, rgba(224, 176, 58, .24), transparent 25%),
+            radial-gradient(circle at 82% 5%, rgba(255, 246, 184, .12), transparent 24%),
+            linear-gradient(180deg, #0b2618 0%, #071b12 100%);
         }
 
-        .sideQuote div {
-          border: 1px solid rgba(217, 176, 83, .45);
-          border-radius: 12px;
-          padding: 18px 10px;
-          text-align: center;
-          color: #d9b053;
-          font-family: Georgia, "Times New Roman", serif;
-          font-size: 13px;
-          line-height: 1.4;
-        }
-
-        .sideQuote p {
-          margin: 4px 0;
-        }
-
-        .sideQuote span {
-          margin-top: 18px;
-          font-size: 44px;
-          text-align: center;
-          display: block;
-        }
-
-        .content {
-          padding: 34px;
-        }
-
-        .header {
+        .hero {
           display: flex;
+          align-items: center;
           justify-content: space-between;
           gap: 20px;
-          align-items: flex-start;
-          margin-bottom: 24px;
+          margin-bottom: 22px;
         }
 
-        .header h1 {
-          margin: 0;
-          font-size: 42px;
-          color: #e7c76c;
-          font-family: Georgia, "Times New Roman", serif;
-        }
-
-        .header p {
-          margin: 8px 0 0;
-          color: rgba(255, 248, 221, .72);
-          font-style: italic;
-        }
-
-        .walletCard {
-          min-width: 250px;
-          padding: 18px 22px;
-          border-radius: 15px;
-          background: rgba(255, 255, 255, .055);
-          border: 1px solid rgba(217, 176, 83, .38);
-          box-shadow: inset 0 0 25px rgba(217, 176, 83, .08);
-          position: relative;
-        }
-
-        .walletCard span {
-          display: block;
-          font-size: 10px;
-          color: #d9b053;
+        .eyebrow,
+        .sectionLabel {
+          margin: 0 0 8px;
+          color: #d9a52e;
           font-weight: 900;
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: .14em;
         }
 
-        .walletCard strong {
+        .hero h1 {
+          margin: 0;
+          color: #ffe49a;
+          font-size: 44px;
+          letter-spacing: -1.5px;
+        }
+
+        .hero span {
           display: block;
-          margin-top: 7px;
-          font-size: 22px;
-          color: #fff8dd;
+          max-width: 720px;
+          margin-top: 8px;
+          color: rgba(255, 248, 221, .74);
+          line-height: 1.6;
         }
 
-        .walletCard b {
-          position: absolute;
-          right: 18px;
-          top: 22px;
-          color: #d9b053;
+        .heroActions {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
         }
 
-        .grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
+        .heroActions button,
+        .heroActions a {
+          border: 1px solid rgba(223, 171, 61, .34);
+          border-radius: 14px;
+          padding: 12px 16px;
+          background: rgba(255,255,255,.06);
+          color: #ffe49a;
+          font-weight: 900;
+          text-decoration: none;
+          cursor: pointer;
         }
 
-        .card {
-          border-radius: 16px;
-          padding: 20px;
-          min-height: 260px;
+        .notice,
+        .empty,
+        .panel {
+          border-radius: 26px;
+          border: 1px solid rgba(223, 171, 61, .24);
           background:
-            linear-gradient(145deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025));
-          border: 1px solid rgba(217, 176, 83, .32);
-          box-shadow: 0 18px 40px rgba(0, 0, 0, .22);
+            linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035)),
+            rgba(10, 42, 27, .92);
+          box-shadow: 0 24px 70px rgba(0,0,0,.30);
         }
 
-        .card.wide {
-          grid-column: span 2;
-        }
-
-        .card.danger {
-          border-color: rgba(255, 118, 91, .4);
-        }
-
-        .cardHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding-bottom: 14px;
-          margin-bottom: 16px;
-          border-bottom: 1px solid rgba(217, 176, 83, .22);
-        }
-
-        .cardHead h2 {
-          margin: 0;
-          color: #e7c76c;
-          font-size: 19px;
-          font-family: Georgia, "Times New Roman", serif;
-        }
-
-        .cardIcon {
-          width: 40px;
-          height: 40px;
-          border-radius: 999px;
-          display: grid;
-          place-items: center;
-          border: 1px solid rgba(217, 176, 83, .38);
-          background: rgba(217, 176, 83, .08);
-        }
-
-        .profileBlock {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          margin-bottom: 16px;
-        }
-
-        .avatar {
-          width: 62px;
-          height: 62px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          color: #062819;
+        .notice,
+        .empty {
+          padding: 18px 20px;
+          margin-bottom: 18px;
+          color: #ffe49a;
           font-weight: 900;
-          background: linear-gradient(135deg, #f4d57a, #b98222);
         }
 
-        .profileBlock h3 {
-          margin: 0;
-        }
-
-        .profileBlock p {
-          margin: 5px 0 0;
-          color: rgba(255, 248, 221, .6);
-        }
-
-        .field,
-        .statusRow,
-        .selectRow {
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-          padding: 11px 0;
-          border-bottom: 1px solid rgba(255, 255, 255, .08);
-        }
-
-        .field span,
-        .statusRow span,
-        .selectRow span {
-          color: rgba(255, 248, 221, .62);
-          font-size: 13px;
-        }
-
-        .field strong,
-        .statusRow strong,
-        .selectRow strong {
-          font-size: 13px;
-          text-align: right;
-        }
-
-        .activeText {
-          color: #85ef91;
-        }
-
-        .goldBtn,
-        .outlineBtn,
-        .dangerBtn {
-          width: 100%;
-          margin-top: 15px;
-          border: 0;
-          border-radius: 10px;
-          padding: 12px 15px;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .goldBtn {
-          color: #062819;
-          background: linear-gradient(135deg, #f3d376, #b98222);
-        }
-
-        .outlineBtn {
-          color: #e7c76c;
-          background: rgba(255,255,255,.03);
-          border: 1px solid rgba(217, 176, 83, .38);
-        }
-
-        .dangerBtn {
-          width: auto;
-          color: white;
-          background: linear-gradient(135deg, #c8442e, #7b1f16);
-          margin-top: 0;
-        }
-
-        .renewBox {
-          margin-top: 15px;
-          padding: 14px;
-          border-radius: 14px;
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-          background: rgba(255, 255, 255, .055);
-          border: 1px solid rgba(217, 176, 83, .18);
-        }
-
-        .renewBox strong {
-          color: #e7c76c;
-        }
-
-        .renewBox p {
-          margin: 5px 0 0;
-          font-size: 12px;
-          color: rgba(255, 248, 221, .62);
-          line-height: 1.4;
-        }
-
-        .switch {
-          width: 58px;
-          height: 32px;
-          border-radius: 999px;
-          padding: 4px;
-          border: 1px solid rgba(255,255,255,.16);
-          background: rgba(255,255,255,.13);
-          cursor: pointer;
-          flex: 0 0 auto;
-        }
-
-        .switch i {
-          display: block;
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          background: rgba(255,255,255,.86);
-          transition: .25s;
-        }
-
-        .switch.on {
-          background: linear-gradient(135deg, #48c760, #1d7d36);
-        }
-
-        .switch.on i {
-          transform: translateX(25px);
-          background: #fff8dd;
-        }
-
-        .coverage {
+        .settingsGrid {
           display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 9px;
-          margin-top: 14px;
-        }
-
-        .coverage span {
-          padding: 9px;
-          border-radius: 10px;
-          color: #dfffd9;
-          background: rgba(87, 206, 100, .1);
-          border: 1px solid rgba(87, 206, 100, .18);
-          font-size: 12px;
-          font-weight: 800;
-        }
-
-        .walletGrid,
-        .feeGrid,
-        .toggleGrid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .miniStat,
-        .feeItem,
-        .toggleRow {
-          padding: 14px;
-          border-radius: 13px;
-          background: rgba(255, 255, 255, .05);
-          border: 1px solid rgba(217, 176, 83, .16);
-        }
-
-        .miniStat span,
-        .feeItem p {
-          color: rgba(255, 248, 221, .62);
-          font-size: 12px;
-        }
-
-        .miniStat strong {
-          display: block;
-          margin-top: 7px;
-          font-size: 22px;
-          color: #e7c76c;
-        }
-
-        .protection {
-          margin-top: 14px;
-          padding: 15px;
-          border-radius: 14px;
-        }
-
-        .protection p {
-          margin: 6px 0 0;
-          color: rgba(255, 248, 221, .7);
-        }
-
-        .protection.good {
-          background: rgba(69, 199, 87, .12);
-          border: 1px solid rgba(69, 199, 87, .25);
-        }
-
-        .protection.bad {
-          background: rgba(255, 150, 66, .12);
-          border: 1px solid rgba(255, 150, 66, .25);
-        }
-
-        .toggleRow {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .toggleRow span {
-          font-weight: 800;
-          font-size: 13px;
-        }
-
-        .feeItem h3 {
-          margin: 0 0 7px;
-          color: #e7c76c;
-          font-size: 16px;
-        }
-
-        .feeItem p {
-          margin: 0;
-          line-height: 1.5;
-        }
-
-        .dangerRow {
-          display: flex;
-          justify-content: space-between;
+          grid-template-columns: 1fr 1fr;
           gap: 18px;
+        }
+
+        .panel {
+          padding: 24px;
+        }
+
+        .panelHead {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 16px;
+          margin-bottom: 20px;
+        }
+
+        .panelHead h2 {
+          margin: 0;
+          color: #fff5c3;
+          font-size: 25px;
+        }
+
+        .panelHead span {
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: rgba(217, 165, 46, .14);
+          color: #ffe49a;
+          font-size: 11px;
+          font-weight: 1000;
+        }
+
+        label {
+          display: grid;
+          gap: 8px;
+          margin-bottom: 14px;
+          color: rgba(255, 248, 221, .75);
+          font-weight: 900;
+        }
+
+        input {
+          width: 100%;
+          outline: none;
+          border: 1px solid rgba(223, 171, 61, .22);
+          border-radius: 16px;
+          padding: 14px 15px;
+          background: rgba(255,255,255,.07);
+          color: #fff8dd;
+          font-weight: 900;
+        }
+
+        input:disabled {
+          opacity: .62;
+          cursor: not-allowed;
+        }
+
+        .primaryButton,
+        .goldButton {
+          width: 100%;
+          border: 0;
+          border-radius: 17px;
+          padding: 15px 16px;
+          font-weight: 1000;
+          cursor: pointer;
+        }
+
+        .primaryButton {
+          margin-top: 8px;
+          background: rgba(255,255,255,.08);
+          color: #ffe49a;
+          border: 1px solid rgba(223, 171, 61, .24);
+        }
+
+        .goldButton {
+          margin-top: 16px;
+          background: linear-gradient(135deg, #e5ad34, #c58b25);
+          color: #06170f;
+        }
+
+        .primaryButton:hover,
+        .heroActions button:hover,
+        .heroActions a:hover {
+          background: rgba(217, 165, 46, .18);
+        }
+
+        button:disabled {
+          opacity: .48;
+          cursor: not-allowed;
+        }
+
+        .balanceCard {
+          border-radius: 22px;
+          padding: 18px;
+          margin-bottom: 16px;
+          background: linear-gradient(135deg, rgba(229, 173, 52, .22), rgba(255,255,255,.06));
+          border: 1px solid rgba(223, 171, 61, .22);
+        }
+
+        .balanceCard p {
+          margin: 0 0 8px;
+          color: rgba(255, 248, 221, .70);
+          font-weight: 900;
+        }
+
+        .balanceCard h3 {
+          margin: 0 0 8px;
+          color: #ffe49a;
+          font-size: 34px;
+          letter-spacing: -1px;
+        }
+
+        .balanceCard small {
+          color: rgba(255, 248, 221, .64);
+          font-weight: 900;
+        }
+
+        .infoRows {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .infoRows div {
+          border-radius: 17px;
+          padding: 14px;
+          background: rgba(255,255,255,.055);
+          border: 1px solid rgba(223, 171, 61, .14);
+        }
+
+        .infoRows span {
+          display: block;
+          margin-bottom: 7px;
+          color: rgba(255, 248, 221, .55);
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .infoRows strong {
+          color: #fff5c3;
+        }
+
+        .toggleRow,
+        .switchRow {
+          display: flex;
+          justify-content: space-between;
           align-items: center;
+          gap: 16px;
+          padding: 16px;
+          border-radius: 18px;
+          background: rgba(255,255,255,.055);
+          border: 1px solid rgba(223, 171, 61, .14);
+          margin-bottom: 12px;
         }
 
-        .dangerRow p {
-          margin: 6px 0 0;
+        .toggleRow strong,
+        .switchRow strong {
+          display: block;
+          margin-bottom: 5px;
+          color: #fff5c3;
+        }
+
+        .toggleRow p,
+        .switchRow p {
+          margin: 0;
           color: rgba(255, 248, 221, .62);
+          line-height: 1.5;
+          font-size: 13px;
+          font-weight: 800;
         }
 
-        @media (max-width: 1100px) {
-          .shell {
+        .toggle {
+          flex: 0 0 auto;
+          position: relative;
+          width: 64px;
+          height: 36px;
+          border: 1px solid rgba(223, 171, 61, .24);
+          border-radius: 999px;
+          background: rgba(255,255,255,.08);
+          cursor: pointer;
+          padding: 3px;
+        }
+
+        .toggle span {
+          display: block;
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          background: rgba(255, 248, 221, .78);
+          transition: .18s ease;
+        }
+
+        .toggle.on {
+          background: linear-gradient(135deg, #e5ad34, #c58b25);
+        }
+
+        .toggle.on span {
+          transform: translateX(27px);
+          background: #06170f;
+        }
+
+        @media (max-width: 1000px) {
+          .settingsGrid {
             grid-template-columns: 1fr;
-          }
-
-          .sideQuote {
-            display: none;
-          }
-
-          .grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .card.wide {
-            grid-column: span 2;
           }
         }
 
-        @media (max-width: 760px) {
-          .content {
-            padding: 20px;
+        @media (max-width: 720px) {
+          .page {
+            padding: 18px;
           }
 
-          .header {
+          .hero {
             flex-direction: column;
+            align-items: flex-start;
           }
 
-          .walletCard {
-            width: 100%;
+          .hero h1 {
+            font-size: 34px;
           }
 
-          .grid,
-          .walletGrid,
-          .feeGrid,
-          .toggleGrid {
+          .infoRows {
             grid-template-columns: 1fr;
           }
 
-          .card,
-          .card.wide {
-            grid-column: span 1;
-          }
-
-          .coverage {
-            grid-template-columns: 1fr;
-          }
-
-          .dangerRow {
+          .toggleRow,
+          .switchRow {
+            align-items: flex-start;
             flex-direction: column;
-            align-items: stretch;
-          }
-
-          .dangerBtn {
-            width: 100%;
           }
         }
       `}</style>
@@ -657,132 +822,45 @@ export default function SettingsPage() {
   );
 }
 
-function Card({
+function SwitchRow({
   title,
-  icon,
-  children,
-  wide,
-  danger,
-}: {
-  title: string;
-  icon: string;
-  children: React.ReactNode;
-  wide?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <section className={`card ${wide ? "wide" : ""} ${danger ? "danger" : ""}`}>
-      <div className="cardHead">
-        <h2>{title}</h2>
-        <div className="cardIcon">{icon}</div>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="field">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function StatusRow({
-  label,
+  note,
   value,
-  active,
-}: {
-  label: string;
-  value: string;
-  active?: boolean;
-}) {
-  return (
-    <div className="statusRow">
-      <span>{label}</span>
-      <strong className={active ? "activeText" : ""}>{value}</strong>
-    </div>
-  );
-}
-
-function SelectRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="selectRow">
-      <span>{label}</span>
-      <strong>{value} ▾</strong>
-    </div>
-  );
-}
-
-function RenewBox({
-  title,
-  text,
-  active,
-  onClick,
+  onChange,
 }: {
   title: string;
-  text: string;
-  active: boolean;
-  onClick: () => void;
+  note: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
 }) {
   return (
-    <div className="renewBox">
+    <div className="switchRow">
       <div>
         <strong>{title}</strong>
-        <p>{text}</p>
+        <p>{note}</p>
       </div>
-      <Switch active={active} onClick={onClick} />
+
+      <button className={`toggle ${value ? "on" : ""}`} onClick={() => onChange(!value)}>
+        <span />
+      </button>
     </div>
   );
 }
 
-function Switch({
-  active,
-  onClick,
-}: {
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button className={`switch ${active ? "on" : ""}`} onClick={onClick}>
-      <i />
-    </button>
-  );
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-function ToggleRow({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div className="toggleRow">
-      <span>{label}</span>
-      <Switch active={active} onClick={onClick} />
-    </div>
-  );
-}
+function getNextMembershipExpiry(currentExpiry: string | null) {
+  const today = new Date();
+  const base =
+    currentExpiry && new Date(currentExpiry).getTime() > today.getTime()
+      ? new Date(currentExpiry)
+      : today;
 
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="miniStat">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function FeeItem({ title, desc }: { title: string; desc: string }) {
-  return (
-    <div className="feeItem">
-      <h3>{title}</h3>
-      <p>{desc}</p>
-    </div>
-  );
+  base.setFullYear(base.getFullYear() + 1);
+  return base.toISOString();
 }
