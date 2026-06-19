@@ -6,6 +6,16 @@ import { supabase } from "@/lib/supabase";
 
 type ProductType = "TREE" | "PACKAGE" | "SUPPLY";
 
+type SupplyCategory =
+  | "All Supplies"
+  | "Fertilizers"
+  | "Nutrients & Boosters"
+  | "Fungicides"
+  | "Pest Control"
+  | "Soil Products"
+  | "Tree Health"
+  | "Tree Care Programs";
+
 type MarketplaceProduct = {
   id: string;
   product_key: string | null;
@@ -14,6 +24,7 @@ type MarketplaceProduct = {
   note: string | null;
   stock_status: string | null;
   icon: string | null;
+  image_url?: string | null;
   category: string | null;
   unit: string | null;
   low_stock_level: number | null;
@@ -34,6 +45,42 @@ type Wallet = {
   balance: number | null;
 };
 
+type InventoryItem = {
+  id: string;
+  profile_id: string | null;
+  item_name: string | null;
+  category: string | null;
+  unit: string | null;
+  remaining_qty: number | null;
+  status: string | null;
+};
+
+const SUPPLY_CATEGORIES: SupplyCategory[] = [
+  "All Supplies",
+  "Fertilizers",
+  "Nutrients & Boosters",
+  "Fungicides",
+  "Pest Control",
+  "Soil Products",
+  "Tree Health",
+  "Tree Care Programs",
+];
+
+const TREE_ALLOWED_NAMES = ["agarwood seed", "agarwood seedling", "young seedling"];
+
+const PACKAGE_ALLOWED_NAMES = [
+  "10 seeds",
+  "50 seeds",
+  "100 seeds",
+  "10 seedlings",
+  "50 seedlings",
+  "100 seedlings",
+  "10 young seedlings",
+  "50 young seedlings",
+  "100 young seedlings",
+];
+
+
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -41,57 +88,323 @@ function peso(value: number) {
   })}`;
 }
 
-function makeTreeCode() {
-  return `AGW-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 900 + 100)}`;
+function normalize(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
-function packageTreeCount(product: MarketplaceProduct) {
-  const name = String(product.name || "").toLowerCase();
-  const note = String(product.note || "").toLowerCase();
+function isTreeAllowed(product: MarketplaceProduct) {
+  const type = String(product.product_type || "").trim().toUpperCase();
+  const name = normalize(product.name);
 
-  if (name.includes("investor") || note.includes("20 trees")) return 20;
-  if (name.includes("plantation") || note.includes("100 trees")) return 100;
-  return 5;
+  if (type !== "TREE") return false;
+
+  return TREE_ALLOWED_NAMES.includes(name);
 }
 
-function packageSupplyBundle(product: MarketplaceProduct) {
-  const count = packageTreeCount(product);
+function isPackageAllowed(product: MarketplaceProduct) {
+  const type = String(product.product_type || "").trim().toUpperCase();
+  const name = normalize(product.name);
 
-  if (count >= 100) {
+  if (type !== "PACKAGE") return false;
+
+  return PACKAGE_ALLOWED_NAMES.includes(name);
+}
+
+function normalizeSupplyCategory(category: string | null | undefined): SupplyCategory {
+  const raw = normalize(category);
+
+  if (raw === "tree care programs" || raw.includes("care program") || raw.includes("program")) {
+    return "Tree Care Programs";
+  }
+
+  if (raw === "fertilizers" || raw === "fertilizer" || raw.includes("fertilizer")) {
+    return "Fertilizers";
+  }
+
+  if (
+    raw === "nutrients & boosters" ||
+    raw === "nutrients" ||
+    raw === "boosters" ||
+    raw.includes("nutrient") ||
+    raw.includes("booster")
+  ) {
+    return "Nutrients & Boosters";
+  }
+
+  if (
+    raw === "fungicides" ||
+    raw === "fungicide" ||
+    raw.includes("fungicide") ||
+    raw.includes("anti-fungal") ||
+    raw.includes("antifungal") ||
+    raw.includes("fungal")
+  ) {
+    return "Fungicides";
+  }
+
+  if (
+    raw === "pest control" ||
+    raw.includes("pest") ||
+    raw.includes("insecticide") ||
+    raw.includes("insect")
+  ) {
+    return "Pest Control";
+  }
+
+  if (
+    raw === "soil products" ||
+    raw.includes("soil") ||
+    raw.includes("compost") ||
+    raw.includes("coco peat") ||
+    raw.includes("coco")
+  ) {
+    return "Soil Products";
+  }
+
+  if (
+    raw === "tree health" ||
+    raw.includes("tree health") ||
+    raw.includes("health") ||
+    raw.includes("disease") ||
+    raw.includes("recovery") ||
+    raw.includes("root protection") ||
+    raw.includes("protection")
+  ) {
+    return "Tree Health";
+  }
+
+  return "All Supplies";
+}
+
+function getProductType(product: MarketplaceProduct): ProductType {
+  const type = String(product.product_type || "").toUpperCase();
+
+  if (type === "PACKAGE") return "PACKAGE";
+  if (type === "SUPPLY") return "SUPPLY";
+  return "TREE";
+}
+
+function getProductIcon(product: MarketplaceProduct) {
+  const type = getProductType(product);
+
+  if (product.icon) return product.icon;
+  if (type === "TREE") return "🌳";
+  if (type === "PACKAGE") return "📦";
+  if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "🌿";
+  return "🌱";
+}
+
+function getPrimaryActionLabel(product: MarketplaceProduct) {
+  const category = normalizeSupplyCategory(product.category);
+  const type = getProductType(product);
+
+  if (category === "Tree Care Programs") return "View Program";
+  if (type === "TREE") return "View Tree";
+  if (type === "PACKAGE") return "View Package";
+  return "View Supply";
+}
+
+function getProgramDuration(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+  const unit = normalize(product.unit);
+
+  if (name.includes("1 week") || unit.includes("week")) return "1 Week";
+  if (name.includes("premium")) return "Monthly Premium Care";
+  return "Monthly Standard Care";
+}
+
+function getProgramSubscribeLabel(product: MarketplaceProduct) {
+  const duration = getProgramDuration(product);
+
+  return duration === "1 Week" ? "Subscribe Weekly" : "Subscribe Monthly";
+}
+
+function getProgramBenefits(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+
+  if (name.includes("premium")) {
     return [
-      { name: "Organic Fertilizer", category: "Fertilizer", unit: "Bag", qty: 240, low_stock_level: 30 },
-      { name: "Fungicide", category: "Fungicide", unit: "Bottle", qty: 100, low_stock_level: 20 },
-      { name: "Tree Nutrients", category: "Nutrients", unit: "Bottle", qty: 100, low_stock_level: 25 },
-      { name: "Insecticide", category: "Insecticide", unit: "Bottle", qty: 60, low_stock_level: 15 },
-      { name: "Soil Conditioner", category: "Soil Conditioner", unit: "Bag", qty: 100, low_stock_level: 20 },
+      "Premium fertilizer support",
+      "Premium nutrients",
+      "Fungicide protection",
+      "Advanced pest control",
+      "Tree health booster",
+      "Plantation monitoring",
+      "Priority support",
     ];
   }
 
-  if (count >= 20) {
+  if (name.includes("standard")) {
     return [
-      { name: "Organic Fertilizer", category: "Fertilizer", unit: "Bag", qty: 45, low_stock_level: 10 },
-      { name: "Fungicide", category: "Fungicide", unit: "Bottle", qty: 20, low_stock_level: 6 },
-      { name: "Tree Nutrients", category: "Nutrients", unit: "Bottle", qty: 20, low_stock_level: 8 },
-      { name: "Insecticide", category: "Insecticide", unit: "Bottle", qty: 10, low_stock_level: 5 },
+      "Organic fertilizer support",
+      "Tree nutrients",
+      "Fungicide protection",
+      "Pest control treatment",
+      "Growth monitoring",
+      "Tree health assessment",
     ];
   }
 
   return [
-    { name: "Organic Fertilizer", category: "Fertilizer", unit: "Bag", qty: 10, low_stock_level: 5 },
-    { name: "Fungicide", category: "Fungicide", unit: "Bottle", qty: 5, low_stock_level: 3 },
-    { name: "Tree Nutrients", category: "Nutrients", unit: "Bottle", qty: 5, low_stock_level: 5 },
+    "Organic fertilizer support",
+    "Tree nutrients",
+    "Basic tree health check",
+    "Growth monitoring",
   ];
+}
+
+function getProgramCoverage(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+
+  if (name.includes("premium")) {
+    return [
+      "Advanced managed care coverage",
+      "Priority monitoring and support",
+      "Premium protection and booster routine",
+    ];
+  }
+
+  if (name.includes("standard")) {
+    return [
+      "Monthly managed care coverage",
+      "Protection routine for common tree risks",
+      "Health and growth monitoring",
+    ];
+  }
+
+  return [
+    "Short-term weekly care coverage",
+    "Basic support for active tree maintenance",
+    "Recommended for quick care request testing",
+  ];
+}
+
+function getProgramRequirements(product: MarketplaceProduct) {
+  const name = normalize(product.name);
+
+  if (name.includes("premium")) {
+    return [
+      "Premium Fertilizer",
+      "Premium Nutrients",
+      "Fungicide",
+      "Advanced Pest Control",
+      "Tree Health Booster",
+    ];
+  }
+
+  if (name.includes("standard")) {
+    return ["Fertilizer", "Nutrients", "Fungicide", "Pest Control"];
+  }
+
+  return ["Fertilizer", "Nutrients"];
+}
+
+function inventoryNameMatchesRequirement(item: InventoryItem, requirement: string) {
+  const itemName = normalize(item.item_name);
+  const category = normalize(item.category);
+  const target = normalize(requirement);
+
+  if (target === "fertilizer") {
+    return itemName.includes("fertilizer") || category.includes("fertilizer");
+  }
+
+  if (target === "nutrients") {
+    return (
+      itemName.includes("nutrient") ||
+      itemName.includes("booster") ||
+      category.includes("nutrient") ||
+      category.includes("booster")
+    );
+  }
+
+  if (target === "fungicide") {
+    return (
+      itemName.includes("fungicide") ||
+      itemName.includes("anti-fungal") ||
+      itemName.includes("antifungal") ||
+      category.includes("fungicide") ||
+      category.includes("fungal")
+    );
+  }
+
+  if (target === "pest control") {
+    return (
+      itemName.includes("pest") ||
+      itemName.includes("insecticide") ||
+      category.includes("pest") ||
+      category.includes("insecticide")
+    );
+  }
+
+  if (target === "premium fertilizer") {
+    return itemName.includes("premium") && itemName.includes("fertilizer");
+  }
+
+  if (target === "premium nutrients") {
+    return (
+      itemName.includes("premium") &&
+      (itemName.includes("nutrient") || itemName.includes("booster"))
+    );
+  }
+
+  if (target === "advanced pest control") {
+    return (
+      itemName.includes("advanced pest") ||
+      itemName.includes("tree shield") ||
+      itemName.includes("pest control") ||
+      itemName.includes("insecticide")
+    );
+  }
+
+  if (target === "tree health booster") {
+    return itemName.includes("tree health booster") || itemName.includes("health booster");
+  }
+
+  return itemName.includes(target) || category.includes(target);
+}
+
+function checkProgramInventory(product: MarketplaceProduct, inventoryItems: InventoryItem[]) {
+  const requirements = getProgramRequirements(product);
+
+  const missingSupplies = requirements.filter((requirement) => {
+    const totalAvailable = inventoryItems.reduce((sum, item) => {
+      const isAvailable = normalize(item.status || "AVAILABLE") !== "used";
+      const matches = inventoryNameMatchesRequirement(item, requirement);
+
+      if (!isAvailable || !matches) return sum;
+
+      return sum + Number(item.remaining_qty || 0);
+    }, 0);
+
+    return totalAvailable <= 0;
+  });
+
+  return {
+    allowed: missingSupplies.length === 0,
+    missingSupplies,
+    requirements,
+  };
 }
 
 export default function MarketplacePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [products, setProducts] = useState<MarketplaceProduct[]>([]);
-  const [inventoryQty, setInventoryQty] = useState(0);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [activeTab, setActiveTab] = useState<ProductType>("TREE");
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [activeSupplyCategory, setActiveSupplyCategory] =
+    useState<SupplyCategory>("All Supplies");
+  const [selectedProduct, setSelectedProduct] = useState<MarketplaceProduct | null>(null);
+  const [selectedProgramAction, setSelectedProgramAction] = useState<"BUY_ONCE" | "SUBSCRIBE" | null>(null);
+  const [inventoryCheckResult, setInventoryCheckResult] = useState<{
+    allowed: boolean;
+    missingSupplies: string[];
+    requirements: string[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [buying, setBuying] = useState("");
   const [message, setMessage] = useState("");
 
   async function loadMarketplace() {
@@ -139,7 +452,9 @@ export default function MarketplacePage() {
 
     const { data: productRows, error: productError } = await supabase
       .from("marketplace_products")
-      .select("id, product_key, name, price, note, stock_status, icon, category, unit, low_stock_level, product_type, status, created_at")
+      .select(
+        "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at"
+      )
       .eq("status", "ACTIVE")
       .order("created_at", { ascending: true });
 
@@ -151,17 +466,12 @@ export default function MarketplacePage() {
 
     const { data: inventoryRows } = await supabase
       .from("inventory")
-      .select("remaining_qty")
+      .select("id, profile_id, item_name, category, unit, remaining_qty, status")
       .eq("profile_id", currentProfile.id);
-
-    const totalInventory = (inventoryRows || []).reduce(
-      (sum, item: any) => sum + Number(item.remaining_qty || 0),
-      0
-    );
 
     setWallet((walletRows?.[0] as Wallet) || null);
     setProducts((productRows || []) as MarketplaceProduct[]);
-    setInventoryQty(totalInventory);
+    setInventoryItems((inventoryRows || []) as InventoryItem[]);
     setLoading(false);
   }
 
@@ -169,219 +479,64 @@ export default function MarketplacePage() {
     loadMarketplace();
   }, []);
 
-  const filteredProducts = useMemo(() => {
+  const preparedProducts = useMemo(() => {
     return products.filter((product) => {
-      const type = String(product.product_type || "").toUpperCase();
-      return type === activeTab;
+      const type = getProductType(product);
+
+      if (type === "TREE") return isTreeAllowed(product);
+      if (type === "PACKAGE") return isPackageAllowed(product);
+      return type === "SUPPLY";
     });
-  }, [products, activeTab]);
+  }, [products]);
 
   const stats = useMemo(() => {
     return {
-      trees: products.filter((p) => String(p.product_type || "").toUpperCase() === "TREE").length,
-      packages: products.filter((p) => String(p.product_type || "").toUpperCase() === "PACKAGE").length,
-      supplies: products.filter((p) => String(p.product_type || "").toUpperCase() === "SUPPLY").length,
+      trees: preparedProducts.filter((p) => getProductType(p) === "TREE").length,
+      packages: preparedProducts.filter((p) => getProductType(p) === "PACKAGE").length,
+      supplies: preparedProducts.filter((p) => getProductType(p) === "SUPPLY").length,
     };
-  }, [products]);
+  }, [preparedProducts]);
 
-  function getQty(id: string) {
-    return quantities[id] || 1;
-  }
+  const filteredProducts = useMemo(() => {
+    return preparedProducts.filter((product) => {
+      const type = getProductType(product);
 
-  function updateQty(id: string, value: number) {
-    setQuantities((prev) => ({
-      ...prev,
-      [id]: Math.max(1, Number(value || 1)),
-    }));
-  }
+      if (type !== activeTab) return false;
 
-  async function deductWallet(amount: number, transactionType: string, description: string) {
-    if (!profile) throw new Error("Profile not found.");
-    if (!wallet) throw new Error("Wallet not found. Please cash in first.");
+      if (activeTab !== "SUPPLY") return true;
 
-    const currentBalance = Number(wallet.balance || 0);
+      if (activeSupplyCategory === "All Supplies") return true;
 
-    if (currentBalance < amount) {
-      throw new Error(`Insufficient wallet balance. Needed ${peso(amount)}, available ${peso(currentBalance)}.`);
-    }
-
-    const newBalance = currentBalance - amount;
-
-    const { error: walletError } = await supabase
-      .from("wallets")
-      .update({ balance: newBalance })
-      .eq("id", wallet.id);
-
-    if (walletError) throw walletError;
-
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: profile.id,
-      transaction_type: transactionType,
-      amount,
-      status: "COMPLETED",
-      description,
+      return normalizeSupplyCategory(product.category) === activeSupplyCategory;
     });
+  }, [preparedProducts, activeTab, activeSupplyCategory]);
 
-    if (txError) throw txError;
-
-    setWallet((prev) => (prev ? { ...prev, balance: newBalance } : prev));
+  function openProductDetails(product: MarketplaceProduct) {
+    setSelectedProduct(product);
+    setSelectedProgramAction(null);
+    setInventoryCheckResult(null);
   }
 
-  async function addInventoryStock(input: {
-    name: string;
-    category: string;
-    unit: string;
-    qty: number;
-    low_stock_level: number;
-  }) {
-    if (!profile) throw new Error("Profile not found.");
+  function handleProgramAction(
+    product: MarketplaceProduct,
+    action: "BUY_ONCE" | "SUBSCRIBE"
+  ) {
+    const result = checkProgramInventory(product, inventoryItems);
 
-    const { data: existingRows, error: findError } = await supabase
-      .from("inventory")
-      .select("*")
-      .eq("profile_id", profile.id)
-      .eq("item_name", input.name)
-      .eq("category", input.category)
-      .is("tree_id", null)
-      .limit(1);
-
-    if (findError) throw findError;
-
-    const existing = existingRows?.[0];
-
-    if (existing) {
-      const { error } = await supabase
-        .from("inventory")
-        .update({
-          starting_qty: Number(existing.starting_qty || 0) + input.qty,
-          remaining_qty: Number(existing.remaining_qty || 0) + input.qty,
-          status: "AVAILABLE",
-        })
-        .eq("id", existing.id);
-
-      if (error) throw error;
-    } else {
-      const { error } = await supabase.from("inventory").insert({
-        profile_id: profile.id,
-        tree_id: null,
-        item_name: input.name,
-        category: input.category,
-        unit: input.unit,
-        starting_qty: input.qty,
-        remaining_qty: input.qty,
-        low_stock_level: input.low_stock_level,
-        status: "AVAILABLE",
-      });
-
-      if (error) throw error;
-    }
+    setSelectedProduct(product);
+    setSelectedProgramAction(action);
+    setInventoryCheckResult(result);
   }
 
-  async function buySupply(product: MarketplaceProduct) {
-    if (!profile) return;
-
-    const qty = getQty(product.id);
-    const total = Number(product.price || 0) * qty;
-
-    await deductWallet(
-      total,
-      "MARKETPLACE_PURCHASE",
-      `Purchased ${qty} ${product.unit || "unit"} of ${product.name || "Supply"}`
-    );
-
-    await addInventoryStock({
-      name: product.name || "Supply",
-      category: product.category || "Supply",
-      unit: product.unit || "Unit",
-      qty,
-      low_stock_level: Number(product.low_stock_level || 0),
-    });
+  function closeModal() {
+    setSelectedProduct(null);
+    setSelectedProgramAction(null);
+    setInventoryCheckResult(null);
   }
 
-  async function buyTree(product: MarketplaceProduct) {
-    if (!profile) return;
-
-    const price = Number(product.price || 0);
-
-    await deductWallet(
-      price,
-      "TREE_PURCHASE",
-      `Purchased ${product.name || "Agarwood Tree"}`
-    );
-
-    const { error } = await supabase.from("trees").insert({
-      profile_id: profile.id,
-      tree_code: makeTreeCode(),
-      display_name: product.name || "Agarwood Tree",
-      current_stage: "Seedling",
-      estimated_value: Math.round(price * 1.2),
-      purchase_price: price,
-      care_cost: 0,
-      verification_cost: 0,
-      ownership_status: "OWNED",
-      availability_status: "OWNED",
-      tree_group_name: "Ungrouped Trees",
-      package_name: null,
-    });
-
-    if (error) throw error;
-  }
-
-  async function buyPackage(product: MarketplaceProduct) {
-    if (!profile) return;
-
-    const price = Number(product.price || 0);
-    const treeCount = packageTreeCount(product);
-    const perTreePrice = treeCount > 0 ? price / treeCount : price;
-
-    await deductWallet(
-      price,
-      "PACKAGE_PURCHASE",
-      `Purchased ${product.name || "Agarwood Package"}`
-    );
-
-    const treeRows = Array.from({ length: treeCount }).map((_, index) => ({
-      profile_id: profile.id,
-      tree_code: makeTreeCode(),
-      display_name: `${product.name || "Package"} Tree ${index + 1}`,
-      current_stage: "Seedling",
-      estimated_value: Math.round(perTreePrice * 1.2),
-      purchase_price: perTreePrice,
-      care_cost: 0,
-      verification_cost: 0,
-      ownership_status: "OWNED",
-      availability_status: "OWNED",
-      tree_group_name: product.name || "Package",
-      package_name: product.name || "Package",
-    }));
-
-    const { error: treeError } = await supabase.from("trees").insert(treeRows);
-    if (treeError) throw treeError;
-
-    for (const supply of packageSupplyBundle(product)) {
-      await addInventoryStock(supply);
-    }
-  }
-
-  async function handleBuy(product: MarketplaceProduct) {
-    setBuying(product.id);
-    setMessage("");
-
-    try {
-      const type = String(product.product_type || "").toUpperCase();
-
-      if (type === "TREE") await buyTree(product);
-      if (type === "PACKAGE") await buyPackage(product);
-      if (type === "SUPPLY") await buySupply(product);
-
-      setMessage(`${product.name || "Product"} purchased successfully.`);
-      await loadMarketplace();
-    } catch (error: any) {
-      setMessage(error?.message || "Purchase failed.");
-    } finally {
-      setBuying("");
-    }
-  }
+  const selectedCategory = selectedProduct
+    ? normalizeSupplyCategory(selectedProduct.category)
+    : "All Supplies";
 
   return (
     <main className="page">
@@ -390,95 +545,358 @@ export default function MarketplacePage() {
           <Link href="/dashboard" className="back">
             ← Back to Dashboard
           </Link>
-          <p className="eyebrow">Agarwood Marketplace</p>
-          <h1>Marketplace</h1>
+
+          <p className="eyebrow">Agarwood Marketplace V5</p>
+          <h1>Buy Trees, Packages & Supplies</h1>
           <span>
-            Buy trees, packages, and supplies. Purchases update your wallet,
-            inventory, My Trees, and investment records.
+            Choose agarwood planting products, package bundles, and care supplies.
+            Step 1 is UI-only: purchase, wallet deduction, inventory checking, and
+            subscription automation will be connected in the next steps.
           </span>
         </div>
 
         <div className="walletCard">
           <p>Wallet Balance</p>
           <strong>{peso(Number(wallet?.balance || 0))}</strong>
-          <small>Inventory Qty: {inventoryQty.toLocaleString("en-PH")}</small>
+          <small>{profile?.full_name || profile?.email || "Customer Account"}</small>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       <section className="tabs">
-        <button className={activeTab === "TREE" ? "active" : ""} onClick={() => setActiveTab("TREE")}>
-          🌳 Buy Trees <span>{stats.trees}</span>
+        <button
+          className={activeTab === "TREE" ? "active" : ""}
+          onClick={() => setActiveTab("TREE")}
+        >
+          <span className="tabIcon">🌳</span>
+          <span>
+            Buy Trees
+            <small>{stats.trees} items</small>
+          </span>
         </button>
-        <button className={activeTab === "PACKAGE" ? "active" : ""} onClick={() => setActiveTab("PACKAGE")}>
-          📦 Buy Packages <span>{stats.packages}</span>
+
+        <button
+          className={activeTab === "PACKAGE" ? "active" : ""}
+          onClick={() => setActiveTab("PACKAGE")}
+        >
+          <span className="tabIcon">📦</span>
+          <span>
+            Buy Packages
+            <small>{stats.packages} items</small>
+          </span>
         </button>
-        <button className={activeTab === "SUPPLY" ? "active" : ""} onClick={() => setActiveTab("SUPPLY")}>
-          🌱 Buy Supplies <span>{stats.supplies}</span>
+
+        <button
+          className={activeTab === "SUPPLY" ? "active" : ""}
+          onClick={() => setActiveTab("SUPPLY")}
+        >
+          <span className="tabIcon">🌱</span>
+          <span>
+            Buy Supplies
+            <small>{stats.supplies} items</small>
+          </span>
         </button>
       </section>
 
       {loading ? (
         <div className="empty">Loading marketplace...</div>
-      ) : filteredProducts.length === 0 ? (
-        <div className="empty">No {activeTab.toLowerCase()} products found.</div>
       ) : (
-        <section className="grid">
-          {filteredProducts.map((product) => {
-            const type = String(product.product_type || "").toUpperCase();
-            const qty = getQty(product.id);
-            const total = type === "SUPPLY" ? Number(product.price || 0) * qty : Number(product.price || 0);
-            const isBuying = buying === product.id;
+        <section className={activeTab === "SUPPLY" ? "content suppliesMode" : "content"}>
+          {activeTab === "SUPPLY" && (
+            <aside className="sidebar">
+              <div className="sidebarTitle">
+                <b>Supply Categories</b>
+                <small>Filter by care type</small>
+              </div>
 
-            return (
-              <article className="card" key={product.id}>
-                <div className="icon">{product.icon || (type === "TREE" ? "🌳" : type === "PACKAGE" ? "📦" : "🌱")}</div>
+              <div className="categoryList">
+                {SUPPLY_CATEGORIES.map((category) => (
+                  <button
+                    key={category}
+                    className={activeSupplyCategory === category ? "active" : ""}
+                    onClick={() => setActiveSupplyCategory(category)}
+                  >
+                    {category === "All Supplies" && "🌱"}
+                    {category === "Fertilizers" && "🧪"}
+                    {category === "Nutrients & Boosters" && "⚡"}
+                    {category === "Fungicides" && "🛡️"}
+                    {category === "Pest Control" && "🐞"}
+                    {category === "Soil Products" && "🪴"}
+                    {category === "Tree Health" && "💚"}
+                    {category === "Tree Care Programs" && "🌿"}
+                    <span>{category}</span>
+                  </button>
+                ))}
+              </div>
+            </aside>
+          )}
 
-                <div className="cardHead">
-                  <span>{type}</span>
-                  <small>{product.stock_status || "AVAILABLE"}</small>
-                </div>
+          <div className="productArea">
+            <div className="sectionHead">
+              <div>
+                <p className="eyebrow small">
+                  {activeTab === "TREE" && "Single planting items"}
+                  {activeTab === "PACKAGE" && "Bulk planting bundles"}
+                  {activeTab === "SUPPLY" && activeSupplyCategory}
+                </p>
+                <h2>
+                  {activeTab === "TREE" && "Available Trees"}
+                  {activeTab === "PACKAGE" && "Available Packages"}
+                  {activeTab === "SUPPLY" && "Available Supplies"}
+                </h2>
+              </div>
 
-                <h3>{product.name || "Product"}</h3>
-                <p>{product.note || "Marketplace product"}</p>
-                <b>{peso(Number(product.price || 0))}</b>
+              <div className="modeNote">
+                {activeTab === "TREE" && "Only Seed, Seedling, and Young Seedling."}
+                {activeTab === "PACKAGE" && "Bulk quantities are separated here."}
+                {activeTab === "SUPPLY" && "Supplies are grouped by sidebar category."}
+              </div>
+            </div>
 
-                <div className="meta">
-                  <small>{product.category || type}</small>
-                  <small>{product.unit || "Unit"}</small>
-                </div>
+            {filteredProducts.length === 0 ? (
+              <div className="empty">No products found for this section.</div>
+            ) : (
+              <div className="grid">
+                {filteredProducts.map((product) => {
+                  const type = getProductType(product);
+                  const category = normalizeSupplyCategory(product.category);
+                  const isProgram = category === "Tree Care Programs";
 
-                {type === "SUPPLY" && (
-                  <div className="qty">
-                    <button onClick={() => updateQty(product.id, qty - 1)}>-</button>
-                    <input
-                      type="number"
-                      value={qty}
-                      onChange={(event) => updateQty(product.id, Number(event.target.value))}
-                    />
-                    <button onClick={() => updateQty(product.id, qty + 1)}>+</button>
-                  </div>
-                )}
+                  return (
+                    <article className={isProgram ? "card programCard" : "card"} key={product.id}>
+                      <div className="imageBox">
+                        {product.image_url ? (
+                          <img
+                            src={product.image_url}
+                            alt={product.name || "Marketplace product"}
+                          />
+                        ) : (
+                          <div className="icon">{getProductIcon(product)}</div>
+                        )}
+                        <span>{product.stock_status || "AVAILABLE"}</span>
+                      </div>
 
-                {type === "PACKAGE" && (
-                  <div className="packageInfo">
-                    <strong>{packageTreeCount(product)} Trees Included</strong>
-                    <span>Starter supplies will be added to Inventory.</span>
-                  </div>
-                )}
+                      <div className="cardHead">
+                        <small>{type}</small>
+                        <small>{product.unit || (isProgram ? "Program" : "Unit")}</small>
+                      </div>
 
-                <button className="buy" disabled={isBuying} onClick={() => handleBuy(product)}>
-                  {isBuying ? "Processing..." : `Buy ${peso(total)}`}
-                </button>
-              </article>
-            );
-          })}
+                      <h3>{product.name || "Marketplace Product"}</h3>
+
+                      <p>{product.note || "Premium agarwood marketplace item."}</p>
+
+                      <div className="priceRow">
+                        <b>{peso(Number(product.price || 0))}</b>
+                        <small>{product.category || type}</small>
+                      </div>
+
+                      {isProgram && (
+                        <div className="programActions">
+                          <button
+                            type="button"
+                            onClick={() => handleProgramAction(product, "BUY_ONCE")}
+                          >
+                            Buy Once
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleProgramAction(product, "SUBSCRIBE")}
+                          >
+                            {getProgramSubscribeLabel(product)}
+                          </button>
+                        </div>
+                      )}
+
+                      <button
+                        className="viewBtn"
+                        onClick={() => openProductDetails(product)}
+                      >
+                        {getPrimaryActionLabel(product)}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </section>
       )}
 
+      {selectedProduct && (
+        <div className="modalOverlay" onClick={closeModal}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <button className="closeBtn" onClick={closeModal}>
+              ×
+            </button>
+
+            <div className="modalIcon">
+              {selectedProduct.image_url ? (
+                <img
+                  src={selectedProduct.image_url}
+                  alt={selectedProduct.name || "Marketplace product"}
+                />
+              ) : (
+                getProductIcon(selectedProduct)
+              )}
+            </div>
+
+            <p className="eyebrow">Product Details</p>
+            <h2>{selectedProduct.name || "Marketplace Product"}</h2>
+
+            <div className="modalPrice">{peso(Number(selectedProduct.price || 0))}</div>
+
+            <p className="modalNote">
+              {selectedProduct.note || "No additional product description available."}
+            </p>
+
+            <div className="detailGrid">
+              <div>
+                <small>Type</small>
+                <b>{getProductType(selectedProduct)}</b>
+              </div>
+              <div>
+                <small>Category</small>
+                <b>{selectedProduct.category || selectedCategory}</b>
+              </div>
+              <div>
+                <small>Unit</small>
+                <b>{selectedProduct.unit || "Unit"}</b>
+              </div>
+              <div>
+                <small>Status</small>
+                <b>{selectedProduct.stock_status || "AVAILABLE"}</b>
+              </div>
+            </div>
+
+            {selectedCategory === "Tree Care Programs" && (
+              <>
+                {selectedProgramAction && inventoryCheckResult && (
+                  <div
+                    className={
+                      inventoryCheckResult.allowed
+                        ? "selectedActionBox allowedBox"
+                        : "selectedActionBox blockedBox"
+                    }
+                  >
+                    <small>
+                      {inventoryCheckResult.allowed
+                        ? "Inventory Check Passed"
+                        : "Inventory Check Blocked"}
+                    </small>
+                    <b>
+                      {selectedProgramAction === "BUY_ONCE"
+                        ? "Buy Once"
+                        : getProgramSubscribeLabel(selectedProduct)}
+                    </b>
+                    <p>
+                      {inventoryCheckResult.allowed
+                        ? "Required supplies are available. This UI flow can continue, but backend purchase and subscription saving are still disabled for Step 4."
+                        : "This care program cannot continue yet because required inventory supplies are missing or out of stock."}
+                    </p>
+
+                    {!inventoryCheckResult.allowed && (
+                      <div className="missingBox">
+                        <strong>Missing Supplies</strong>
+                        <ul>
+                          {inventoryCheckResult.missingSupplies.map((supply) => (
+                            <li key={supply}>{supply}</li>
+                          ))}
+                        </ul>
+
+                        <Link
+                          href="/dashboard/marketplace"
+                          className="buyMissingBtn"
+                          onClick={() => {
+                            setActiveTab("SUPPLY");
+                            setActiveSupplyCategory("All Supplies");
+                            closeModal();
+                          }}
+                        >
+                          Buy Missing Supplies
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="programModalGrid">
+                  <section className="programInfoBox requirementsBox">
+                    <b>Required Inventory</b>
+                    <ul>
+                      {getProgramRequirements(selectedProduct).map((requirement) => (
+                        <li key={requirement}>{requirement}</li>
+                      ))}
+                    </ul>
+                  </section>
+
+                  <section className="programInfoBox">
+                    <b>Program Benefits</b>
+                    <ul>
+                      {getProgramBenefits(selectedProduct).map((benefit) => (
+                        <li key={benefit}>{benefit}</li>
+                      ))}
+                    </ul>
+                  </section>
+
+                  <section className="programInfoBox">
+                    <b>Program Coverage</b>
+                    <ul>
+                      {getProgramCoverage(selectedProduct).map((coverage) => (
+                        <li key={coverage}>{coverage}</li>
+                      ))}
+                    </ul>
+                  </section>
+
+                  <section className="programInfoBox durationBox">
+                    <b>Program Duration</b>
+                    <strong>{getProgramDuration(selectedProduct)}</strong>
+                    <p>
+                      Buy Once is a one-time care request preview. Subscribe is
+                      a recurring care preview only and will connect to
+                      auto-renew logic in a later step.
+                    </p>
+                  </section>
+                </div>
+
+                <div className="careBox">
+                  <b>Care Program Actions</b>
+                  <p>
+                    These buttons run inventory validation only. If supplies are
+                    missing, the UI blocks the flow and shows what the customer
+                    needs to buy first. No backend purchase, subscription, wallet,
+                    or auto-renew action is created yet.
+                  </p>
+
+                  <div className="careButtons">
+                    <button
+                      type="button"
+                      onClick={() => handleProgramAction(selectedProduct, "BUY_ONCE")}
+                    >
+                      Buy Once
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleProgramAction(selectedProduct, "SUBSCRIBE")}
+                    >
+                      {getProgramSubscribeLabel(selectedProduct)}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <button className="disabledBuy" disabled>
+              Backend action disabled for Step 3 UI only
+            </button>
+          </div>
+        </div>
+      )}
+
       <style>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         .page {
           min-height: 100vh;
@@ -516,6 +934,11 @@ export default function MarketplacePage() {
           font-size: 12px;
         }
 
+        .eyebrow.small {
+          margin-bottom: 4px;
+          font-size: 11px;
+        }
+
         h1 {
           margin: 0;
           font-size: 44px;
@@ -527,8 +950,9 @@ export default function MarketplacePage() {
           display: block;
           margin-top: 8px;
           color: #5f665e;
-          max-width: 820px;
+          max-width: 860px;
           line-height: 1.6;
+          font-weight: 700;
         }
 
         .walletCard {
@@ -565,7 +989,9 @@ export default function MarketplacePage() {
         .message,
         .empty,
         .tabs,
-        .card {
+        .sidebar,
+        .card,
+        .sectionHead {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
@@ -598,20 +1024,120 @@ export default function MarketplacePage() {
           cursor: pointer;
           display: flex;
           justify-content: center;
-          gap: 10px;
+          gap: 12px;
           align-items: center;
+          text-align: left;
         }
 
         .tabs button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
+          background:
+            radial-gradient(circle at 80% 15%, rgba(255, 222, 139, .28), transparent 36%),
+            linear-gradient(135deg, #244536, #10281f);
           color: white;
         }
 
-        .tabs span {
-          border-radius: 999px;
-          padding: 4px 8px;
-          background: rgba(255,255,255,.22);
+        .tabIcon {
+          font-size: 26px;
+        }
+
+        .tabs button span:last-child {
+          display: grid;
+          gap: 3px;
+        }
+
+        .tabs small {
+          color: inherit;
+          opacity: .68;
           font-size: 12px;
+        }
+
+        .content {
+          display: block;
+        }
+
+        .content.suppliesMode {
+          display: grid;
+          grid-template-columns: 280px 1fr;
+          gap: 16px;
+          align-items: start;
+        }
+
+        .sidebar {
+          padding: 16px;
+          position: sticky;
+          top: 18px;
+        }
+
+        .sidebarTitle {
+          padding: 8px 8px 14px;
+        }
+
+        .sidebarTitle b {
+          display: block;
+          font-size: 18px;
+          color: #10281f;
+        }
+
+        .sidebarTitle small {
+          display: block;
+          margin-top: 4px;
+          color: #7a7568;
+          font-weight: 800;
+        }
+
+        .categoryList {
+          display: grid;
+          gap: 8px;
+        }
+
+        .categoryList button {
+          border: 0;
+          border-radius: 16px;
+          padding: 13px 12px;
+          background: #f3ead8;
+          color: #244536;
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          cursor: pointer;
+          font-weight: 900;
+          text-align: left;
+        }
+
+        .categoryList button.active {
+          background: #244536;
+          color: white;
+          box-shadow: 0 16px 30px rgba(36,69,54,.18);
+        }
+
+        .productArea {
+          min-width: 0;
+        }
+
+        .sectionHead {
+          padding: 18px;
+          margin-bottom: 16px;
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: center;
+        }
+
+        .sectionHead h2 {
+          margin: 0;
+          font-size: 28px;
+          color: #101a14;
+        }
+
+        .modeNote {
+          border-radius: 999px;
+          padding: 10px 14px;
+          background: #f3ead8;
+          color: #6b5635;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
         }
 
         .grid {
@@ -621,17 +1147,58 @@ export default function MarketplacePage() {
         }
 
         .card {
-          padding: 22px;
+          padding: 18px;
+          transition: transform .18s ease, box-shadow .18s ease;
         }
 
-        .icon {
-          height: 120px;
+        .card:hover {
+          transform: translateY(-3px);
+          box-shadow: 0 24px 56px rgba(82,60,27,.13);
+        }
+
+        .programCard {
+          border-color: rgba(179, 129, 35, .24);
+          background:
+            radial-gradient(circle at 92% 8%, rgba(255, 221, 143, .38), transparent 30%),
+            rgba(255,253,246,.92);
+        }
+
+        .imageBox {
+          position: relative;
+          height: 128px;
           border-radius: 24px;
           display: grid;
           place-items: center;
-          font-size: 58px;
-          background: #f3ead8;
+          background:
+            radial-gradient(circle at 50% 28%, rgba(255,255,255,.64), transparent 34%),
+            linear-gradient(135deg, #eee2c9, #f8f1df);
           margin-bottom: 16px;
+          overflow: hidden;
+        }
+
+        .imageBox img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .imageBox span {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          border-radius: 999px;
+          padding: 7px 10px;
+          background: rgba(36,69,54,.12);
+          color: #244536;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .08em;
+        }
+
+        .icon {
+          font-size: 58px;
+          filter: drop-shadow(0 10px 16px rgba(58,42,18,.18));
         }
 
         .cardHead {
@@ -642,9 +1209,8 @@ export default function MarketplacePage() {
           margin-bottom: 12px;
         }
 
-        .cardHead span,
         .cardHead small,
-        .meta small {
+        .priceRow small {
           border-radius: 999px;
           padding: 7px 10px;
           background: rgba(49,85,61,.10);
@@ -657,97 +1223,385 @@ export default function MarketplacePage() {
 
         .card h3 {
           margin: 0;
-          font-size: 22px;
+          font-size: 21px;
           color: #101a14;
+          line-height: 1.2;
         }
 
         .card p {
+          min-height: 72px;
           color: #6b6b62;
           line-height: 1.5;
           font-weight: 800;
         }
 
-        .card b {
-          display: block;
+        .priceRow {
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          align-items: center;
+          margin: 12px 0 14px;
+        }
+
+        .priceRow b {
           color: #244536;
           font-size: 24px;
-          margin: 12px 0;
         }
 
-        .meta {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin-bottom: 14px;
-        }
-
-        .qty {
+        .programActions {
           display: grid;
-          grid-template-columns: 44px 1fr 44px;
+          grid-template-columns: 1fr 1fr;
           gap: 8px;
-          margin: 16px 0;
+          margin-bottom: 12px;
         }
 
-        .qty button,
-        .buy {
+        .programActions button {
           border: 0;
           border-radius: 14px;
+          padding: 10px;
+          background: #f3ead8;
+          color: #244536;
+          font-size: 12px;
+          font-weight: 900;
+          text-align: center;
+          cursor: pointer;
+        }
+
+        .programActions button:hover {
+          background: #244536;
+          color: white;
+        }
+
+        .viewBtn,
+        .disabledBuy,
+        .careButtons button {
+          width: 100%;
+          border: 0;
+          border-radius: 16px;
+          padding: 14px;
           background: #244536;
           color: white;
           font-weight: 900;
           cursor: pointer;
         }
 
-        .qty input {
-          width: 100%;
-          border: 1px solid rgba(92,70,35,.12);
-          border-radius: 14px;
-          padding: 12px;
-          text-align: center;
+        .modalOverlay {
+          position: fixed;
+          inset: 0;
+          z-index: 50;
+          display: grid;
+          place-items: center;
+          padding: 20px;
+          background: rgba(10, 18, 13, .54);
+          backdrop-filter: blur(8px);
+        }
+
+        .modal {
+          position: relative;
+          width: min(680px, 100%);
+          max-height: 92vh;
+          overflow: auto;
+          border-radius: 32px;
+          padding: 26px;
+          background:
+            radial-gradient(circle at 92% 8%, rgba(255, 222, 139, .38), transparent 28%),
+            #fffdf6;
+          box-shadow: 0 28px 80px rgba(0,0,0,.28);
+          border: 1px solid rgba(92,70,35,.10);
+        }
+
+        .closeBtn {
+          position: absolute;
+          top: 16px;
+          right: 16px;
+          width: 42px;
+          height: 42px;
+          border-radius: 999px;
+          border: 0;
+          background: #f3ead8;
+          color: #244536;
+          font-size: 26px;
+          cursor: pointer;
           font-weight: 900;
         }
 
-        .packageInfo {
-          border-radius: 18px;
-          padding: 14px;
+        .modalIcon {
+          width: 96px;
+          height: 96px;
+          border-radius: 28px;
+          display: grid;
+          place-items: center;
           background: #f3ead8;
-          margin: 14px 0;
+          font-size: 48px;
+          margin-bottom: 16px;
+          overflow: hidden;
         }
 
-        .packageInfo strong {
+        .modalIcon img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
           display: block;
+        }
+
+        .modal h2 {
+          margin: 0;
+          font-size: 34px;
           color: #101a14;
         }
 
-        .packageInfo span {
-          display: block;
-          margin-top: 6px;
-          color: #6b6b62;
-          font-size: 13px;
+        .modalPrice {
+          margin: 12px 0;
+          color: #244536;
+          font-size: 32px;
+          font-weight: 900;
+        }
+
+        .modalNote {
+          color: #666257;
+          line-height: 1.6;
           font-weight: 800;
         }
 
-        .buy {
-          width: 100%;
-          padding: 14px;
-          margin-top: 10px;
+        .detailGrid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+          margin: 18px 0;
         }
 
-        .buy:disabled {
-          opacity: .55;
+        .detailGrid div {
+          border-radius: 18px;
+          padding: 14px;
+          background: #f3ead8;
+        }
+
+        .detailGrid small {
+          display: block;
+          color: #8c6a3c;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+          margin-bottom: 5px;
+        }
+
+        .detailGrid b {
+          color: #10281f;
+        }
+
+        .selectedActionBox {
+          border-radius: 22px;
+          padding: 16px;
+          background:
+            radial-gradient(circle at 88% 12%, rgba(255, 222, 139, .42), transparent 32%),
+            linear-gradient(135deg, rgba(36,69,54,.12), rgba(36,69,54,.04));
+          border: 1px solid rgba(36,69,54,.12);
+          margin-bottom: 16px;
+        }
+
+        .selectedActionBox small {
+          display: block;
+          color: #8c6a3c;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .10em;
+          margin-bottom: 6px;
+        }
+
+        .selectedActionBox b {
+          display: block;
+          color: #10281f;
+          font-size: 22px;
+        }
+
+        .allowedBox {
+          border-color: rgba(49, 125, 72, .24);
+          background:
+            radial-gradient(circle at 88% 12%, rgba(176, 229, 188, .42), transparent 32%),
+            linear-gradient(135deg, rgba(49,125,72,.14), rgba(49,125,72,.05));
+        }
+
+        .blockedBox {
+          border-color: rgba(160, 72, 48, .24);
+          background:
+            radial-gradient(circle at 88% 12%, rgba(255, 205, 172, .42), transparent 32%),
+            linear-gradient(135deg, rgba(160,72,48,.14), rgba(160,72,48,.05));
+        }
+
+        .selectedActionBox p {
+          margin: 8px 0 0;
+          color: #5f665e;
+          font-weight: 800;
+          line-height: 1.5;
+        }
+
+        .programModalGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          margin: 18px 0;
+        }
+
+        .programInfoBox {
+          border-radius: 22px;
+          padding: 16px;
+          background: #f3ead8;
+        }
+
+        .programInfoBox b {
+          display: block;
+          color: #10281f;
+          margin-bottom: 10px;
+        }
+
+        .programInfoBox ul {
+          margin: 0;
+          padding-left: 18px;
+          color: #5f665e;
+          font-weight: 800;
+          line-height: 1.7;
+        }
+
+        .programInfoBox li {
+          margin-bottom: 4px;
+        }
+
+        .requirementsBox {
+          border: 1px solid rgba(36,69,54,.12);
+          background:
+            radial-gradient(circle at 92% 8%, rgba(255,255,255,.64), transparent 26%),
+            #eef2df;
+        }
+
+        .missingBox {
+          margin-top: 14px;
+          border-radius: 18px;
+          padding: 14px;
+          background: rgba(255,253,246,.76);
+          border: 1px solid rgba(160,72,48,.18);
+        }
+
+        .missingBox strong {
+          color: #6f2f1f;
+        }
+
+        .missingBox ul {
+          margin: 10px 0 14px;
+          padding-left: 18px;
+          color: #6f2f1f;
+          font-weight: 900;
+          line-height: 1.6;
+        }
+
+        .buyMissingBtn {
+          display: inline-flex;
+          justify-content: center;
+          align-items: center;
+          width: 100%;
+          border-radius: 14px;
+          padding: 12px;
+          background: #244536;
+          color: white;
+          text-decoration: none;
+          font-weight: 900;
+        }
+
+        .durationBox {
+          grid-column: 1 / -1;
+          background:
+            radial-gradient(circle at 92% 10%, rgba(255,255,255,.62), transparent 26%),
+            linear-gradient(135deg, #244536, #10281f);
+          color: white;
+        }
+
+        .durationBox b,
+        .durationBox strong,
+        .durationBox p {
+          color: white;
+        }
+
+        .durationBox strong {
+          display: block;
+          font-size: 26px;
+          margin-bottom: 8px;
+        }
+
+        .durationBox p {
+          margin: 0;
+          opacity: .82;
+          font-weight: 800;
+          line-height: 1.5;
+        }
+
+        .careBox {
+          border-radius: 22px;
+          padding: 16px;
+          background: rgba(36,69,54,.08);
+          margin-bottom: 16px;
+        }
+
+        .careBox b {
+          color: #10281f;
+        }
+
+        .careBox p {
+          color: #5f665e;
+          font-weight: 800;
+          line-height: 1.5;
+        }
+
+        .careButtons {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .careButtons button,
+        .disabledBuy:disabled {
+          opacity: .6;
           cursor: not-allowed;
         }
 
-        @media (max-width: 980px) {
+        @media (max-width: 1120px) {
+          .grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 880px) {
+          .page {
+            padding: 18px;
+          }
+
           .hero,
           .tabs,
-          .grid {
+          .content.suppliesMode,
+          .sectionHead,
+          .grid,
+          .detailGrid,
+          .programModalGrid,
+          .careButtons,
+          .programActions {
             display: grid;
             grid-template-columns: 1fr;
           }
 
+          h1 {
+            font-size: 34px;
+          }
+
           .walletCard {
             min-width: 0;
+          }
+
+          .sidebar {
+            position: static;
+          }
+
+          .sectionHead {
+            align-items: start;
           }
         }
       `}</style>

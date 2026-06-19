@@ -18,22 +18,12 @@ type Profile = {
   gps_alerts: boolean | null;
 };
 
-type Wallet = {
-  id: string;
-  profile_id: string;
-  balance: number | null;
-};
-
-const MEMBERSHIP_FEE = 999;
-
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [wallet, setWallet] = useState<Wallet | null>(null);
 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
 
-  const [autoRenew, setAutoRenew] = useState(false);
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [smsAlerts, setSmsAlerts] = useState(false);
   const [taskAlerts, setTaskAlerts] = useState(true);
@@ -45,10 +35,8 @@ export default function SettingsPage() {
 
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
-  const [savingRenew, setSavingRenew] = useState(false);
   const [savingAlerts, setSavingAlerts] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
-  const [processingRenewal, setProcessingRenewal] = useState(false);
   const [notice, setNotice] = useState("");
 
   async function loadSettings() {
@@ -97,24 +85,13 @@ export default function SettingsPage() {
       return;
     }
 
-    const { data: walletRows } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
     setProfile(currentProfile);
-    setWallet(walletRows?.[0] || null);
-
     setFullName(currentProfile.full_name || "");
     setPhone(currentProfile.phone || "");
-    setAutoRenew(Boolean(currentProfile.auto_renew));
     setEmailAlerts(currentProfile.email_alerts ?? true);
     setSmsAlerts(currentProfile.sms_alerts ?? false);
     setTaskAlerts(currentProfile.task_alerts ?? true);
     setGpsAlerts(currentProfile.gps_alerts ?? true);
-
     setLoading(false);
   }
 
@@ -122,7 +99,7 @@ export default function SettingsPage() {
     loadSettings();
   }, []);
 
-  const walletBalance = useMemo(() => Number(wallet?.balance || 0), [wallet]);
+  const autoRenewEnabled = Boolean(profile?.auto_renew);
 
   const membershipExpiryLabel = useMemo(() => {
     if (!profile?.membership_expiry) return "Not set";
@@ -157,30 +134,6 @@ export default function SettingsPage() {
     setNotice("Account details saved successfully.");
     await loadSettings();
     setSavingProfile(false);
-  }
-
-  async function saveAutoRenew(nextValue: boolean) {
-    if (!profile || savingRenew) return;
-
-    setSavingRenew(true);
-    setNotice("");
-    setAutoRenew(nextValue);
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({ auto_renew: nextValue })
-      .eq("id", profile.id);
-
-    if (error) {
-      setNotice(error.message);
-      setAutoRenew(!nextValue);
-      setSavingRenew(false);
-      return;
-    }
-
-    setNotice(nextValue ? "Auto Renew enabled. Renewal will use wallet balance." : "Auto Renew disabled.");
-    await loadSettings();
-    setSavingRenew(false);
   }
 
   async function saveNotifications() {
@@ -249,67 +202,6 @@ export default function SettingsPage() {
     setChangingPassword(false);
   }
 
-  async function renewMembershipNow() {
-    if (!profile || !wallet || processingRenewal) return;
-
-    setProcessingRenewal(true);
-    setNotice("");
-
-    if (walletBalance < MEMBERSHIP_FEE) {
-      setNotice("Renewal failed. Your wallet balance is not enough for ₱999 membership renewal.");
-      setProcessingRenewal(false);
-      return;
-    }
-
-    const nextExpiry = getNextMembershipExpiry(profile.membership_expiry);
-
-    const { error: walletError } = await supabase
-      .from("wallets")
-      .update({ balance: walletBalance - MEMBERSHIP_FEE })
-      .eq("id", wallet.id);
-
-    if (walletError) {
-      setNotice(walletError.message);
-      setProcessingRenewal(false);
-      return;
-    }
-
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: profile.id,
-      wallet_id: wallet.id,
-      transaction_type: "MEMBERSHIP_RENEWAL",
-      amount: MEMBERSHIP_FEE,
-      status: "COMPLETED",
-      reference_no: `RENEW-${Date.now()}`,
-      description: "Annual membership renewal deducted from wallet",
-    });
-
-    if (txError) {
-      setNotice(txError.message);
-      setProcessingRenewal(false);
-      return;
-    }
-
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
-        membership_status: "ACTIVE",
-        membership_expiry: nextExpiry,
-        auto_renew: true,
-      })
-      .eq("id", profile.id);
-
-    if (profileError) {
-      setNotice(profileError.message);
-      setProcessingRenewal(false);
-      return;
-    }
-
-    setNotice("Membership renewed successfully. ₱999 was deducted from your wallet.");
-    await loadSettings();
-    setProcessingRenewal(false);
-  }
-
   return (
     <main className="page">
       <section className="hero">
@@ -317,13 +209,14 @@ export default function SettingsPage() {
           <p className="eyebrow">Customer Settings</p>
           <h1>Settings</h1>
           <span>
-            Manage your account, wallet auto-renewal, security, and notification preferences.
+            Manage your account, view actual auto renew status, and review which customer modules
+            already read the same Supabase setting. Display only. No billing or renewal processing here.
           </span>
         </div>
 
         <div className="heroActions">
           <button onClick={loadSettings}>Refresh</button>
-          <Link href="/dashboard/wallet">Wallet</Link>
+          <Link href="/dashboard/marketplace">Marketplace</Link>
           <Link href="/dashboard">Dashboard</Link>
         </div>
       </section>
@@ -363,56 +256,48 @@ export default function SettingsPage() {
             </button>
           </div>
 
-          <div className="panel membershipPanel">
+          <div className="panel autoRenewPanel">
             <div className="panelHead">
               <div>
-                <p className="sectionLabel">Membership</p>
-                <h2>Auto Renew</h2>
+                <p className="sectionLabel">Auto Renew</p>
+                <h2>Auto Renew Status</h2>
               </div>
-              <span>{profile?.membership_status || "UNKNOWN"}</span>
+              <span>{autoRenewEnabled ? "ON" : "OFF"}</span>
             </div>
 
-            <div className="balanceCard">
-              <p>Wallet Balance</p>
-              <h3>{peso(walletBalance)}</h3>
-              <small>Membership renewal fee: {peso(MEMBERSHIP_FEE)}</small>
+            <div className={`statusCard ${autoRenewEnabled ? "on" : "off"}`}>
+              <p>Actual Supabase Setting</p>
+              <h3>{autoRenewEnabled ? "ON" : "OFF"}</h3>
+              <small>Read from profiles.auto_renew</small>
             </div>
 
             <div className="infoRows">
               <div>
-                <span>Status</span>
+                <span>Membership Status</span>
                 <strong>{profile?.membership_status || "UNKNOWN"}</strong>
               </div>
               <div>
-                <span>Expiry</span>
+                <span>Membership Expiry</span>
                 <strong>{membershipExpiryLabel}</strong>
               </div>
             </div>
 
-            <div className="toggleRow">
+            <div className="syncBox">
               <div>
-                <strong>Auto Renew from Wallet</strong>
+                <strong>Display Sync Coverage</strong>
                 <p>
-                  When enabled, renewal should deduct membership fee from your wallet balance.
+                  These customer modules should show the same auto renew status. This page only
+                  displays the value and does not trigger payment, renewal, or background jobs.
                 </p>
               </div>
 
-              <button
-                className={`toggle ${autoRenew ? "on" : ""}`}
-                onClick={() => saveAutoRenew(!autoRenew)}
-                disabled={savingRenew}
-              >
-                <span />
-              </button>
+              <div className="syncList">
+                <SyncRow title="Marketplace" active={autoRenewEnabled} />
+                <SyncRow title="Tree Operations" active={autoRenewEnabled} />
+                <SyncRow title="My Trees" active={autoRenewEnabled} />
+                <SyncRow title="Investments" active={autoRenewEnabled} />
+              </div>
             </div>
-
-            <button
-              className="goldButton"
-              onClick={renewMembershipNow}
-              disabled={!wallet || processingRenewal}
-            >
-              {processingRenewal ? "Processing..." : "Renew Now from Wallet"}
-            </button>
           </div>
 
           <div className="panel securityPanel">
@@ -542,7 +427,7 @@ export default function SettingsPage() {
 
         .hero span {
           display: block;
-          max-width: 720px;
+          max-width: 760px;
           margin-top: 8px;
           color: rgba(255, 248, 221, .74);
           line-height: 1.6;
@@ -642,27 +527,16 @@ export default function SettingsPage() {
           cursor: not-allowed;
         }
 
-        .primaryButton,
-        .goldButton {
+        .primaryButton {
           width: 100%;
-          border: 0;
+          border: 1px solid rgba(223, 171, 61, .24);
           border-radius: 17px;
           padding: 15px 16px;
-          font-weight: 1000;
-          cursor: pointer;
-        }
-
-        .primaryButton {
           margin-top: 8px;
           background: rgba(255,255,255,.08);
           color: #ffe49a;
-          border: 1px solid rgba(223, 171, 61, .24);
-        }
-
-        .goldButton {
-          margin-top: 16px;
-          background: linear-gradient(135deg, #e5ad34, #c58b25);
-          color: #06170f;
+          font-weight: 1000;
+          cursor: pointer;
         }
 
         .primaryButton:hover,
@@ -676,28 +550,32 @@ export default function SettingsPage() {
           cursor: not-allowed;
         }
 
-        .balanceCard {
-          border-radius: 22px;
-          padding: 18px;
+        .statusCard {
+          border-radius: 24px;
+          padding: 20px;
           margin-bottom: 16px;
-          background: linear-gradient(135deg, rgba(229, 173, 52, .22), rgba(255,255,255,.06));
           border: 1px solid rgba(223, 171, 61, .22);
+          background: linear-gradient(135deg, rgba(229, 173, 52, .22), rgba(255,255,255,.06));
         }
 
-        .balanceCard p {
+        .statusCard.off {
+          background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.035));
+        }
+
+        .statusCard p {
           margin: 0 0 8px;
           color: rgba(255, 248, 221, .70);
           font-weight: 900;
         }
 
-        .balanceCard h3 {
+        .statusCard h3 {
           margin: 0 0 8px;
           color: #ffe49a;
-          font-size: 34px;
+          font-size: 42px;
           letter-spacing: -1px;
         }
 
-        .balanceCard small {
+        .statusCard small {
           color: rgba(255, 248, 221, .64);
           font-weight: 900;
         }
@@ -709,7 +587,9 @@ export default function SettingsPage() {
           margin-bottom: 16px;
         }
 
-        .infoRows div {
+        .infoRows div,
+        .syncBox,
+        .switchRow {
           border-radius: 17px;
           padding: 14px;
           background: rgba(255,255,255,.055);
@@ -724,37 +604,62 @@ export default function SettingsPage() {
           font-weight: 900;
         }
 
-        .infoRows strong {
+        .infoRows strong,
+        .syncBox strong,
+        .switchRow strong {
           color: #fff5c3;
         }
 
-        .toggleRow,
+        .syncBox p,
+        .switchRow p {
+          margin: 7px 0 0;
+          color: rgba(255, 248, 221, .62);
+          line-height: 1.5;
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        .syncList {
+          display: grid;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .syncRow {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-radius: 16px;
+          padding: 13px 14px;
+          background: rgba(255,255,255,.055);
+          border: 1px solid rgba(223, 171, 61, .12);
+        }
+
+        .syncRow strong {
+          color: #fff5c3;
+        }
+
+        .syncRow span {
+          border-radius: 999px;
+          padding: 8px 11px;
+          background: rgba(255,255,255,.08);
+          color: rgba(255,248,221,.72);
+          font-size: 11px;
+          font-weight: 1000;
+        }
+
+        .syncRow span.on {
+          background: rgba(217, 165, 46, .18);
+          color: #ffe49a;
+        }
+
         .switchRow {
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 16px;
-          padding: 16px;
-          border-radius: 18px;
-          background: rgba(255,255,255,.055);
-          border: 1px solid rgba(223, 171, 61, .14);
           margin-bottom: 12px;
-        }
-
-        .toggleRow strong,
-        .switchRow strong {
-          display: block;
-          margin-bottom: 5px;
-          color: #fff5c3;
-        }
-
-        .toggleRow p,
-        .switchRow p {
-          margin: 0;
-          color: rgba(255, 248, 221, .62);
-          line-height: 1.5;
-          font-size: 13px;
-          font-weight: 800;
         }
 
         .toggle {
@@ -811,7 +716,6 @@ export default function SettingsPage() {
             grid-template-columns: 1fr;
           }
 
-          .toggleRow,
           .switchRow {
             align-items: flex-start;
             flex-direction: column;
@@ -819,6 +723,15 @@ export default function SettingsPage() {
         }
       `}</style>
     </main>
+  );
+}
+
+function SyncRow({ title, active }: { title: string; active: boolean }) {
+  return (
+    <div className="syncRow">
+      <strong>{title}</strong>
+      <span className={active ? "on" : ""}>{active ? "SYNCED ON" : "SYNCED OFF"}</span>
+    </div>
   );
 }
 
@@ -845,22 +758,4 @@ function SwitchRow({
       </button>
     </div>
   );
-}
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function getNextMembershipExpiry(currentExpiry: string | null) {
-  const today = new Date();
-  const base =
-    currentExpiry && new Date(currentExpiry).getTime() > today.getTime()
-      ? new Date(currentExpiry)
-      : today;
-
-  base.setFullYear(base.getFullYear() + 1);
-  return base.toISOString();
 }

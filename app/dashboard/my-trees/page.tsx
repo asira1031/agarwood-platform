@@ -197,8 +197,8 @@ export default function MyTreesPage() {
           <p className="eyebrow">Agarwood Portfolio</p>
           <h1>My Trees</h1>
           <span>
-            Search, group, rename, verify QR identity, track spending, and review
-            profit/loss before selling your agarwood trees.
+            Search, group, rename, verify QR identity, track care program sync,
+            spending, and profit/loss before selling your agarwood trees.
           </span>
         </div>
       </section>
@@ -368,6 +368,11 @@ export default function MyTreesPage() {
                   <Mini label="Age" value={getAgeText(selectedTree)} />
                   <Mini label="GPS Status" value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"} />
                   <Mini label="Care Plan" value={selectedTree.care_plan || selectedTree.carePlan || "Not Enrolled"} />
+                  <Mini label="Program Status" value={selectedTree.care_program_status || "NOT_ENROLLED"} />
+                  <Mini label="Coverage" value={selectedTree.care_program_coverage || "No active coverage"} />
+                  <Mini label="Next Renewal" value={formatDate(selectedTree.care_program_next_renewal)} />
+                  <Mini label="Auto Renew" value={selectedTree.auto_renew_enabled ? "ON - Display Only" : "OFF"} />
+                  <Mini label="Program Cost" value={peso(Number(selectedTree.care_program_price || 0))} />
                   <Mini label="Valuation" value={selectedTree.valuation_status || "Awaiting Valuation"} />
                   <Mini label="Availability" value={selectedTree.availability_status || "Owned"} />
                 </section>
@@ -382,7 +387,8 @@ export default function MyTreesPage() {
 
                   <div className="moneyGrid">
                     <Money label="Purchase Price" value={getPurchasePrice(selectedTree)} />
-                    <Money label="Operations / Care Cost" value={getOperationCost(selectedTree)} />
+                    <Money label="Operation Cost" value={getOperationCost(selectedTree)} />
+                    <Money label="Care Program Cost" value={getCareProgramCost(selectedTree)} />
                     <Money label="GPS / Photo Fees" value={getVerificationCost(selectedTree)} />
                     <Money label="Total Spent" value={selectedMath.totalSpent} strong />
                     <Money label="Estimated Sell Value" value={selectedMath.estimatedValue} />
@@ -1213,8 +1219,18 @@ function getVerificationCost(tree: TreeRow) {
   return Number(tree.verification_cost || tree.gps_photo_cost || tree.photo_fee_total || tree.gps_fee_total || 0);
 }
 
+function getCareProgramCost(tree: TreeRow) {
+  return Number(tree.care_program_price || 0);
+}
+
 function getTotalSpent(tree: TreeRow) {
-  return Number(tree.total_spent || getPurchasePrice(tree) + getOperationCost(tree) + getVerificationCost(tree));
+  const computedTotal =
+    getPurchasePrice(tree) +
+    getOperationCost(tree) +
+    getCareProgramCost(tree) +
+    getVerificationCost(tree);
+
+  return Number(tree.total_spent || computedTotal);
 }
 
 function getEstimatedValue(tree: TreeRow) {
