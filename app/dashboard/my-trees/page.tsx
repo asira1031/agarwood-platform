@@ -4,14 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type TreeRow = Record<string, any>;
-type SellRequest = Record<string, any>;
 type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME";
 
 const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
 
 export default function MyTreesPage() {
   const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [sellRequests, setSellRequests] = useState<SellRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTree, setSelectedTree] = useState<TreeRow | null>(null);
   const [message, setMessage] = useState("");
@@ -47,22 +45,10 @@ export default function MyTreesPage() {
     const { data: profileByEmail } = await supabase
       .from("profiles")
       .select("id, email, full_name, membership_status, kyc_status")
-      .eq("email", user.email || "")
-      .maybeSingle();
-
-    const { data: profileByEmailLower } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
       .eq("email", email)
       .maybeSingle();
 
-    const { data: profileByEmailLike } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
-      .ilike("email", email)
-      .maybeSingle();
-
-    const profile = profileById || profileByEmail || profileByEmailLower || profileByEmailLike;
+    const profile = profileById || profileByEmail;
 
     if (!profile) {
       setMessage("Profile not found.");
@@ -82,16 +68,9 @@ export default function MyTreesPage() {
       return;
     }
 
-    const { data: sellData } = await supabase
-      .from("sell_tree_requests")
-      .select("*")
-      .eq("profile_id", profile.id)
-      .order("created_at", { ascending: false });
-
     const rows = treeData || [];
 
     setTrees(rows);
-    setSellRequests(sellData || []);
 
     setSelectedTree((current) => {
       if (current) {
@@ -200,19 +179,6 @@ export default function MyTreesPage() {
     setActivePanel("NONE");
     setMessage("Tree renamed successfully. Tree code and QR identity did not change.");
     await loadTrees();
-  }
-
-  function goToSellTree() {
-    if (!selectedTree) return;
-
-    const params = new URLSearchParams();
-    params.set("tree_id", String(selectedTree.id || ""));
-
-    if (selectedTree.tree_code) {
-      params.set("tree_code", String(selectedTree.tree_code));
-    }
-
-    window.location.href = `/dashboard/sell-tree?${params.toString()}`;
   }
 
   return (
@@ -427,44 +393,8 @@ export default function MyTreesPage() {
                   <button onClick={() => openPanel("GPS")}>View GPS</button>
                   <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
                     Request Care
-                  </button>
-                  <button onClick={goToSellTree} className="sell">
-                    Sell Tree
-                  </button>
-                </section>
+                  </button>                </section>
 
-                <section className="history">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Sell Requests</h3>
-                      <p>Pending or completed sale requests for this tree.</p>
-                    </div>
-                  </div>
-
-                  {sellRequests.filter(
-                    (item) =>
-                      item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
-                  ).length === 0 ? (
-                    <div className="empty small">No sell request for this tree.</div>
-                  ) : (
-                    <div className="requestList">
-                      {sellRequests
-                        .filter(
-                          (item) =>
-                            item.tree_id === selectedTree.tree_code || item.tree_id === selectedTree.id
-                        )
-                        .map((item) => (
-                          <div className="requestRow" key={item.id}>
-                            <div>
-                              <strong>{peso(Number(item.expected_amount || item.selling_price || 0))}</strong>
-                              <p>{formatDate(item.created_at)}</p>
-                            </div>
-                            <span>{item.status || "PENDING"}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </section>
               </section>
             )}
           </section>
