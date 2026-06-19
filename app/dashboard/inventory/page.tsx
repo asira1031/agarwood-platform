@@ -64,21 +64,62 @@ export default function InventoryPage() {
       return;
     }
 
-    const email = user.email?.trim().toLowerCase() || "";
+    const email = user.email?.trim() || "";
+    const normalizedEmail = email.toLowerCase();
 
-    const { data: profileById } = await supabase
+    const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
       .select("id, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    const { data: profileByEmail } = await supabase
+    if (profileByIdError) {
+      setMessage(profileByIdError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByExactEmail, error: profileByExactEmailError } = await supabase
       .from("profiles")
       .select("id, email")
       .eq("email", email)
       .maybeSingle();
 
-    const profile = profileById || profileByEmail;
+    if (profileByExactEmailError) {
+      setMessage(profileByExactEmailError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByLowerEmail, error: profileByLowerEmailError } = await supabase
+      .from("profiles")
+      .select("id, email")
+      .eq("email", normalizedEmail)
+      .maybeSingle();
+
+    if (profileByLowerEmailError) {
+      setMessage(profileByLowerEmailError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByEmailFallback, error: profileByEmailFallbackError } = await supabase
+      .from("profiles")
+      .select("id, email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (profileByEmailFallbackError) {
+      setMessage(profileByEmailFallbackError.message);
+      setLoading(false);
+      return;
+    }
+
+    const profile =
+      profileById ||
+      profileByExactEmail ||
+      profileByLowerEmail ||
+      profileByEmailFallback;
 
     if (!profile) {
       setMessage("Profile not found.");
