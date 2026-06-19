@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 
 type TreeRow = Record<string, any>;
 type SellRequest = Record<string, any>;
+type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME";
 
 const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
 
@@ -14,6 +15,13 @@ export default function MyTreesPage() {
   const [loading, setLoading] = useState(true);
   const [selectedTree, setSelectedTree] = useState<TreeRow | null>(null);
   const [message, setMessage] = useState("");
+
+  const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"TREES" | "GROUPS">("TREES");
+  const [stageFilter, setStageFilter] = useState("ALL");
+
+  const [activePanel, setActivePanel] = useState<PanelType>("NONE");
+  const [renameValue, setRenameValue] = useState("");
 
   async function loadTrees() {
     setLoading(true);
@@ -68,9 +76,20 @@ export default function MyTreesPage() {
       .eq("profile_id", profile.id)
       .order("created_at", { ascending: false });
 
-    setTrees(treeData || []);
+    const rows = treeData || [];
+
+    setTrees(rows);
     setSellRequests(sellData || []);
-    setSelectedTree((treeData || [])[0] || null);
+
+    setSelectedTree((current) => {
+      if (current) {
+        const refreshed = rows.find((tree) => tree.id === current.id);
+        if (refreshed) return refreshed;
+      }
+
+      return rows[0] || null;
+    });
+
     setLoading(false);
   }
 
@@ -87,9 +106,89 @@ export default function MyTreesPage() {
     return { owned, totalSpent, estimatedValue, profit };
   }, [trees]);
 
+  const filteredTrees = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return trees.filter((tree) => {
+      const stage = String(tree.stage || tree.growth_stage || "").toLowerCase();
+      const code = String(tree.tree_code || tree.code || tree.id || "").toLowerCase();
+      const name = String(tree.custom_name || tree.name || "").toLowerCase();
+      const group = String(tree.tree_group_name || "Ungrouped Trees").toLowerCase();
+
+      const matchesSearch =
+        !q || code.includes(q) || name.includes(q) || group.includes(q) || stage.includes(q);
+
+      const matchesStage =
+        stageFilter === "ALL" ||
+        stage === stageFilter.toLowerCase() ||
+        normalizeStage(stage).toLowerCase() === stageFilter.toLowerCase();
+
+      return matchesSearch && matchesStage;
+    });
+  }, [trees, search, stageFilter]);
+
+  const groups = useMemo(() => {
+    const map: Record<string, TreeRow[]> = {};
+
+    filteredTrees.forEach((tree) => {
+      const groupName = tree.tree_group_name || "Ungrouped Trees";
+      if (!map[groupName]) map[groupName] = [];
+      map[groupName].push(tree);
+    });
+
+    return Object.entries(map).map(([name, groupTrees]) => {
+      const totalSpent = groupTrees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
+      const estimatedValue = groupTrees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
+      const profit = estimatedValue - totalSpent;
+
+      return { name, trees: groupTrees, totalSpent, estimatedValue, profit };
+    });
+  }, [filteredTrees]);
+
   const selectedMath = selectedTree
     ? getTreeMath(selectedTree)
     : { totalSpent: 0, estimatedValue: 0, profit: 0, roi: 0 };
+
+  const selectedQrUrl = selectedTree
+    ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
+    : "";
+
+  function openPanel(panel: PanelType) {
+    if (!selectedTree) return;
+
+    if (panel === "RENAME") {
+      setRenameValue(selectedTree.custom_name || selectedTree.name || "Agarwood Tree");
+    }
+
+    setActivePanel(panel);
+  }
+
+  async function saveRename() {
+    setMessage("");
+
+    if (!selectedTree) return;
+
+    const cleanName = renameValue.trim();
+
+    if (!cleanName) {
+      setMessage("Tree name cannot be empty.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("trees")
+      .update({ custom_name: cleanName })
+      .eq("id", selectedTree.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setActivePanel("NONE");
+    setMessage("Tree renamed successfully. Tree code and QR identity did not change.");
+    await loadTrees();
+  }
 
   return (
     <main className="page">
@@ -98,8 +197,8 @@ export default function MyTreesPage() {
           <p className="eyebrow">Agarwood Portfolio</p>
           <h1>My Trees</h1>
           <span>
-            Track your owned agarwood trees, growth stage, QR identity, total spending,
-            estimated value, and profit/loss before selling.
+            Search, group, rename, verify QR identity, track spending, and review
+            profit/loss before selling your agarwood trees.
           </span>
         </div>
       </section>
@@ -123,26 +222,94 @@ export default function MyTreesPage() {
 
           <section className="layout">
             <aside className="treeList">
-              {trees.map((tree) => {
-                const math = getTreeMath(tree);
-                const active = selectedTree?.id === tree.id;
+              <div className="searchBox">
+                <label>Search Trees</label>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Tree code, name, group, stage..."
+                />
+              </div>
 
-                return (
+              <div className="viewSwitch">
+                <button
+                  className={viewMode === "TREES" ? "active" : ""}
+                  onClick={() => setViewMode("TREES")}
+                >
+                  Trees
+                </button>
+                <button
+                  className={viewMode === "GROUPS" ? "active" : ""}
+                  onClick={() => setViewMode("GROUPS")}
+                >
+                  Groups
+                </button>
+              </div>
+
+              <div className="stageFilters">
+                {["ALL", ...STAGES].map((stage) => (
                   <button
-                    key={tree.id}
-                    className={`treeItem ${active ? "active" : ""}`}
-                    onClick={() => setSelectedTree(tree)}
+                    key={stage}
+                    className={stageFilter === stage ? "active" : ""}
+                    onClick={() => setStageFilter(stage)}
                   >
-                    <div>
-                      <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                      <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
-                    </div>
-                    <span className={math.profit >= 0 ? "gain" : "loss"}>
-                      {peso(math.profit)}
-                    </span>
+                    {stage}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+
+              {viewMode === "TREES" ? (
+                <div className="listItems">
+                  {filteredTrees.length === 0 ? (
+                    <div className="empty small">No matching trees.</div>
+                  ) : (
+                    filteredTrees.map((tree) => {
+                      const math = getTreeMath(tree);
+                      const active = selectedTree?.id === tree.id;
+
+                      return (
+                        <button
+                          key={tree.id}
+                          className={`treeItem ${active ? "active" : ""}`}
+                          onClick={() => setSelectedTree(tree)}
+                        >
+                          <div>
+                            <strong>{tree.tree_code || tree.code || tree.id}</strong>
+                            <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
+                            <small>{tree.tree_group_name || "Ungrouped Trees"}</small>
+                          </div>
+                          <span className={math.profit >= 0 ? "gain" : "loss"}>
+                            {peso(math.profit)}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              ) : (
+                <div className="listItems">
+                  {groups.length === 0 ? (
+                    <div className="empty small">No matching groups.</div>
+                  ) : (
+                    groups.map((group) => (
+                      <button
+                        key={group.name}
+                        className="groupItem"
+                        onClick={() => setSelectedTree(group.trees[0])}
+                      >
+                        <div>
+                          <strong>{group.name}</strong>
+                          <p>{group.trees.length} tree{group.trees.length === 1 ? "" : "s"}</p>
+                          <small>Value: {peso(group.estimatedValue)}</small>
+                        </div>
+                        <span className={group.profit >= 0 ? "gain" : "loss"}>
+                          {peso(group.profit)}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </aside>
 
             {selectedTree && (
@@ -152,11 +319,16 @@ export default function MyTreesPage() {
                     <p className="eyebrow">Tree Asset</p>
                     <h2>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</h2>
                     <span>{selectedTree.tree_code || selectedTree.code || selectedTree.id}</span>
+                    <p className="groupName">{selectedTree.tree_group_name || "Ungrouped Trees"}</p>
                   </div>
 
-                  <div className="qrBadge">
-                    <strong>QR</strong>
-                    <p>Tree Identity</p>
+                  <div className="identityBox">
+                    <strong>Tree Identity</strong>
+                    <p>{selectedTree.tree_code || selectedTree.id}</p>
+                    <div className="identityActions">
+                      <button onClick={() => openPanel("RENAME")}>Rename</button>
+                      <button onClick={() => openPanel("QR")}>View QR</button>
+                    </div>
                   </div>
                 </div>
 
@@ -171,10 +343,10 @@ export default function MyTreesPage() {
                   <div className="stageLine">
                     {STAGES.map((stage, index) => {
                       const current = normalizeStage(selectedTree.stage || selectedTree.growth_stage);
-                      const currentIndex = Math.max(
-                        0,
-                        STAGES.findIndex((item) => item.toLowerCase() === current.toLowerCase())
+                      const foundIndex = STAGES.findIndex(
+                        (item) => item.toLowerCase() === current.toLowerCase()
                       );
+                      const currentIndex = foundIndex >= 0 ? foundIndex : 0;
 
                       return (
                         <div
@@ -220,10 +392,14 @@ export default function MyTreesPage() {
                 </section>
 
                 <section className="actions">
-                  <button>View Photos</button>
-                  <button>View GPS</button>
-                  <button>Request Care</button>
-                  <button className="sell">Sell Tree</button>
+                  <button onClick={() => openPanel("PHOTOS")}>View Photos</button>
+                  <button onClick={() => openPanel("GPS")}>View GPS</button>
+                  <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
+                    Request Care
+                  </button>
+                  <button onClick={() => (window.location.href = "/dashboard/sell-tree")} className="sell">
+                    Sell Tree
+                  </button>
                 </section>
 
                 <section className="history">
@@ -255,6 +431,92 @@ export default function MyTreesPage() {
               </section>
             )}
           </section>
+
+          {activePanel !== "NONE" && selectedTree && (
+            <div className="modal">
+              <div className="modalCard">
+                {activePanel === "PHOTOS" && (
+                  <>
+                    <h3>Tree Photos</h3>
+                    <p>
+                      Photos will appear here after caretaker uploads real tree photo updates.
+                      No fake images are shown.
+                    </p>
+                    <div className="empty small">No caretaker photo uploaded yet.</div>
+                    <ModalActions close={() => setActivePanel("NONE")} />
+                  </>
+                )}
+
+                {activePanel === "GPS" && (
+                  <>
+                    <h3>GPS Verification</h3>
+                    <p>
+                      GPS details will appear here once field staff or caretaker uploads verified
+                      plantation location data.
+                    </p>
+                    <div className="modalGrid">
+                      <Mini label="GPS Status" value={selectedTree.gps_status || "Pending"} />
+                      <Mini label="Plantation Block" value={selectedTree.plantation_block || "Not assigned"} />
+                      <Mini label="GPS Location" value={selectedTree.gps_location || "Not uploaded"} />
+                    </div>
+                    <ModalActions close={() => setActivePanel("NONE")} />
+                  </>
+                )}
+
+                {activePanel === "QR" && (
+                  <>
+                    <h3>Tree QR Identity</h3>
+                    <p>
+                      This QR identity is for the real tree tag. Scanning opens the official tree
+                      verification page.
+                    </p>
+
+                    <div className="qrPreview">
+                      <div className="fakeQr">
+                        <span>QR</span>
+                      </div>
+
+                      <div>
+                        <strong>{selectedTree.tree_code || selectedTree.id}</strong>
+                        <p>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</p>
+                        <small>{selectedQrUrl}</small>
+                      </div>
+                    </div>
+
+                    <div className="modalActions">
+                      <button onClick={() => setActivePanel("NONE")}>Close</button>
+                      <button className="primary" onClick={() => window.open(selectedQrUrl, "_blank")}>
+                        Open Verification Page
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {activePanel === "RENAME" && (
+                  <>
+                    <h3>Rename Tree</h3>
+                    <p>
+                      Rename only changes the display name. Tree code and QR identity remain permanent.
+                    </p>
+
+                    <label>New Tree Name</label>
+                    <input
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      placeholder="Example: Retirement Tree A"
+                    />
+
+                    <div className="modalActions">
+                      <button onClick={() => setActivePanel("NONE")}>Cancel</button>
+                      <button className="primary" onClick={saveRename}>
+                        Save Name
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -360,7 +622,7 @@ export default function MyTreesPage() {
 
         .layout {
           display: grid;
-          grid-template-columns: 360px 1fr;
+          grid-template-columns: 380px 1fr;
           gap: 18px;
           align-items: start;
         }
@@ -368,12 +630,73 @@ export default function MyTreesPage() {
         .treeList {
           padding: 14px;
           display: grid;
-          gap: 10px;
-          max-height: 780px;
+          gap: 12px;
+          max-height: 840px;
           overflow: auto;
         }
 
-        .treeItem {
+        .searchBox {
+          display: grid;
+          gap: 8px;
+        }
+
+        .searchBox label,
+        .modalCard label {
+          color: #6b6b62;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        input {
+          width: 100%;
+          border: 1px solid rgba(92,70,35,.14);
+          border-radius: 14px;
+          padding: 13px 14px;
+          background: rgba(255,253,246,.94);
+          color: #101a14;
+          outline: none;
+          font-weight: 800;
+        }
+
+        .viewSwitch {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .viewSwitch button,
+        .stageFilters button {
+          border: 1px solid rgba(92,70,35,.12);
+          border-radius: 999px;
+          padding: 11px 12px;
+          background: #f3ead8;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .viewSwitch button.active,
+        .stageFilters button.active {
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+          border-color: transparent;
+        }
+
+        .stageFilters {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .listItems {
+          display: grid;
+          gap: 10px;
+        }
+
+        .treeItem,
+        .groupItem {
           border: 1px solid rgba(92,70,35,.08);
           border-radius: 20px;
           padding: 16px;
@@ -390,12 +713,14 @@ export default function MyTreesPage() {
           color: white;
         }
 
-        .treeItem strong {
+        .treeItem strong,
+        .groupItem strong {
           display: block;
           font-size: 15px;
         }
 
-        .treeItem p {
+        .treeItem p,
+        .groupItem p {
           margin: 6px 0 0;
           color: inherit;
           opacity: .75;
@@ -403,7 +728,17 @@ export default function MyTreesPage() {
           font-weight: 800;
         }
 
-        .treeItem span {
+        .treeItem small,
+        .groupItem small {
+          display: block;
+          margin-top: 6px;
+          color: inherit;
+          opacity: .65;
+          font-weight: 800;
+        }
+
+        .treeItem span,
+        .groupItem span {
           font-weight: 900;
           white-space: nowrap;
         }
@@ -437,26 +772,48 @@ export default function MyTreesPage() {
           font-weight: 900;
         }
 
-        .qrBadge {
-          width: 120px;
-          height: 120px;
-          border-radius: 26px;
-          display: grid;
-          place-items: center;
-          text-align: center;
+        .groupName {
+          margin: 8px 0 0;
+          color: #8c6a3c;
+          font-weight: 900;
+        }
+
+        .identityBox {
+          min-width: 240px;
+          border-radius: 24px;
+          padding: 18px;
           color: white;
           background: linear-gradient(135deg, #244536, #10281f);
         }
 
-        .qrBadge strong {
-          font-size: 34px;
+        .identityBox strong {
+          display: block;
+          color: rgba(255,255,255,.7);
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
         }
 
-        .qrBadge p {
-          margin: -18px 0 0;
-          font-size: 12px;
-          opacity: .7;
+        .identityBox p {
+          margin: 8px 0 14px;
+          font-size: 22px;
           font-weight: 900;
+        }
+
+        .identityActions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .identityActions button {
+          border: 0;
+          border-radius: 999px;
+          padding: 10px;
+          background: rgba(255,255,255,.13);
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
         }
 
         .growth,
@@ -523,7 +880,8 @@ export default function MyTreesPage() {
           outline: 3px solid rgba(214,178,94,.45);
         }
 
-        .cards {
+        .cards,
+        .modalGrid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 12px;
@@ -631,12 +989,114 @@ export default function MyTreesPage() {
           font-size: 12px;
         }
 
+        .modal {
+          position: fixed;
+          inset: 0;
+          z-index: 100;
+          padding: 24px;
+          background: rgba(0,0,0,.55);
+          display: grid;
+          place-items: center;
+        }
+
+        .modalCard {
+          width: min(600px, 100%);
+          border-radius: 28px;
+          padding: 24px;
+          background: #fffdf6;
+          box-shadow: 0 24px 70px rgba(0,0,0,.22);
+        }
+
+        .modalCard h3 {
+          margin: 0;
+          font-size: 28px;
+          color: #101a14;
+        }
+
+        .modalCard p {
+          color: #6b6b62;
+          line-height: 1.5;
+          font-weight: 800;
+        }
+
+        .modalActions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 18px;
+        }
+
+        .modalActions button {
+          border: 0;
+          border-radius: 16px;
+          padding: 14px;
+          background: #f3ead8;
+          color: #244536;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .modalActions .primary {
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+        }
+
+        .qrPreview {
+          display: grid;
+          grid-template-columns: 150px 1fr;
+          gap: 16px;
+          align-items: center;
+          padding: 18px;
+          border-radius: 22px;
+          background: #f3ead8;
+          margin-top: 18px;
+        }
+
+        .fakeQr {
+          width: 150px;
+          height: 150px;
+          border-radius: 18px;
+          display: grid;
+          place-items: center;
+          background:
+            linear-gradient(90deg, #10281f 12px, transparent 12px) 0 0 / 30px 30px,
+            linear-gradient(#10281f 12px, transparent 12px) 0 0 / 30px 30px,
+            white;
+          border: 8px solid white;
+        }
+
+        .fakeQr span {
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: white;
+          color: #244536;
+          font-weight: 900;
+        }
+
+        .qrPreview strong {
+          display: block;
+          color: #101a14;
+          font-size: 20px;
+        }
+
+        .qrPreview p {
+          margin: 8px 0;
+        }
+
+        .qrPreview small {
+          display: block;
+          color: #6b6b62;
+          word-break: break-all;
+          font-weight: 800;
+        }
+
         @media (max-width: 1180px) {
           .stats,
           .stageLine,
           .cards,
           .moneyGrid,
-          .actions {
+          .actions,
+          .modalGrid {
             grid-template-columns: repeat(2, 1fr);
           }
 
@@ -658,7 +1118,10 @@ export default function MyTreesPage() {
           .stageLine,
           .cards,
           .moneyGrid,
-          .actions {
+          .actions,
+          .modalActions,
+          .qrPreview,
+          .modalGrid {
             grid-template-columns: 1fr;
           }
 
@@ -666,12 +1129,27 @@ export default function MyTreesPage() {
             flex-direction: column;
           }
 
-          .qrBadge {
+          .identityBox {
+            width: 100%;
+          }
+
+          .fakeQr {
             width: 100%;
           }
         }
       `}</style>
     </main>
+  );
+}
+
+function ModalActions({ close }: { close: () => void }) {
+  return (
+    <div className="modalActions">
+      <button onClick={close}>Close</button>
+      <button className="primary" onClick={close}>
+        Done
+      </button>
+    </div>
   );
 }
 
