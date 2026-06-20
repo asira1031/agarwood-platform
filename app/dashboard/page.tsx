@@ -376,7 +376,7 @@ export default function DashboardPage() {
 
           <div className="treeVisualCard">
             <img
-              src="/images/agarwood-real-tree.jpg"
+            src="/images/agarwood-tree-photo.jpg"
               alt="Real agarwood plant visualization"
               className="treeRealImage"
             />
