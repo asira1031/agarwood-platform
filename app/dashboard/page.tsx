@@ -374,54 +374,35 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          <div className="growthCard">
-            <div className="sun" />
-            <div className="mist mistOne" />
-            <div className="mist mistTwo" />
-            <div className="hill hillOne" />
-            <div className="hill hillTwo" />
+          <div className="treeVisualCard">
+            <img
+              src="/images/agarwood-real-tree.jpg"
+              alt="Real agarwood plant visualization"
+              className="treeRealImage"
+            />
 
-            <div className="pill">☀️ Agarwood Tree Visualization</div>
-            <p className="growthText">
-              Morning growth guide only — not actual customer tree data.
-            </p>
+            <div className="treeOverlay">
+              <div className="pill">☀️ Agarwood Tree Visualization</div>
 
-            <div className="forestScene">
-              <div className="glowCircle" />
-              <div className="leaf l1">🍃</div>
-              <div className="leaf l2">🍂</div>
-              <div className="leaf l3">🍃</div>
-
-              <div className={`treeStage stage${stage}`}>
-                <div className="soil" />
-                <div className="trunk">
-                  <i />
-                  <em />
-                </div>
-                <div className="branch b1" />
-                <div className="branch b2" />
-                <div className="branch b3" />
-                <div className="branch b4" />
-                <div className="crown c1" />
-                <div className="crown c2" />
-                <div className="crown c3" />
-                <div className="crown c4" />
-                <div className="resinGlow" />
-              </div>
-            </div>
-
-            <div className="progressGlass">
-              <div>
-                <strong>Guide Stage</strong>
-                <span>{stage}/5</span>
-              </div>
-              <div className="bar">
-                <i style={{ width: `${stage * 20}%` }} />
-              </div>
-              <p>
-                <b>Educational Growth Guide</b>
-                <span>Visualization only</span>
+              <p className="growthText">
+                Morning growth guide only — not actual customer tree data.
               </p>
+
+              <div className="progressGlass">
+                <div>
+                  <strong>Guide Stage</strong>
+                  <span>{stage}/5</span>
+                </div>
+
+                <div className="bar">
+                  <i style={{ width: `${stage * 20}%` }} />
+                </div>
+
+                <p>
+                  <b>Educational Growth Guide</b>
+                  <span>Visualization only</span>
+                </p>
+              </div>
             </div>
           </div>
 
@@ -741,7 +722,7 @@ export default function DashboardPage() {
           gap: 16px;
         }
 
-        .journey, .growthCard, .portfolio, .panel {
+        .journey, .treeVisualCard, .portfolio, .panel {
           border-radius: 20px;
           box-shadow: 0 18px 42px rgba(82, 60, 27, .09);
           border: 1px solid rgba(92, 70, 35, .08);
@@ -833,262 +814,63 @@ export default function DashboardPage() {
           margin-left: auto;
         }
 
-        .growthCard {
+        .treeVisualCard {
           position: relative;
           overflow: hidden;
           min-height: 520px;
-          background:
-            radial-gradient(circle at 16% 12%, rgba(255, 232, 161, .95), transparent 18%),
-            radial-gradient(circle at 30% 18%, rgba(255, 205, 94, .35), transparent 28%),
-            radial-gradient(circle at 78% 36%, rgba(255,255,255,.30), transparent 34%),
-            linear-gradient(180deg, #f6e3bb 0%, #e1d6ba 34%, #b9bea3 68%, #798b72 100%);
+          background: #10281f;
         }
 
-        .sun {
+        .treeRealImage {
+          width: 100%;
+          height: 520px;
+          object-fit: cover;
+          display: block;
+        }
+
+        .treeOverlay {
           position: absolute;
-          width: 150px;
-          height: 150px;
-          left: 36px;
-          top: 24px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(255, 241, 184, .9), rgba(255, 197, 79, .35), transparent 70%);
-          filter: blur(2px);
-          z-index: 1;
-        }
-
-        .mist {
-          position: absolute;
-          left: -8%;
-          right: -8%;
-          height: 72px;
-          border-radius: 999px;
-          background: rgba(255,255,255,.22);
-          filter: blur(18px);
-          z-index: 1;
-        }
-
-        .mistOne { top: 180px; animation: driftMist 9s ease-in-out infinite; }
-        .mistTwo { top: 250px; opacity: .7; animation: driftMist 12s ease-in-out infinite reverse; }
-
-        .hill {
-          position: absolute;
-          bottom: 0;
-          border-radius: 50% 50% 0 0;
-          background: rgba(49, 85, 61, .28);
-          z-index: 1;
-        }
-
-        .hillOne {
-          width: 78%;
-          height: 190px;
-          left: -12%;
-        }
-
-        .hillTwo {
-          width: 82%;
-          height: 230px;
-          right: -20%;
-          background: rgba(74, 93, 61, .22);
+          inset: 0;
+          padding: 24px 26px;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          background: linear-gradient(
+            180deg,
+            rgba(5, 25, 16, .08) 0%,
+            rgba(5, 25, 16, .12) 44%,
+            rgba(5, 25, 16, .76) 100%
+          );
         }
 
         .pill {
-          position: absolute;
-          top: 28px;
-          left: 50%;
-          transform: translateX(-50%);
+          align-self: center;
           padding: 10px 22px;
           border-radius: 999px;
-          background: rgba(49, 85, 61, .92);
+          background: rgba(8, 61, 35, .94);
           color: #fff7df;
           font-weight: 900;
-          z-index: 5;
           white-space: nowrap;
-          box-shadow: 0 14px 30px rgba(46, 53, 31, .18);
+          box-shadow: 0 14px 30px rgba(0, 0, 0, .20);
         }
 
         .growthText {
           position: absolute;
-          top: 74px;
+          top: 76px;
           left: 0;
           right: 0;
           text-align: center;
           color: #fffaf0;
           z-index: 5;
-          font-weight: 800;
-          text-shadow: 0 2px 8px rgba(80, 55, 24, .28);
+          font-weight: 900;
+          text-shadow: 0 2px 12px rgba(0, 0, 0, .38);
         }
-
-        .forestScene {
-          position: absolute;
-          inset: 0;
-          display: grid;
-          place-items: center;
-          padding-top: 80px;
-          z-index: 3;
-        }
-
-        .glowCircle {
-          position: absolute;
-          width: 430px;
-          height: 430px;
-          border-radius: 50%;
-          border: 3px solid rgba(255, 236, 178, .52);
-          border-left-color: rgba(255,255,255,.20);
-          border-bottom-color: rgba(255,255,255,.12);
-          filter: drop-shadow(0 0 18px rgba(255, 213, 119, .38));
-          animation: rotateGlow 9s linear infinite;
-        }
-
-        .treeStage {
-          position: relative;
-          width: 260px;
-          height: 315px;
-          transform-origin: bottom center;
-          animation: treeBreath 3.5s ease-in-out infinite;
-          z-index: 3;
-        }
-
-        .soil {
-          position: absolute;
-          left: 30px;
-          bottom: 0;
-          width: 200px;
-          height: 38px;
-          border-radius: 50%;
-          background: #2b1b0c;
-          box-shadow: 0 15px 28px rgba(0,0,0,.28);
-        }
-
-        .trunk {
-          position: absolute;
-          left: 108px;
-          bottom: 22px;
-          width: 44px;
-          height: 195px;
-          border-radius: 24px;
-          background:
-            linear-gradient(90deg, #3c1e0d, #8b5620 42%, #4f2b12),
-            repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 2px, transparent 2px 7px);
-          overflow: hidden;
-          box-shadow: inset -9px 0 12px rgba(0,0,0,.22);
-        }
-
-        .trunk i,
-        .trunk em {
-          position: absolute;
-          display: block;
-          width: 7px;
-          border-radius: 999px;
-          background: rgba(38, 18, 8, .62);
-        }
-
-        .trunk i {
-          height: 155px;
-          left: 10px;
-          top: 24px;
-          transform: rotate(4deg);
-        }
-
-        .trunk em {
-          height: 112px;
-          right: 8px;
-          top: 60px;
-          transform: rotate(-5deg);
-        }
-
-        .resinGlow {
-          position: absolute;
-          left: 124px;
-          bottom: 100px;
-          width: 15px;
-          height: 78px;
-          border-radius: 999px;
-          background: linear-gradient(180deg, rgba(255, 204, 76, .95), rgba(133, 75, 24, .12));
-          filter: drop-shadow(0 0 10px rgba(255, 190, 65, .7));
-          opacity: .86;
-          animation: resinPulse 3.5s ease-in-out infinite;
-        }
-
-        .branch {
-          position: absolute;
-          height: 13px;
-          border-radius: 20px;
-          background: #5c3216;
-        }
-
-        .b1 { left: 52px; bottom: 145px; width: 90px; transform: rotate(-32deg); }
-        .b2 { right: 54px; bottom: 148px; width: 92px; transform: rotate(34deg); }
-        .b3 { left: 72px; bottom: 192px; width: 70px; transform: rotate(-24deg); }
-        .b4 { right: 75px; bottom: 197px; width: 72px; transform: rotate(25deg); }
-
-        .crown {
-          position: absolute;
-          border-radius: 50%;
-          background: radial-gradient(circle at 35% 30%, #9ab268, #31553d 72%);
-          box-shadow: inset -14px -18px 30px rgba(0,0,0,.16);
-          transition: opacity .6s ease, transform .6s ease;
-        }
-
-        .c1 { width: 120px; height: 118px; left: 68px; top: 0; }
-        .c2 { width: 140px; height: 136px; left: 13px; top: 74px; }
-        .c3 { width: 148px; height: 142px; right: 5px; top: 70px; }
-        .c4 { width: 190px; height: 128px; left: 34px; top: 126px; }
-
-        .stage1 { transform: scale(.42); }
-        .stage1 .branch,
-        .stage1 .crown,
-        .stage1 .resinGlow {
-          opacity: 0;
-        }
-
-        .stage1 .trunk {
-          height: 75px;
-          bottom: 18px;
-        }
-
-        .stage2 { transform: scale(.62); }
-        .stage2 .b3,
-        .stage2 .b4,
-        .stage2 .c2,
-        .stage2 .c3,
-        .stage2 .c4,
-        .stage2 .resinGlow {
-          opacity: 0;
-        }
-
-        .stage2 .trunk {
-          height: 115px;
-        }
-
-        .stage3 { transform: scale(.84); }
-        .stage3 .resinGlow {
-          opacity: .35;
-        }
-
-        .stage4 { transform: scale(1); }
-        .stage5 { transform: scale(1.12); }
-
-        .leaf {
-          position: absolute;
-          font-size: 22px;
-          z-index: 2;
-          animation: leafFloat 5.5s ease-in-out infinite;
-          opacity: .72;
-        }
-
-        .l1 { left: 18%; top: 32%; }
-        .l2 { right: 17%; top: 25%; animation-delay: 1s; }
-        .l3 { right: 25%; bottom: 39%; animation-delay: 1.8s; }
 
         .progressGlass {
-          position: absolute;
-          left: 26px;
-          right: 26px;
-          bottom: 24px;
           padding: 18px;
           border-radius: 18px;
           color: #fff8e6;
-          background: rgba(36, 69, 54, .62);
+          background: rgba(5, 44, 24, .88);
           border: 1px solid rgba(255,255,255,.18);
           backdrop-filter: blur(13px);
           z-index: 6;
@@ -1127,7 +909,7 @@ export default function DashboardPage() {
           display: block;
           height: 100%;
           border-radius: inherit;
-          background: linear-gradient(90deg, #f4d37a, #bda77b);
+          background: linear-gradient(90deg, #8bc34a, #f4d37a);
           transition: width .4s ease;
         }
 
@@ -1412,30 +1194,6 @@ export default function DashboardPage() {
 
         footer span {
           margin: 0 24px;
-        }
-
-        @keyframes rotateGlow {
-          to { transform: rotate(360deg); }
-        }
-
-        @keyframes treeBreath {
-          0%, 100% { filter: saturate(.95); }
-          50% { filter: saturate(1.08) brightness(1.04); }
-        }
-
-        @keyframes resinPulse {
-          0%, 100% { opacity: .48; transform: translateY(0); }
-          50% { opacity: 1; transform: translateY(-4px); }
-        }
-
-        @keyframes leafFloat {
-          0%, 100% { transform: translateY(0) rotate(-10deg); opacity: .62; }
-          50% { transform: translateY(-22px) rotate(15deg); opacity: .9; }
-        }
-
-        @keyframes driftMist {
-          0%, 100% { transform: translateX(-22px); }
-          50% { transform: translateX(28px); }
         }
 
         @media (max-width: 1280px) {
