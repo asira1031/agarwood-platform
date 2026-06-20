@@ -31,35 +31,11 @@ type Referral = {
   created_at: string | null;
 };
 
-const TARGETS = [
-  {
-    type: "CUSTOMER",
-    title: "Customer Invite Link",
-    text: "Use this for new customers who want to register and buy agarwood trees.",
-    route: "/register",
-  },
-  {
-    type: "PARTNER",
-    title: "Partner Invite Link",
-    text: "Use this for business partners, affiliates, or field partners.",
-    route: "/partner/register",
-  },
-  {
-    type: "GARDENER",
-    title: "Gardener Invite Link",
-    text: "Use this for gardeners/caretakers who will later upload care updates.",
-    route: "/gardener/register",
-  },
-];
-
-const REWARD_AMOUNT = 250;
-
 export default function ReferralsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [links, setLinks] = useState<ReferralLink[]>([]);
+  const [link, setLink] = useState<ReferralLink | null>(null);
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [email, setEmail] = useState("");
-  const [targetType, setTargetType] = useState("CUSTOMER");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -102,67 +78,64 @@ export default function ReferralsPage() {
       currentProfile.referral_code || generateReferralCode(currentProfile.email || emailLogin);
 
     if (!currentProfile.referral_code) {
-      await supabase
-        .from("profiles")
-        .update({ referral_code: baseCode })
-        .eq("id", currentProfile.id);
+      await supabase.from("profiles").update({ referral_code: baseCode }).eq("id", currentProfile.id);
     }
 
     const finalProfile = { ...currentProfile, referral_code: baseCode };
+
     setProfile(finalProfile);
 
-    await ensureReferralLinks(finalProfile.id, baseCode);
+    await ensureCustomerReferralLink(finalProfile.id, baseCode);
 
     const { data: linkData } = await supabase
       .from("referral_links")
       .select("id, owner_profile_id, target_type, referral_code, referral_url, status, created_at")
       .eq("owner_profile_id", finalProfile.id)
-      .order("created_at", { ascending: true });
+      .eq("target_type", "CUSTOMER")
+      .maybeSingle();
 
     const { data: referralData } = await supabase
       .from("referrals")
       .select("id, referred_email, referral_code, target_type, qualified, reward_amount, status, created_at")
       .eq("referrer_profile_id", finalProfile.id)
+      .eq("target_type", "CUSTOMER")
       .order("created_at", { ascending: false });
 
-    setLinks(linkData || []);
+    setLink(linkData || null);
     setReferrals(referralData || []);
     setLoading(false);
   }
 
-  async function ensureReferralLinks(profileId: string, baseCode: string) {
+  async function ensureCustomerReferralLink(profileId: string, referralCode: string) {
     const origin =
       typeof window !== "undefined" ? window.location.origin : "https://agarwood-platform.vercel.app";
 
-    for (const target of TARGETS) {
-      const code = `${baseCode}-${target.type}`;
-      const url = `${origin}${target.route}?ref=${encodeURIComponent(code)}`;
+    const url = `${origin}/register?ref=${encodeURIComponent(referralCode)}`;
 
-      const { data: existing } = await supabase
+    const { data: existing } = await supabase
+      .from("referral_links")
+      .select("id")
+      .eq("owner_profile_id", profileId)
+      .eq("target_type", "CUSTOMER")
+      .maybeSingle();
+
+    if (existing?.id) {
+      await supabase
         .from("referral_links")
-        .select("id")
-        .eq("owner_profile_id", profileId)
-        .eq("target_type", target.type)
-        .maybeSingle();
-
-      if (existing?.id) {
-        await supabase
-          .from("referral_links")
-          .update({
-            referral_code: code,
-            referral_url: url,
-            status: "ACTIVE",
-          })
-          .eq("id", existing.id);
-      } else {
-        await supabase.from("referral_links").insert({
-          owner_profile_id: profileId,
-          target_type: target.type,
-          referral_code: code,
+        .update({
+          referral_code: referralCode,
           referral_url: url,
           status: "ACTIVE",
-        });
-      }
+        })
+        .eq("id", existing.id);
+    } else {
+      await supabase.from("referral_links").insert({
+        owner_profile_id: profileId,
+        target_type: "CUSTOMER",
+        referral_code: referralCode,
+        referral_url: url,
+        status: "ACTIVE",
+      });
     }
   }
 
@@ -185,52 +158,71 @@ export default function ReferralsPage() {
     return { total, qualified, pending, rewards };
   }, [referrals]);
 
-  async function copyLink(value: string) {
-    await navigator.clipboard.writeText(value);
+  async function copyReferralLink() {
+    if (!link?.referral_url) {
+      setMessage("Referral link is still generating.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(link.referral_url);
     setMessage("Referral link copied.");
+  }
+
+  async function copyReferralCode() {
+    if (!profile?.referral_code) {
+      setMessage("Referral code is still generating.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(profile.referral_code);
+    setMessage("Referral code copied.");
   }
 
   async function submitReferral() {
     setMessage("");
 
-    if (!profile) return setMessage("Profile not found.");
+    if (!profile) {
+      setMessage("Profile not found.");
+      return;
+    }
 
     const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail || !cleanEmail.includes("@")) {
-      return setMessage("Enter a valid referred email.");
+      setMessage("Enter a valid referred customer email.");
+      return;
     }
 
     if (cleanEmail === (profile.email || "").toLowerCase()) {
-      return setMessage("You cannot refer your own email.");
+      setMessage("You cannot refer your own email.");
+      return;
     }
 
-    const selectedLink = links.find((item) => item.target_type === targetType);
-
     const alreadyExists = referrals.some(
-      (item) =>
-        (item.referred_email || "").toLowerCase() === cleanEmail &&
-        (item.target_type || "CUSTOMER") === targetType
+      (item) => (item.referred_email || "").toLowerCase() === cleanEmail
     );
 
     if (alreadyExists) {
-      return setMessage("This email already exists in your referral list.");
+      setMessage("This customer already exists in your referral list.");
+      return;
     }
 
     const { error } = await supabase.from("referrals").insert({
       referrer_profile_id: profile.id,
       referred_email: cleanEmail,
-      referral_code: selectedLink?.referral_code || profile.referral_code,
-      target_type: targetType,
+      referral_code: profile.referral_code,
+      target_type: "CUSTOMER",
       qualified: false,
-      reward_amount: REWARD_AMOUNT,
       status: "PENDING",
     });
 
-    if (error) return setMessage(error.message);
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
 
     setEmail("");
-    setMessage("Referral submitted. Waiting for qualification/admin approval.");
+    setMessage("Customer referral submitted. Waiting for qualification/admin approval.");
     await loadData();
   }
 
@@ -238,22 +230,25 @@ export default function ReferralsPage() {
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Referral System</p>
-          <h1>Referral Links</h1>
+          <p className="eyebrow">Agarwood Customer Referral</p>
+          <h1>Invite Customers</h1>
           <span>
-            Share registration links for customers, partners, and gardeners. Every link
-            has an automatic referral code for tracking.
+            Share your referral link with new customers. When they register using your code,
+            their signup can be tracked under your customer referral record.
           </span>
         </div>
 
         <div className="codeCard">
-          <p>Base Referral Code</p>
+          <p>Your Referral Code</p>
           <strong>{profile?.referral_code || "LOADING"}</strong>
+          <button onClick={copyReferralCode} disabled={!profile?.referral_code}>
+            Copy Code
+          </button>
         </div>
       </section>
 
       {loading ? (
-        <div className="empty">Loading referral links...</div>
+        <div className="empty">Loading customer referral data...</div>
       ) : (
         <>
           {message && <div className="message">{message}</div>}
@@ -262,122 +257,91 @@ export default function ReferralsPage() {
             <Stat label="Total Referrals" value={String(stats.total)} />
             <Stat label="Qualified" value={String(stats.qualified)} />
             <Stat label="Pending" value={String(stats.pending)} />
-            <Stat label="Rewards Earned" value={peso(stats.rewards)} good />
+            <Stat label="Rewards Recorded" value={peso(stats.rewards)} good />
           </section>
 
-          <section className="linkGrid">
-            {TARGETS.map((target) => {
-              const link = links.find((item) => item.target_type === target.type);
-              const url = link?.referral_url || "";
-              const code = link?.referral_code || "";
+          <section className="referralCard">
+            <div>
+              <p className="eyebrow">Customer Registration Link</p>
+              <h2>Send this link to new customers</h2>
+              <span>
+                This link opens the register page with your referral code already attached.
+              </span>
+            </div>
 
-              return (
-                <div className="linkCard" key={target.type}>
-                  <span>{target.type}</span>
-                  <h2>{target.title}</h2>
-                  <p>{target.text}</p>
+            <div className="urlBox">
+              <small>Referral Link</small>
+              <p>{link?.referral_url || "Generating referral link..."}</p>
+            </div>
 
-                  <div className="codeBox">
-                    <small>Referral Code</small>
-                    <strong>{code || "Generating..."}</strong>
-                  </div>
-
-                  <div className="urlBox">
-                    <small>Registration Link</small>
-                    <p>{url || "Generating link..."}</p>
-                  </div>
-
-                  <button disabled={!url} onClick={() => copyLink(url)}>
-                    Copy {target.type} Link
-                  </button>
-                </div>
-              );
-            })}
+            <button onClick={copyReferralLink} disabled={!link?.referral_url}>
+              Copy Referral Link
+            </button>
           </section>
 
           <section className="grid">
             <section className="panel">
               <PanelHead
-                title="Submit Referral Lead"
-                text="Use this when you already know the referred person's email."
+                title="Submit Customer Referral"
+                text="Use this only when you already know the referred customer's email."
               />
 
               <label>
-                Referral Type
-                <select value={targetType} onChange={(e) => setTargetType(e.target.value)}>
-                  {TARGETS.map((target) => (
-                    <option key={target.type} value={target.type}>
-                      {target.type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Referred Email
+                Referred Customer Email
                 <input
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="friend@example.com"
+                  placeholder="customer@example.com"
                 />
               </label>
 
-              <div className="rewardBox">
-                <span>Potential Reward</span>
-                <strong>{peso(REWARD_AMOUNT)}</strong>
-                <p>Reward is paid only after the referred user qualifies.</p>
-              </div>
-
-              <button onClick={submitReferral}>Submit Referral</button>
+              <button onClick={submitReferral}>Submit Customer Referral</button>
             </section>
 
             <section className="panel">
               <PanelHead
-                title="How Qualification Works"
-                text="Referral is not instantly paid. It must become qualified first."
+                title="How Customer Referral Works"
+                text="Referral tracking starts when a new customer registers using your link."
               />
 
               <div className="rule">
                 <span>1</span>
                 <div>
-                  <strong>Customer</strong>
-                  <p>Must cash in or buy at least one tree.</p>
+                  <strong>Share Link</strong>
+                  <p>Customer sends the registration link to another customer.</p>
                 </div>
               </div>
 
               <div className="rule">
                 <span>2</span>
                 <div>
-                  <strong>Partner</strong>
-                  <p>Must be approved by admin as active partner.</p>
+                  <strong>Register With Code</strong>
+                  <p>New customer registers through /register?ref=YOURCODE.</p>
                 </div>
               </div>
 
               <div className="rule">
                 <span>3</span>
                 <div>
-                  <strong>Gardener</strong>
-                  <p>Must be approved by admin before receiving work access.</p>
+                  <strong>Qualification</strong>
+                  <p>Referral becomes qualified only after valid customer activity is verified.</p>
                 </div>
               </div>
             </section>
           </section>
 
           <section className="panel history">
-            <PanelHead title="Referral History" text="Real records from referrals table." />
+            <PanelHead title="Customer Referral History" text="Real records from referrals table." />
 
             {referrals.length === 0 ? (
-              <div className="empty small">No referrals submitted yet.</div>
+              <div className="empty small">No customer referrals submitted yet.</div>
             ) : (
               <div className="list">
                 {referrals.map((item) => (
                   <div className="row" key={item.id}>
                     <div>
                       <strong>{item.referred_email || "No email"}</strong>
-                      <p>
-                        {item.target_type || "CUSTOMER"} • Code:{" "}
-                        {item.referral_code || profile?.referral_code}
-                      </p>
+                      <p>Code: {item.referral_code || profile?.referral_code || "—"}</p>
                       <small>{formatDate(item.created_at)}</small>
                     </div>
 
@@ -434,7 +398,8 @@ export default function ReferralsPage() {
           color: #101a14;
         }
 
-        .hero span {
+        .hero span,
+        .referralCard span {
           display: block;
           margin-top: 8px;
           color: #5f665e;
@@ -467,13 +432,14 @@ export default function ReferralsPage() {
           display: block;
           margin-top: 10px;
           font-size: 30px;
+          word-break: break-word;
         }
 
         .message,
         .empty,
         .stat,
         .panel,
-        .linkCard {
+        .referralCard {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
@@ -524,36 +490,22 @@ export default function ReferralsPage() {
           color: #176b3a;
         }
 
-        .linkGrid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .linkCard,
+        .referralCard,
         .panel {
           padding: 22px;
         }
 
-        .linkCard > span {
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-          font-size: 11px;
-          font-weight: 900;
-          letter-spacing: .12em;
+        .referralCard {
+          margin-bottom: 18px;
         }
 
-        .linkCard h2,
+        .referralCard h2,
         .panelHead h2 {
-          margin: 16px 0 0;
+          margin: 0;
           color: #101a14;
           font-size: 24px;
         }
 
-        .linkCard p,
         .panelHead p {
           margin: 8px 0 0;
           color: #6b6b62;
@@ -562,9 +514,7 @@ export default function ReferralsPage() {
           font-weight: 800;
         }
 
-        .codeBox,
         .urlBox,
-        .rewardBox,
         .rule {
           margin-top: 16px;
           border-radius: 18px;
@@ -573,9 +523,7 @@ export default function ReferralsPage() {
           border: 1px solid rgba(92,70,35,.08);
         }
 
-        .codeBox small,
-        .urlBox small,
-        .rewardBox span {
+        .urlBox small {
           display: block;
           color: #6b6b62;
           font-size: 11px;
@@ -584,17 +532,11 @@ export default function ReferralsPage() {
           letter-spacing: .12em;
         }
 
-        .codeBox strong,
-        .rewardBox strong {
-          display: block;
-          margin-top: 7px;
-          color: #101a14;
-          font-size: 22px;
-        }
-
         .urlBox p {
+          margin: 8px 0 0;
           word-break: break-all;
           color: #244536;
+          font-weight: 900;
         }
 
         .grid {
@@ -615,8 +557,7 @@ export default function ReferralsPage() {
           letter-spacing: .12em;
         }
 
-        input,
-        select {
+        input {
           width: 100%;
           border: 1px solid rgba(92,70,35,.14);
           border-radius: 14px;
@@ -752,7 +693,6 @@ export default function ReferralsPage() {
             flex-direction: column;
           }
 
-          .linkGrid,
           .stats {
             grid-template-columns: repeat(2, 1fr);
           }
@@ -771,7 +711,6 @@ export default function ReferralsPage() {
             font-size: 34px;
           }
 
-          .linkGrid,
           .stats,
           .row {
             grid-template-columns: 1fr;
