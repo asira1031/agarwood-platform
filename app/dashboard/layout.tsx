@@ -11,7 +11,7 @@ const sidebarItems = [
   { label: "Sell Tree", href: "/dashboard/sell-tree" },
   { label: "Wallet", href: "/dashboard/wallet" },
   { label: "Transactions", href: "/dashboard/transactions" },
-  { label: "Referrals", href: "/dashboard/referrals" }
+  { label: "Referrals", href: "/dashboard/referrals" },
   { label: "Membership", href: "/dashboard/membership" },
   { label: "Profile", href: "/dashboard/profile" },
   { label: "Settings", href: "/dashboard/settings" },
