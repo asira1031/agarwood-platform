@@ -88,8 +88,8 @@ export default function AdminDashboard() {
   ).length;
 
   return (
-    <main className="min-h-screen bg-[#071f16] text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8">
+   <main className="min-h-screen text-white p-8">
+     <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
         <div>
           <h1 className="text-4xl font-bold text-[#d9b45f]">
             Agarwood Admin Dashboard

@@ -1,43 +1,73 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+
+const adminLinks = [
+  { label: "Dashboard", href: "/admin/dashboard", icon: "🏠" },
+  { label: "Customers", href: "/admin/customers", icon: "👥" },
+  { label: "KYC Review", href: "/admin/kyc", icon: "🪪" },
+  { label: "Membership", href: "/admin/membership", icon: "💳" },
+  { label: "Wallet", href: "/admin/wallet", icon: "💰" },
+  { label: "Cash-In Approval", href: "/admin/cash-in", icon: "⬇️" },
+  { label: "Withdrawal Approval", href: "/admin/withdrawals", icon: "⬆️" },
+ { label: "Referrals", href: "/admin/referral-links", icon: "🔗" },
+{ label: "Tree Purchases", href: "/admin/tree-purchases", icon: "🌳" },
+  { label: "Sell Tree", href: "/admin/sell-tree", icon: "🤝" },
+  { label: "Tree Valuation", href: "/admin/tree-valuation", icon: "📈" },
+  { label: "Operations Queue", href: "/admin/operations", icon: "🧾" },
+  { label: "Inventory", href: "/admin/inventory", icon: "📦" },
+  { label: "Support Tickets", href: "/admin/support", icon: "🎧" },
+  { label: "Reports", href: "/admin/reports", icon: "📊" },
+  { label: "Settings", href: "/admin/settings", icon: "⚙️" },
+];
 
 export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
   const [allowed, setAllowed] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [adminEmail, setAdminEmail] = useState("");
 
   useEffect(() => {
     async function checkAccess() {
+      setChecking(true);
+
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
-      if (!user) {
+      if (userError || !user) {
         window.location.href = "/login";
         return;
       }
 
       const userEmail = user.email?.trim().toLowerCase() || "";
+      setAdminEmail(userEmail);
+
       const adminEmails = ["demo@gmail.com", "admin@test.com"];
 
       if (adminEmails.includes(userEmail)) {
         setAllowed(true);
+        setChecking(false);
         return;
       }
 
       const { data: profileById } = await supabase
         .from("profiles")
-        .select("role,email")
+        .select("id, role, email")
         .eq("id", user.id)
         .maybeSingle();
 
       const { data: profileByEmail } = await supabase
         .from("profiles")
-        .select("role,email")
+        .select("id, role, email")
         .eq("email", userEmail)
         .maybeSingle();
 
@@ -49,12 +79,18 @@ export default function AdminLayout({
       }
 
       setAllowed(true);
+      setChecking(false);
     }
 
     checkAccess();
   }, []);
 
-  if (!allowed) {
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
+  if (checking || !allowed) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#071f16] text-white">
         Checking admin access...
@@ -62,5 +98,85 @@ export default function AdminLayout({
     );
   }
 
-  return <>{children}</>;
+
+   return (
+  <div
+    className="min-h-screen text-white"
+    style={{
+      backgroundImage: "url('/images/admin-bg.jpg')",
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundAttachment: "fixed",
+    }}
+  >
+      <aside className="fixed left-0 top-0 hidden h-screen w-72 border-r border-white/10 bg-[#08291d] 85 backdrop-blur-md p-5 lg:block">
+        <div className="mb-8">
+          <div className="text-2xl font-bold text-[#f7d774]">
+            Agarwood Admin
+          </div>
+          <div className="mt-1 text-xs text-white/50">{adminEmail}</div>
+        </div>
+
+        <nav className="space-y-1">
+          {adminLinks.map((item) => {
+            const active =
+              pathname === item.href || pathname.startsWith(item.href + "/");
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
+                  active
+                    ? "bg-[#f7d774] text-[#08291d] font-semibold"
+                    : "text-white/75 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <span>{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+
+        <button
+          onClick={handleLogout}
+          className="absolute bottom-5 left-5 right-5 rounded-xl border border-white/10 px-4 py-3 text-sm text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          Logout
+        </button>
+      </aside>
+
+      <div className="lg:pl-72">
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-[#071f16]/95 px-4 py-4 backdrop-blur lg:hidden">
+          <div className="text-lg font-bold text-[#f7d774]">
+            Agarwood Admin
+          </div>
+
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+            {adminLinks.map((item) => {
+              const active =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`whitespace-nowrap rounded-full px-4 py-2 text-xs ${
+                    active
+                      ? "bg-[#f7d774] text-[#08291d] font-semibold"
+                      : "bg-white/10 text-white/75"
+                  }`}
+                >
+                  {item.icon} {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        </header>
+
+        <main className="min-h-screen p-4 lg:p-8">{children}</main>
+      </div>
+    </div>
+  );
 }

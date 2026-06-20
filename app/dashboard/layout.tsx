@@ -4,13 +4,14 @@ const sidebarItems = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "My Trees", href: "/dashboard/my-trees" },
   { label: "Tree Operations", href: "/dashboard/tree-operations" },
+  { label: "Inventory", href: "/dashboard/inventory" },
   { label: "Marketplace", href: "/dashboard/marketplace" },
   { label: "Investments", href: "/dashboard/investments" },
   { label: "Earnings", href: "/dashboard/earnings" },
   { label: "Sell Tree", href: "/dashboard/sell-tree" },
   { label: "Wallet", href: "/dashboard/wallet" },
   { label: "Transactions", href: "/dashboard/transactions" },
-  { label: "Referrals", href: "/dashboard/referrals" },
+  { label: "Referrals", href: "/dashboard//referral-links" },
   { label: "Membership", href: "/dashboard/membership" },
   { label: "Profile", href: "/dashboard/profile" },
   { label: "Settings", href: "/dashboard/settings" },
@@ -33,7 +34,7 @@ export default function DashboardLayout({
               </p>
               <h1 className="mt-2 text-2xl font-bold">Customer Portal</h1>
               <p className="mt-2 text-sm text-white/70">
-                Manage trees, care services, earnings, and membership.
+                Manage trees, inventory, care services, earnings, and membership.
               </p>
             </div>
 
