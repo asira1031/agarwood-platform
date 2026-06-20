@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 const sidebarItems = [
   { label: "Dashboard", href: "/dashboard" },
@@ -21,7 +22,7 @@ const sidebarItems = [
 export default function DashboardLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="min-h-screen bg-[#f7f3e8] text-[#1f3b2c]">
