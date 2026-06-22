@@ -125,7 +125,7 @@ export default function GardenerDashboardPage() {
       ) : (
         <>
           <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginTop: 24 }}>
-            <Card label="Gardener" value={caretaker?.full_name || "—"} />
+            <Card label="Gardener" value={caretaker?.full_name || "ï¿½"} />
             <Card label="Assigned Trees" value={String(assignments.length)} />
             <Card label="Pending Work" value={String(pendingAssignments)} />
             <Card label="Completed Tasks" value={String(completedTasks)} />
@@ -147,7 +147,7 @@ export default function GardenerDashboardPage() {
                     <div>
                       <strong>{item.assignment_type || "Tree Assignment"}</strong>
                       <p style={{ margin: "6px 0 0", color: "#667" }}>
-                        Tree: {item.tree_id || "—"}
+                        Tree: {item.tree_id || "ï¿½"}
                       </p>
                     </div>
                     <span style={badgeStyle}>{item.status || "PENDING"}</span>
