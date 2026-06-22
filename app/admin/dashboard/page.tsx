@@ -88,8 +88,18 @@ export default function AdminDashboard() {
   ).length;
 
   return (
-   <main className="min-h-screen text-white p-8">
-     <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
+    <main
+      className="min-h-screen text-white p-8"
+      style={{
+        backgroundImage:
+          "linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.70)), url('/images/agarwood-real-tree.jpg')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "fixed",
+      }}
+    >
+      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
         <div>
           <h1 className="text-4xl font-bold text-[#d9b45f]">
             Agarwood Admin Dashboard

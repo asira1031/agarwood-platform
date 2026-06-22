@@ -376,7 +376,7 @@ export default function DashboardPage() {
 
           <div className="treeVisualCard">
             <img
-            src="/images/agarwood-tree-photo.jpg"
+              src="/images/agarwood-tree-photo.jpg"
               alt="Real agarwood plant visualization"
               className="treeRealImage"
             />
@@ -562,15 +562,18 @@ export default function DashboardPage() {
           min-height: 100vh;
           padding: 26px 28px 18px;
           overflow-x: hidden;
-          background:
-            radial-gradient(circle at 20% 4%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+          background-image:
+            linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.70)),
+            url('/images/agarwood-real-tree.jpg');
+          background-size: cover;
+          background-position: center;
+          background-repeat: no-repeat;
+          background-attachment: fixed;
         }
 
         .loadingBox, .errorBox, .emptyState {
           border-radius: 16px;
-          background: rgba(255, 253, 246, .78);
+          background: rgba(255, 253, 246, .88);
           border: 1px solid rgba(92, 70, 35, .10);
           padding: 16px;
           color: #6b6255;
@@ -587,7 +590,7 @@ export default function DashboardPage() {
         .errorBox {
           margin-top: 12px;
           color: #a33c2a;
-          background: rgba(255, 235, 230, .72);
+          background: rgba(255, 235, 230, .82);
         }
 
         .header {
@@ -595,6 +598,12 @@ export default function DashboardPage() {
           justify-content: space-between;
           align-items: start;
           margin-bottom: 20px;
+          padding: 20px;
+          border-radius: 24px;
+          background: rgba(255, 253, 246, .82);
+          border: 1px solid rgba(255,255,255,.30);
+          box-shadow: 0 18px 42px rgba(0,0,0,.16);
+          backdrop-filter: blur(8px);
         }
 
         .eyebrow {
@@ -673,13 +682,14 @@ export default function DashboardPage() {
         .stat {
           min-height: 138px;
           border-radius: 20px;
-          background: rgba(255, 253, 246, .82);
-          border: 1px solid rgba(92, 70, 35, .08);
+          background: rgba(255, 253, 246, .88);
+          border: 1px solid rgba(255,255,255,.30);
           display: flex;
           align-items: center;
           gap: 19px;
           padding: 20px;
-          box-shadow: 0 18px 40px rgba(82, 60, 27, .08);
+          box-shadow: 0 18px 40px rgba(0,0,0,.16);
+          backdrop-filter: blur(8px);
         }
 
         .statIcon {
@@ -724,14 +734,15 @@ export default function DashboardPage() {
 
         .journey, .treeVisualCard, .portfolio, .panel {
           border-radius: 20px;
-          box-shadow: 0 18px 42px rgba(82, 60, 27, .09);
-          border: 1px solid rgba(92, 70, 35, .08);
+          box-shadow: 0 18px 42px rgba(0,0,0,.16);
+          border: 1px solid rgba(255,255,255,.24);
         }
 
         .journey {
-          background: rgba(255, 253, 246, .82);
+          background: rgba(255, 253, 246, .88);
           padding: 20px;
           min-height: 520px;
+          backdrop-filter: blur(8px);
         }
 
         .journey h3, .journey h4 {
@@ -914,10 +925,11 @@ export default function DashboardPage() {
         }
 
         .portfolio {
-          background: linear-gradient(145deg, #244536, #10281f);
+          background: linear-gradient(145deg, rgba(36,69,54,.94), rgba(16,40,31,.94));
           color: white;
           padding: 24px;
           min-height: 520px;
+          backdrop-filter: blur(8px);
         }
 
         .panelHead {
@@ -989,9 +1001,10 @@ export default function DashboardPage() {
         }
 
         .panel {
-          background: rgba(255, 253, 246, .86);
+          background: rgba(255, 253, 246, .88);
           padding: 22px;
           min-height: 255px;
+          backdrop-filter: blur(8px);
         }
 
         .inventory {
@@ -1187,9 +1200,11 @@ export default function DashboardPage() {
 
         footer {
           text-align: center;
-          color: #776e5f;
+          color: rgba(255,255,255,.82);
           padding: 20px 0 0;
           font-size: 14px;
+          font-weight: 800;
+          text-shadow: 0 2px 12px rgba(0,0,0,.45);
         }
 
         footer span {
