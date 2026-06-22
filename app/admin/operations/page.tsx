@@ -352,6 +352,8 @@ export default function AdminOperationsPage() {
 
     const taskType = getRequestTitle(request);
 
+    const now = new Date().toISOString();
+
     const assignmentPayload = {
       caretaker_id: caretakerId,
       customer_profile_id: request.profile_id || null,
@@ -359,8 +361,11 @@ export default function AdminOperationsPage() {
       operation_request_id: request.id,
       assignment_type: taskType,
       status: "ASSIGNED",
-      started_at: new Date().toISOString(),
+      assigned_at: now,
+      started_at: null,
+      completed_at: null,
       notes: request.notes || null,
+      created_at: now,
     };
 
     const { data: createdAssignment, error: assignmentError } = await supabase
@@ -386,6 +391,7 @@ export default function AdminOperationsPage() {
         task_type: taskType,
         notes: "Assigned from Admin Operations Center.",
         status: "ASSIGNED",
+        created_at: now,
       })
       .select("id")
       .single();
@@ -402,7 +408,12 @@ export default function AdminOperationsPage() {
 
     const { error: requestUpdateError } = await supabase
       .from("tree_operation_requests")
-      .update({ status: "ASSIGNED" })
+      .update({
+        status: "ASSIGNED",
+        caretaker_id: caretakerId,
+        assignment_status: "ASSIGNED",
+        updated_at: now,
+      })
       .eq("id", request.id);
 
     if (requestUpdateError) {
@@ -437,13 +448,20 @@ export default function AdminOperationsPage() {
 
       await supabase
         .from("caretaker_assignments")
-        .update({ status: "CANCELLED" })
+        .update({
+          status: "CANCELLED",
+          completed_at: new Date().toISOString(),
+        })
         .eq("id", assignment.id);
     }
 
     const { error } = await supabase
       .from("tree_operation_requests")
-      .update({ status: "CANCELLED" })
+      .update({
+        status: "CANCELLED",
+        assignment_status: "CANCELLED",
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", request.id);
 
     if (error) {
