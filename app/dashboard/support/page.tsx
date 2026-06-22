@@ -14,8 +14,13 @@ type SupportTicket = {
   id: string;
   customer_id: string | null;
   customer_email: string | null;
+  customer_name?: string | null;
   subject: string;
+  category?: string | null;
+  priority?: string | null;
   status: string;
+  message?: string | null;
+  admin_reply?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -101,6 +106,7 @@ function getAiAnswer(input: string) {
 export default function SupportPage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [customerName, setCustomerName] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -134,8 +140,71 @@ export default function SupportPage() {
         data: { user },
       } = await supabase.auth.getUser();
 
-      setUserId(user?.id || null);
-      setUserEmail(user?.email || null);
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const cleanEmail = user.email?.trim().toLowerCase() || "";
+
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const { data: profileByEmail } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .eq("email", cleanEmail)
+        .maybeSingle();
+
+      const profile = profileById || profileByEmail;
+
+      const activeUserId = profile?.id || user.id;
+      const activeEmail = profile?.email || cleanEmail;
+      const activeName = profile?.full_name || activeEmail || "Customer";
+
+      setUserId(activeUserId);
+      setUserEmail(activeEmail);
+      setCustomerName(activeName);
+
+      const { data: latestTicket } = await supabase
+        .from("support_tickets")
+        .select("*")
+        .eq("customer_id", activeUserId)
+        .neq("status", "CLOSED")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestTicket) {
+        setTicket(latestTicket as SupportTicket);
+        setLiveChatOpen(true);
+
+        const loadedMessages: ChatMessage[] = [
+          {
+            id: `ticket-${latestTicket.id}-customer`,
+            sender_type: "CUSTOMER",
+            message: latestTicket.message || latestTicket.subject || "Customer support request.",
+            created_at: latestTicket.created_at,
+          },
+        ];
+
+        if (latestTicket.admin_reply) {
+          loadedMessages.push({
+            id: `ticket-${latestTicket.id}-admin`,
+            sender_type: "ADMIN",
+            message: latestTicket.admin_reply,
+            created_at: latestTicket.updated_at || latestTicket.created_at,
+          });
+        }
+
+        setMessages((current) => {
+          const welcome = current.find((item) => item.id === "welcome");
+          return welcome ? [welcome, ...loadedMessages] : loadedMessages;
+        });
+      }
     }
 
     loadUser();
@@ -153,33 +222,37 @@ export default function SupportPage() {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "UPDATE",
           schema: "public",
-          table: "support_messages",
-          filter: `ticket_id=eq.${ticket.id}`,
+          table: "support_tickets",
+          filter: `id=eq.${ticket.id}`,
         },
         (payload) => {
-          const newMessage = payload.new as {
-            id: string;
-            sender_type: "CUSTOMER" | "AI" | "ADMIN" | "SYSTEM";
-            message: string;
-            created_at: string;
-          };
+          const updatedTicket = payload.new as SupportTicket;
+          setTicket(updatedTicket);
 
-          setMessages((current) => {
-            const exists = current.some((msg) => msg.id === newMessage.id);
-            if (exists) return current;
+          if (updatedTicket.admin_reply) {
+            setMessages((current) => {
+              const adminMessageId = `ticket-${updatedTicket.id}-admin`;
 
-            return [
-              ...current,
-              {
-                id: newMessage.id,
-                sender_type: newMessage.sender_type,
-                message: newMessage.message,
-                created_at: newMessage.created_at,
-              },
-            ];
-          });
+              const adminMessage: ChatMessage = {
+                id: adminMessageId,
+                sender_type: "ADMIN",
+                message: updatedTicket.admin_reply || "",
+                created_at: updatedTicket.updated_at || new Date().toISOString(),
+              };
+
+              const exists = current.some((msg) => msg.id === adminMessageId);
+
+              if (exists) {
+                return current.map((msg) =>
+                  msg.id === adminMessageId ? adminMessage : msg
+                );
+              }
+
+              return [...current, adminMessage];
+            });
+          }
         }
       )
       .subscribe();
@@ -235,29 +308,24 @@ export default function SupportPage() {
         .insert({
           customer_id: userId,
           customer_email: userEmail,
+          customer_name: customerName || userEmail || "Customer",
           subject,
+          category: "SUPPORT",
+          priority: "NORMAL",
           status: "OPEN",
+          message: messageToSend,
+          admin_reply: null,
         })
         .select("*")
         .single();
 
       if (ticketError) throw ticketError;
 
-      const { error: messageError } = await supabase
-        .from("support_messages")
-        .insert({
-          ticket_id: newTicket.id,
-          sender_type: "CUSTOMER",
-          sender_id: userId,
-          sender_email: userEmail,
-          message: messageToSend,
-        });
-
-      if (messageError) throw messageError;
-
-      setTicket(newTicket);
+      setTicket(newTicket as SupportTicket);
       setLiveChatOpen(true);
       setInput("");
+
+      addLocalMessage("CUSTOMER", messageToSend);
 
       addLocalMessage(
         "SYSTEM",
@@ -266,7 +334,7 @@ export default function SupportPage() {
     } catch (error) {
       console.error(error);
       setErrorText(
-        "Hindi nagawa yung live chat ticket. Check muna kung created na yung support_tickets at support_messages tables sa Supabase."
+        "Hindi nagawa yung live chat ticket. Check muna kung complete na yung support_tickets columns sa Supabase."
       );
     } finally {
       setLoadingTicket(false);
@@ -285,16 +353,23 @@ export default function SupportPage() {
     try {
       setErrorText("");
 
-      const { error } = await supabase.from("support_messages").insert({
-        ticket_id: ticket.id,
-        sender_type: "CUSTOMER",
-        sender_id: userId,
-        sender_email: userEmail,
-        message: text,
-      });
+      const updatedMessage = `${ticket.message || ""}\n\nCustomer follow-up (${new Date().toLocaleString("en-PH")}):\n${text}`.trim();
+
+      const { data: updatedTicket, error } = await supabase
+        .from("support_tickets")
+        .update({
+          message: updatedMessage,
+          status: "OPEN",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", ticket.id)
+        .select("*")
+        .single();
 
       if (error) throw error;
 
+      setTicket(updatedTicket as SupportTicket);
+      addLocalMessage("CUSTOMER", text);
       setInput("");
     } catch (error) {
       console.error(error);
@@ -461,7 +536,7 @@ export default function SupportPage() {
                       <strong>{ticket?.id ? ticket.id.slice(0, 8).toUpperCase() : "ACTIVE"}</strong>
                     </p>
                     <p>Status: {ticket?.status || "OPEN"}</p>
-                    <p>Admin replies will appear directly in the chat window.</p>
+                    <p>Admin reply will appear directly in the chat window once updated from the admin support page.</p>
                   </div>
                 )}
               </section>

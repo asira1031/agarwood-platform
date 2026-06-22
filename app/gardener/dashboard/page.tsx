@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 export default function GardenerDashboardPage() {
@@ -106,36 +106,60 @@ export default function GardenerDashboardPage() {
     loadData();
   }, []);
 
-  const pendingAssignments = assignments.filter(
-    (item) => (item.status || "").toUpperCase() !== "COMPLETED"
-  ).length;
+  const stats = useMemo(() => {
+    const activeJobs = assignments.filter((item) => {
+      const status = String(item.status || "ASSIGNED").toUpperCase();
+      return status !== "COMPLETED";
+    }).length;
 
-  const completedTasks = tasks.filter(
-    (item) => (item.status || "").toUpperCase() === "COMPLETED"
-  ).length;
+    const inProgress = assignments.filter(
+      (item) => String(item.status || "").toUpperCase() === "IN_PROGRESS"
+    ).length;
+
+    const completed = assignments.filter(
+      (item) => String(item.status || "").toUpperCase() === "COMPLETED"
+    ).length;
+
+    const assignedTasks = tasks.filter(
+      (item) => String(item.status || "ASSIGNED").toUpperCase() === "ASSIGNED"
+    ).length;
+
+    const completedTasks = tasks.filter(
+      (item) => String(item.status || "").toUpperCase() === "COMPLETED"
+    ).length;
+
+    return {
+      activeJobs,
+      inProgress,
+      completed,
+      assignedTasks,
+      completedTasks,
+    };
+  }, [assignments, tasks]);
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: 30,
-        backgroundImage:
-          "linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.70)), url('/images/agarwood-real-tree.jpg')",
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundRepeat: "no-repeat",
-        backgroundAttachment: "fixed",
-      }}
-    >
+    <main style={pageStyle}>
       <section style={shellStyle}>
-        <p style={eyebrowStyle}>Arganwood Field Operations</p>
+        <div style={headerStyle}>
+          <div>
+            <p style={eyebrowStyle}>Arganwood Field Operations</p>
+            <h1 style={titleStyle}>Gardener Dashboard</h1>
+            <p style={subtitleStyle}>
+              Monitor assigned trees, active jobs, task progress, GPS logs, photos,
+              health reports, and concerns.
+            </p>
+          </div>
 
-        <h1 style={titleStyle}>Gardener Dashboard</h1>
-
-        <p style={subtitleStyle}>
-          View assigned trees, field tasks, photo updates, GPS verification,
-          health reports, and concern reports.
-        </p>
+          <div style={profileCardStyle}>
+            <p style={smallLabelStyle}>Gardener</p>
+            <h3 style={{ margin: "8px 0 0", color: "#244536" }}>
+              {caretaker?.full_name || caretaker?.email || "—"}
+            </h3>
+            <p style={{ margin: "6px 0 0", color: "#667366", fontWeight: 800 }}>
+              {caretaker?.status || "ACTIVE"}
+            </p>
+          </div>
+        </div>
 
         {message && <div style={messageStyle}>{message}</div>}
 
@@ -144,41 +168,91 @@ export default function GardenerDashboardPage() {
         ) : (
           <>
             <section style={gridStyle}>
-              <Card label="Gardener" value={caretaker?.full_name || "—"} />
-              <Card label="Assigned Trees" value={String(assignments.length)} />
-              <Card label="Pending Work" value={String(pendingAssignments)} />
-              <Card label="Completed Tasks" value={String(completedTasks)} />
+              <Card label="Active Jobs" value={String(stats.activeJobs)} />
+              <Card label="In Progress" value={String(stats.inProgress)} />
+              <Card label="Completed Jobs" value={String(stats.completed)} />
+              <Card label="Assigned Tasks" value={String(stats.assignedTasks)} />
+              <Card label="Finished Tasks" value={String(stats.completedTasks)} />
               <Card label="Photo Updates" value={String(photos.length)} />
               <Card label="GPS Logs" value={String(gps.length)} />
               <Card label="Health Reports" value={String(health.length)} />
-              <Card label="Concerns" value={String(concerns.length)} />
+            </section>
+
+            <section style={twoColumnStyle}>
+              <div style={panelStyle}>
+                <h2 style={panelTitleStyle}>Latest Assigned Jobs</h2>
+
+                {assignments.length === 0 ? (
+                  <p style={emptyStyle}>No assignments yet.</p>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {assignments.slice(0, 5).map((item) => {
+                      const status = String(item.status || "ASSIGNED").toUpperCase();
+
+                      return (
+                        <div key={item.id} style={rowStyle}>
+                          <div>
+                            <strong style={{ color: "#244536" }}>
+                              {item.assignment_type || "Tree Assignment"}
+                            </strong>
+                            <p style={rowTextStyle}>Tree: {item.tree_id || "—"}</p>
+                            <p style={rowTextStyle}>
+                              Request: {item.operation_request_id || "—"}
+                            </p>
+                          </div>
+
+                          <span style={getBadgeStyle(status)}>
+                            {status.replace("_", " ")}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div style={panelStyle}>
+                <h2 style={panelTitleStyle}>Latest Tasks</h2>
+
+                {tasks.length === 0 ? (
+                  <p style={emptyStyle}>No tasks yet.</p>
+                ) : (
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {tasks.slice(0, 5).map((item) => {
+                      const status = String(item.status || "ASSIGNED").toUpperCase();
+
+                      return (
+                        <div key={item.id} style={rowStyle}>
+                          <div>
+                            <strong style={{ color: "#244536" }}>
+                              {item.task_type || "Tree Task"}
+                            </strong>
+                            <p style={rowTextStyle}>Tree: {item.tree_id || "—"}</p>
+                            <p style={rowTextStyle}>
+                              Request: {item.operation_request_id || "—"}
+                            </p>
+                          </div>
+
+                          <span style={getBadgeStyle(status)}>
+                            {status.replace("_", " ")}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </section>
 
             <section style={panelStyle}>
-              <h2 style={{ marginTop: 0, color: "#244536" }}>Latest Assignments</h2>
+              <h2 style={panelTitleStyle}>Field Activity Summary</h2>
 
-              {assignments.length === 0 ? (
-                <p style={{ color: "#667366", fontWeight: 700 }}>
-                  No assignments yet.
-                </p>
-              ) : (
-                <div style={{ display: "grid", gap: 12 }}>
-                  {assignments.slice(0, 5).map((item) => (
-                    <div key={item.id} style={rowStyle}>
-                      <div>
-                        <strong style={{ color: "#244536" }}>
-                          {item.assignment_type || "Tree Assignment"}
-                        </strong>
-                        <p style={{ margin: "6px 0 0", color: "#667366" }}>
-                          Tree: {item.tree_id || "—"}
-                        </p>
-                      </div>
-
-                      <span style={badgeStyle}>{item.status || "PENDING"}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div style={summaryGridStyle}>
+                <Summary label="Photos Uploaded" value={photos.length} />
+                <Summary label="GPS Checks" value={gps.length} />
+                <Summary label="Health Reports" value={health.length} />
+                <Summary label="Concern Reports" value={concerns.length} />
+              </div>
             </section>
           </>
         )}
@@ -196,15 +270,62 @@ function Card({ label, value }: { label: string; value: string }) {
   );
 }
 
+function Summary({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={summaryCardStyle}>
+      <p style={smallLabelStyle}>{label}</p>
+      <h3 style={{ margin: "8px 0 0", color: "#244536", fontSize: 26 }}>
+        {value}
+      </h3>
+    </div>
+  );
+}
+
+function getBadgeStyle(status: string): React.CSSProperties {
+  return {
+    height: "fit-content",
+    borderRadius: 999,
+    padding: "8px 12px",
+    background:
+      status === "COMPLETED"
+        ? "#1f6f4a"
+        : status === "IN_PROGRESS"
+        ? "#b98124"
+        : "#244536",
+    color: "white",
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+  };
+}
+
+const pageStyle: React.CSSProperties = {
+  minHeight: "100vh",
+  padding: 30,
+  backgroundImage:
+    "linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.72)), url('/images/agarwood-real-tree.jpg')",
+  backgroundSize: "cover",
+  backgroundPosition: "center",
+  backgroundRepeat: "no-repeat",
+  backgroundAttachment: "fixed",
+};
+
 const shellStyle: React.CSSProperties = {
   maxWidth: 1200,
   margin: "0 auto",
   borderRadius: 32,
   padding: 30,
-  background: "rgba(7,31,22,.74)",
+  background: "rgba(7,31,22,.78)",
   border: "1px solid rgba(255,255,255,.14)",
   boxShadow: "0 24px 80px rgba(0,0,0,.35)",
   backdropFilter: "blur(10px)",
+};
+
+const headerStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 20,
+  alignItems: "flex-start",
+  flexWrap: "wrap",
 };
 
 const eyebrowStyle: React.CSSProperties = {
@@ -245,6 +366,11 @@ const cardStyle: React.CSSProperties = {
   backdropFilter: "blur(8px)",
 };
 
+const profileCardStyle: React.CSSProperties = {
+  ...cardStyle,
+  minWidth: 260,
+};
+
 const cardLabelStyle: React.CSSProperties = {
   margin: 0,
   color: "#6b6b62",
@@ -256,14 +382,35 @@ const cardLabelStyle: React.CSSProperties = {
 
 const cardValueStyle: React.CSSProperties = {
   margin: "10px 0 0",
-  fontSize: 26,
+  fontSize: 30,
   color: "#244536",
   fontWeight: 900,
+};
+
+const smallLabelStyle: React.CSSProperties = {
+  margin: 0,
+  color: "#6b6b62",
+  fontSize: 12,
+  fontWeight: 900,
+  textTransform: "uppercase",
+  letterSpacing: ".08em",
+};
+
+const twoColumnStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 16,
+  marginTop: 24,
 };
 
 const panelStyle: React.CSSProperties = {
   ...cardStyle,
   marginTop: 24,
+};
+
+const panelTitleStyle: React.CSSProperties = {
+  marginTop: 0,
+  color: "#244536",
 };
 
 const rowStyle: React.CSSProperties = {
@@ -275,13 +422,27 @@ const rowStyle: React.CSSProperties = {
   background: "#f3ead8",
 };
 
-const badgeStyle: React.CSSProperties = {
-  height: "fit-content",
-  borderRadius: 999,
-  padding: "8px 12px",
-  background: "#244536",
-  color: "white",
-  fontWeight: 900,
+const rowTextStyle: React.CSSProperties = {
+  margin: "6px 0 0",
+  color: "#667366",
+  fontWeight: 700,
+};
+
+const emptyStyle: React.CSSProperties = {
+  color: "#667366",
+  fontWeight: 800,
+};
+
+const summaryGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 14,
+};
+
+const summaryCardStyle: React.CSSProperties = {
+  borderRadius: 18,
+  background: "#f3ead8",
+  padding: 16,
 };
 
 const messageStyle: React.CSSProperties = {

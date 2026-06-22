@@ -6,11 +6,13 @@ import { supabase } from "@/lib/supabase";
 type OperationRequest = Record<string, any>;
 type Caretaker = Record<string, any>;
 type Assignment = Record<string, any>;
+type TaskLog = Record<string, any>;
 
 export default function AdminOperationsPage() {
   const [requests, setRequests] = useState<OperationRequest[]>([]);
   const [caretakers, setCaretakers] = useState<Caretaker[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [tasks, setTasks] = useState<TaskLog[]>([]);
   const [selectedCaretaker, setSelectedCaretaker] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -54,9 +56,21 @@ export default function AdminOperationsPage() {
       return;
     }
 
+    const { data: taskRows, error: taskError } = await supabase
+      .from("caretaker_task_logs")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (taskError) {
+      setMessage(taskError.message);
+      setLoading(false);
+      return;
+    }
+
     setRequests(requestRows || []);
     setCaretakers(caretakerRows || []);
     setAssignments(assignmentRows || []);
+    setTasks(taskRows || []);
     setLoading(false);
   }
 
@@ -73,17 +87,35 @@ export default function AdminOperationsPage() {
       (item) => String(item.status || "").toUpperCase() === "ASSIGNED"
     ).length;
 
+    const inProgress = assignments.filter(
+      (item) => String(item.status || "").toUpperCase() === "IN_PROGRESS"
+    ).length;
+
     const completed = assignments.filter(
       (item) => String(item.status || "").toUpperCase() === "COMPLETED"
     ).length;
 
-    const activeCaretakers = caretakers.length;
-
-    return { pending, assigned, completed, activeCaretakers };
+    return {
+      pending,
+      assigned,
+      inProgress,
+      completed,
+      activeCaretakers: caretakers.length,
+    };
   }, [requests, assignments, caretakers]);
 
   function getAssignmentForRequest(requestId: string) {
     return assignments.find((item) => item.operation_request_id === requestId);
+  }
+
+  function getTaskForAssignment(assignmentId?: string) {
+    if (!assignmentId) return null;
+    return tasks.find((item) => item.assignment_id === assignmentId);
+  }
+
+  function getCaretakerName(caretakerId?: string) {
+    const caretaker = caretakers.find((item) => item.id === caretakerId);
+    return caretaker?.full_name || caretaker?.email || "Gardener";
   }
 
   async function assignCaretaker(request: OperationRequest) {
@@ -175,7 +207,7 @@ export default function AdminOperationsPage() {
           </h1>
 
           <p className="mt-2 text-white/70">
-            Assign customer tree operation requests to active gardeners.
+            Assign customer operation requests and monitor gardener progress.
           </p>
         </div>
 
@@ -185,10 +217,11 @@ export default function AdminOperationsPage() {
           </div>
         )}
 
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <Stat label="Pending Requests" value={stats.pending} />
-          <Stat label="Assigned Jobs" value={stats.assigned} />
-          <Stat label="Completed Jobs" value={stats.completed} />
+          <Stat label="Assigned" value={stats.assigned} />
+          <Stat label="In Progress" value={stats.inProgress} />
+          <Stat label="Completed" value={stats.completed} />
           <Stat label="Active Gardeners" value={stats.activeCaretakers} />
         </div>
 
@@ -205,9 +238,10 @@ export default function AdminOperationsPage() {
             <div className="mt-6 space-y-4">
               {requests.map((request) => {
                 const assignment = getAssignmentForRequest(request.id);
-                const assignedCaretaker = caretakers.find(
-                  (item) => item.id === assignment?.caretaker_id
-                );
+                const task = getTaskForAssignment(assignment?.id);
+                const status = String(
+                  assignment?.status || request.status || "PENDING"
+                ).toUpperCase();
 
                 return (
                   <div
@@ -215,33 +249,48 @@ export default function AdminOperationsPage() {
                     className="rounded-2xl border border-white/10 bg-[#03140f]/70 p-5"
                   >
                     <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                      <div>
+                      <div className="flex-1">
                         <p className="text-xs uppercase tracking-[0.2em] text-white/40">
                           {request.created_at
                             ? new Date(request.created_at).toLocaleString()
                             : "No date"}
                         </p>
 
-                        <h3 className="mt-2 text-xl font-bold text-white">
-                          {request.care_program_name ||
-                            request.operation_type ||
-                            "Tree Operation"}
-                        </h3>
+                        <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <h3 className="text-xl font-bold text-white">
+                            {request.care_program_name ||
+                              request.operation_type ||
+                              "Tree Operation"}
+                          </h3>
 
-                        <p className="mt-2 text-sm text-white/60">
-                          Tree: {request.tree_id || "—"}
-                        </p>
+                          <StatusBadge status={status} />
+                        </div>
 
-                        <p className="mt-1 text-sm text-white/60">
-                          Customer: {request.profile_id || "—"}
-                        </p>
+                        <div className="mt-4 grid gap-3 md:grid-cols-3">
+                          <Info label="Tree" value={request.tree_id || "—"} />
+                          <Info label="Customer" value={request.profile_id || "—"} />
+                          <Info label="Request Status" value={request.status || "PENDING"} />
+                        </div>
 
-                        <p className="mt-1 text-sm text-white/60">
-                          Request Status: {request.status || "PENDING"}
-                        </p>
+                        {assignment && (
+                          <div className="mt-4 grid gap-3 md:grid-cols-3">
+                            <Info
+                              label="Assigned Gardener"
+                              value={getCaretakerName(assignment.caretaker_id)}
+                            />
+                            <Info
+                              label="Assignment Status"
+                              value={assignment.status || "ASSIGNED"}
+                            />
+                            <Info
+                              label="Task Status"
+                              value={task?.status || "ASSIGNED"}
+                            />
+                          </div>
+                        )}
 
                         {request.notes && (
-                          <p className="mt-3 text-sm text-white/70">
+                          <p className="mt-4 rounded-xl bg-white/10 p-3 text-sm text-white/70">
                             Notes: {request.notes}
                           </p>
                         )}
@@ -252,7 +301,7 @@ export default function AdminOperationsPage() {
                           <p className="text-xs text-white/50">Gardener Assignment</p>
                           <p className="font-bold text-[#d9b45f]">
                             {assignment
-                              ? `ASSIGNED to ${assignedCaretaker?.full_name || assignedCaretaker?.email || "Gardener"}`
+                              ? `ASSIGNED to ${getCaretakerName(assignment.caretaker_id)}`
                               : "Not assigned"}
                           </p>
                         </div>
@@ -286,16 +335,10 @@ export default function AdminOperationsPage() {
                                 ? "Assigning..."
                                 : "Assign Gardener"}
                             </button>
-
-                            {caretakers.length === 0 && (
-                              <p className="text-xs text-red-200">
-                                No active gardeners found. Add one in Admin Customers first.
-                              </p>
-                            )}
                           </>
                         ) : (
                           <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-sm text-emerald-100">
-                            Assignment connected to Gardener Portal.
+                            Connected to Gardener Portal. Gardener can update status from Assigned Trees or Tasks.
                           </div>
                         )}
                       </div>
@@ -317,5 +360,31 @@ function Stat({ label, value }: { label: string; value: number }) {
       <p className="text-sm text-white/70">{label}</p>
       <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
     </div>
+  );
+}
+
+function Info({ label, value }: { label: string }) {
+  return (
+    <div className="rounded-xl bg-white/10 p-3">
+      <p className="text-xs uppercase tracking-[0.12em] text-white/40">{label}</p>
+      <p className="mt-1 break-all font-bold text-white/85">{value}</p>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const color =
+    status === "COMPLETED"
+      ? "bg-emerald-500/20 text-emerald-100 border-emerald-300/30"
+      : status === "IN_PROGRESS"
+      ? "bg-yellow-500/20 text-yellow-100 border-yellow-300/30"
+      : status === "ASSIGNED"
+      ? "bg-blue-500/20 text-blue-100 border-blue-300/30"
+      : "bg-white/10 text-white/70 border-white/10";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 text-xs font-black ${color}`}>
+      {status.replace("_", " ")}
+    </span>
   );
 }
