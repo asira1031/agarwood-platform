@@ -51,29 +51,14 @@ export default function AdminLayout({
       const userEmail = user.email?.trim().toLowerCase() || "";
       setAdminEmail(userEmail);
 
-      const adminEmails = ["demo@gmail.com", "admin@test.com"];
-
-      if (adminEmails.includes(userEmail)) {
-        setAllowed(true);
-        setChecking(false);
-        return;
-      }
-
-      const { data: profileById } = await supabase
-        .from("profiles")
-        .select("id, role, email")
-        .eq("id", user.id)
+      const { data: adminRow, error: adminError } = await supabase
+        .from("admins")
+        .select("id,email,status")
+        .eq("email", userEmail)
+        .eq("status", "ACTIVE")
         .maybeSingle();
 
-      const { data: profileByEmail } = await supabase
-        .from("profiles")
-        .select("id, role, email")
-        .ilike("email", userEmail)
-        .maybeSingle();
-
-      const profile = profileById || profileByEmail;
-
-      if (profile?.role?.trim().toUpperCase() !== "ADMIN") {
+      if (adminError || !adminRow) {
         window.location.href = "/dashboard";
         return;
       }
@@ -102,7 +87,7 @@ export default function AdminLayout({
     <div
       className="min-h-screen text-white"
       style={{
-        backgroundImage: "url('/images/admin-bg.jpg')",
+        backgroundImage: "url('/images/agarwood-real-tree.jpg')",
         backgroundSize: "cover",
         backgroundPosition: "center",
         backgroundAttachment: "fixed",
@@ -112,7 +97,7 @@ export default function AdminLayout({
         <div className="flex h-full flex-col p-5">
           <div className="mb-6 shrink-0">
             <div className="text-2xl font-bold text-[#f7d774]">
-              Agarwood Admin
+              Arganwood Admin
             </div>
             <div className="mt-1 text-xs text-white/50">{adminEmail}</div>
           </div>
@@ -139,50 +124,20 @@ export default function AdminLayout({
             })}
           </nav>
 
-          <div className="shrink-0 pt-4">
-            <button
-              onClick={handleLogout}
-              className="w-full rounded-xl border border-white/10 px-4 py-3 text-sm text-white/70 hover:bg-white/10 hover:text-white"
-            >
-              Logout
-            </button>
-          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full rounded-xl border border-white/10 px-4 py-3 text-sm text-white/70 hover:bg-white/10 hover:text-white"
+          >
+            Logout
+          </button>
         </div>
       </aside>
 
       <div className="lg:pl-72">
         <header className="sticky top-0 z-30 border-b border-white/10 bg-[#071f16]/95 px-4 py-4 backdrop-blur lg:hidden">
           <div className="text-lg font-bold text-[#f7d774]">
-            Agarwood Admin
+            Arganwood Admin
           </div>
-
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {adminLinks.map((item) => {
-              const active =
-                pathname === item.href || pathname.startsWith(item.href + "/");
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`whitespace-nowrap rounded-full px-4 py-2 text-xs ${
-                    active
-                      ? "bg-[#f7d774] text-[#08291d] font-semibold"
-                      : "bg-white/10 text-white/75"
-                  }`}
-                >
-                  {item.icon} {item.label}
-                </Link>
-              );
-            })}
-          </div>
-
-          <button
-            onClick={handleLogout}
-            className="mt-3 rounded-full border border-white/10 px-4 py-2 text-xs text-white/70"
-          >
-            Logout
-          </button>
         </header>
 
         <main className="min-h-screen p-4 lg:p-8">{children}</main>
