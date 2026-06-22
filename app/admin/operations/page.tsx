@@ -195,8 +195,8 @@ export default function AdminOperationsPage() {
   }
 
   return (
-    <main className="min-h-screen text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/75 p-8 shadow-2xl backdrop-blur-md">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
             Arganwood Admin Operations
@@ -363,11 +363,17 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function Info({ label, value }: { label: string }) {
+function Info({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+}) {
   return (
     <div className="rounded-xl bg-white/10 p-3">
       <p className="text-xs uppercase tracking-[0.12em] text-white/40">{label}</p>
-      <p className="mt-1 break-all font-bold text-white/85">{value}</p>
+      <p className="mt-1 break-all font-bold text-white/85">{value || "—"}</p>
     </div>
   );
 }
@@ -375,12 +381,12 @@ function Info({ label, value }: { label: string }) {
 function StatusBadge({ status }: { status: string }) {
   const color =
     status === "COMPLETED"
-      ? "bg-emerald-500/20 text-emerald-100 border-emerald-300/30"
+      ? "border-emerald-300/30 bg-emerald-500/20 text-emerald-100"
       : status === "IN_PROGRESS"
-      ? "bg-yellow-500/20 text-yellow-100 border-yellow-300/30"
+      ? "border-yellow-300/30 bg-yellow-500/20 text-yellow-100"
       : status === "ASSIGNED"
-      ? "bg-blue-500/20 text-blue-100 border-blue-300/30"
-      : "bg-white/10 text-white/70 border-white/10";
+      ? "border-blue-300/30 bg-blue-500/20 text-blue-100"
+      : "border-white/10 bg-white/10 text-white/70";
 
   return (
     <span className={`rounded-full border px-3 py-1 text-xs font-black ${color}`}>
