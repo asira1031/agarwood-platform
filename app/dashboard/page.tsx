@@ -221,6 +221,11 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
   const displayName = profile?.full_name || profile?.email || "Agarwood Investor";
   const initials = getInitials(displayName);
 
@@ -319,13 +324,24 @@ export default function DashboardPage() {
             >
               🔔<i>{recentActivity.length}</i>
             </Link>
+
             <Link
               href="/dashboard/tree-operations"
               className="headerIconButton"
-              title="Open tree operations messages"
+              title="Open tree operation messages"
             >
               ✉️<i>{operationRequests.length}</i>
             </Link>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="logoutButton"
+              title="Logout"
+            >
+              🚪 Logout
+            </button>
+
             <div className="topAvatar">{initials}</div>
           </div>
         </header>
@@ -383,34 +399,61 @@ export default function DashboardPage() {
           </div>
 
           <div className="treeVisualCard">
-            <img
-              src="/images/agarwood-tree-photo.jpg"
-              alt="Real agarwood plant visualization"
-              className="treeRealImage"
-            />
-
-            <div className="treeOverlay">
-              <div className="pill">☀️ Agarwood Tree Visualization</div>
-
-              <p className="growthText">
-                Morning growth guide only — not actual customer tree data.
-              </p>
-
-              <div className="progressGlass">
-                <div>
-                  <strong>Guide Stage</strong>
-                  <span>{stage}/5</span>
-                </div>
-
-                <div className="bar">
-                  <i style={{ width: `${stage * 20}%` }} />
-                </div>
-
-                <p>
-                  <b>Educational Growth Guide</b>
-                  <span>Visualization only</span>
-                </p>
+            <div className="visualTop">
+              <div>
+                <p className="visualEyebrow">🌿 Agarwood Growth Monitor</p>
+                <h3>Tree Portfolio Snapshot</h3>
+                <small>
+                  Premium dashboard visualization based on live Supabase records.
+                </small>
               </div>
+
+              <div className="visualBadge">
+                <strong>{stage}/5</strong>
+                <span>Guide Stage</span>
+              </div>
+            </div>
+
+            <div className="forestOrb">
+              <div className="orbRing">
+                <div className="orbCore">
+                  <strong>{trees.length}</strong>
+                  <span>Owned Trees</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="visualStats">
+              <div>
+                <span>GPS Verified</span>
+                <strong>
+                  {trees.length === 0 ? "No Trees" : `${gpsVerifiedCount}/${trees.length}`}
+                </strong>
+              </div>
+              <div>
+                <span>Care Status</span>
+                <strong>{careSubscription}</strong>
+              </div>
+              <div>
+                <span>Latest Added</span>
+                <strong>{formatDate(latestTreeDate)}</strong>
+              </div>
+            </div>
+
+            <div className="progressGlass">
+              <div>
+                <strong>Educational Growth Guide</strong>
+                <span>{stage * 20}%</span>
+              </div>
+
+              <div className="bar">
+                <i style={{ width: `${stage * 20}%` }} />
+              </div>
+
+              <p>
+                <b>Live portfolio data</b>
+                <span>Guide only</span>
+              </p>
             </div>
           </div>
 
@@ -581,12 +624,11 @@ export default function DashboardPage() {
 
         .loadingBox, .errorBox, .emptyState {
           border-radius: 16px;
-          background: rgba(7, 31, 22, .82);
-          border: 1px solid rgba(255, 255, 255, .18);
+          background: rgba(255, 253, 246, .88);
+          border: 1px solid rgba(92, 70, 35, .10);
           padding: 16px;
-          color: rgba(255, 255, 255, .88);
+          color: #6b6255;
           font-weight: 800;
-          backdrop-filter: blur(10px);
         }
 
         .loadingBox {
@@ -598,8 +640,8 @@ export default function DashboardPage() {
 
         .errorBox {
           margin-top: 12px;
-          color: #ffd7cc;
-          background: rgba(90, 24, 12, .78);
+          color: #a33c2a;
+          background: rgba(255, 235, 230, .82);
         }
 
         .header {
@@ -609,8 +651,8 @@ export default function DashboardPage() {
           margin-bottom: 20px;
           padding: 20px;
           border-radius: 24px;
-          background: rgba(7, 31, 22, .82);
-          border: 1px solid rgba(255,255,255,.18);
+          background: rgba(255, 253, 246, .82);
+          border: 1px solid rgba(255,255,255,.30);
           box-shadow: 0 18px 42px rgba(0,0,0,.16);
           backdrop-filter: blur(8px);
         }
@@ -618,7 +660,7 @@ export default function DashboardPage() {
         .eyebrow {
           margin: 0;
           font-weight: 900;
-          color: #d9b45f;
+          color: #6e552d;
           letter-spacing: .3px;
         }
 
@@ -627,11 +669,11 @@ export default function DashboardPage() {
           font-size: 34px;
           line-height: 1;
           letter-spacing: -1px;
-          color: #ffffff;
+          color: #101a14;
         }
 
         .header small {
-          color: rgba(255,255,255,.78);
+          color: #5f665e;
           font-size: 15px;
         }
 
@@ -643,18 +685,37 @@ export default function DashboardPage() {
 
         .headerActions .headerIconButton {
           position: relative;
+          width: 52px;
+          height: 52px;
+          border: 1px solid rgba(92, 70, 35, .08);
+          border-radius: 16px;
+          background: rgba(255, 253, 246, .72);
+          box-shadow: 0 14px 32px rgba(82, 60, 27, .08);
+          cursor: pointer;
+          font-size: 20px;
           display: grid;
           place-items: center;
           text-decoration: none;
-          color: white;
-          width: 52px;
+        }
+
+        .logoutButton {
           height: 52px;
-          border: 1px solid rgba(255, 255, 255, .18);
+          border: 1px solid rgba(92, 70, 35, .08);
           border-radius: 16px;
-          background: rgba(255, 255, 255, .12);
-          box-shadow: 0 14px 32px rgba(0, 0, 0, .18);
+          background: linear-gradient(135deg, #d9b45f, #8a6a2f);
+          color: #10281f;
+          box-shadow: 0 14px 32px rgba(82, 60, 27, .12);
           cursor: pointer;
-          font-size: 20px;
+          font-size: 14px;
+          font-weight: 900;
+          padding: 0 18px;
+          white-space: nowrap;
+        }
+
+        .logoutButton:hover,
+        .headerActions .headerIconButton:hover {
+          transform: translateY(-1px);
+          filter: brightness(1.04);
         }
 
         .headerActions i {
@@ -695,8 +756,8 @@ export default function DashboardPage() {
         .stat {
           min-height: 138px;
           border-radius: 20px;
-          background: rgba(7, 31, 22, .80);
-          border: 1px solid rgba(255,255,255,.18);
+          background: rgba(255, 253, 246, .88);
+          border: 1px solid rgba(255,255,255,.30);
           display: flex;
           align-items: center;
           gap: 19px;
@@ -723,7 +784,7 @@ export default function DashboardPage() {
         .stat p {
           margin: 0 0 8px;
           font-size: 13px;
-          color: rgba(255,255,255,.72);
+          color: #5f665e;
           font-weight: 800;
         }
 
@@ -731,11 +792,11 @@ export default function DashboardPage() {
           margin: 0 0 8px;
           font-size: 29px;
           letter-spacing: -1px;
-          color: #ffffff;
+          color: #101a14;
         }
 
         .stat small {
-          color: #d9b45f;
+          color: #6e552d;
           font-weight: 900;
         }
 
@@ -752,7 +813,7 @@ export default function DashboardPage() {
         }
 
         .journey {
-          background: rgba(7, 31, 22, .82);
+          background: rgba(255, 253, 246, .88);
           padding: 20px;
           min-height: 520px;
           backdrop-filter: blur(8px);
@@ -763,12 +824,12 @@ export default function DashboardPage() {
         }
 
         .journey h3 {
-          color: #ffffff;
+          color: #17271d;
         }
 
         .journey h4 {
           margin-top: 12px;
-          color: #d9b45f;
+          color: #8c6a3c;
           font-size: 14px;
         }
 
@@ -795,8 +856,8 @@ export default function DashboardPage() {
         .step:first-of-type:before { display: none; }
 
         .step.current {
-          background: rgba(255,255,255,.12);
-          box-shadow: inset 0 0 0 1px rgba(217,180,95,.25);
+          background: linear-gradient(90deg, #f2e4c6, #e0cfaa);
+          box-shadow: inset 0 0 0 1px rgba(140, 106, 60, .12);
         }
 
         .step span {
@@ -814,20 +875,20 @@ export default function DashboardPage() {
 
         .step div strong {
           font-size: 14px;
-          color: #ffffff;
+          color: #17271d;
         }
 
         .step div p {
           margin: 5px 0 0;
           font-size: 13px;
-          color: rgba(255,255,255,.72);
+          color: #6c675b;
         }
 
         .step div small {
           display: block;
           margin-top: 3px;
           font-size: 11px;
-          color: rgba(255,255,255,.62);
+          color: #817866;
         }
 
         .step b {
@@ -842,62 +903,178 @@ export default function DashboardPage() {
           position: relative;
           overflow: hidden;
           min-height: 520px;
-          background: #10281f;
+          padding: 24px;
+          background:
+            radial-gradient(circle at 50% 38%, rgba(217,180,95,.30), transparent 18%),
+            radial-gradient(circle at 50% 50%, rgba(103,178,70,.22), transparent 36%),
+            linear-gradient(145deg, rgba(7,31,22,.94), rgba(16,40,31,.96));
+          color: white;
         }
 
-        .treeRealImage {
-          width: 100%;
-          height: 520px;
-          object-fit: cover;
-          display: block;
-        }
-
-        .treeOverlay {
+        .treeVisualCard:before {
+          content: "";
           position: absolute;
           inset: 0;
-          padding: 24px 26px;
+          background-image:
+            linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+          background-size: 34px 34px;
+          opacity: .38;
+          pointer-events: none;
+        }
+
+        .visualTop {
+          position: relative;
+          z-index: 2;
           display: flex;
-          flex-direction: column;
+          align-items: flex-start;
           justify-content: space-between;
-          background: linear-gradient(
-            180deg,
-            rgba(5, 25, 16, .08) 0%,
-            rgba(5, 25, 16, .12) 44%,
-            rgba(5, 25, 16, .76) 100%
-          );
+          gap: 18px;
         }
 
-        .pill {
-          align-self: center;
-          padding: 10px 22px;
-          border-radius: 999px;
-          background: rgba(8, 61, 35, .94);
-          color: #fff7df;
+        .visualEyebrow {
+          margin: 0 0 8px;
+          color: #d9b45f;
+          font-size: 13px;
           font-weight: 900;
-          white-space: nowrap;
-          box-shadow: 0 14px 30px rgba(0, 0, 0, .20);
+          text-transform: uppercase;
+          letter-spacing: .7px;
         }
 
-        .growthText {
-          position: absolute;
-          top: 76px;
-          left: 0;
-          right: 0;
+        .visualTop h3 {
+          margin: 0;
+          font-size: 30px;
+          letter-spacing: -.8px;
+        }
+
+        .visualTop small {
+          display: block;
+          margin-top: 8px;
+          max-width: 430px;
+          color: rgba(255,255,255,.72);
+          line-height: 1.5;
+        }
+
+        .visualBadge {
+          width: 104px;
+          height: 104px;
+          border-radius: 26px;
+          background: rgba(255,255,255,.12);
+          border: 1px solid rgba(255,255,255,.18);
+          display: grid;
+          place-items: center;
           text-align: center;
-          color: #fffaf0;
-          z-index: 5;
+          box-shadow: inset 0 0 32px rgba(255,255,255,.06);
+          flex: 0 0 auto;
+        }
+
+        .visualBadge strong {
+          display: block;
+          font-size: 30px;
+          color: #d9b45f;
+        }
+
+        .visualBadge span {
+          display: block;
+          margin-top: -18px;
+          font-size: 11px;
+          color: rgba(255,255,255,.70);
           font-weight: 900;
-          text-shadow: 0 2px 12px rgba(0, 0, 0, .38);
+          text-transform: uppercase;
+        }
+
+        .forestOrb {
+          position: relative;
+          z-index: 2;
+          min-height: 210px;
+          display: grid;
+          place-items: center;
+          margin: 10px 0 18px;
+        }
+
+        .orbRing {
+          width: 220px;
+          height: 220px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          background:
+            conic-gradient(from 180deg, #d9b45f, #8bc34a, #244536, #d9b45f);
+          box-shadow:
+            0 0 80px rgba(139,195,74,.22),
+            inset 0 0 40px rgba(0,0,0,.22);
+          padding: 12px;
+        }
+
+        .orbCore {
+          width: 100%;
+          height: 100%;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          text-align: center;
+          background:
+            radial-gradient(circle at 35% 30%, rgba(255,255,255,.18), transparent 28%),
+            linear-gradient(145deg, #244536, #10281f);
+          border: 1px solid rgba(255,255,255,.22);
+        }
+
+        .orbCore strong {
+          display: block;
+          font-size: 52px;
+          line-height: 1;
+          color: #fff8e6;
+        }
+
+        .orbCore span {
+          display: block;
+          margin-top: -44px;
+          color: rgba(255,255,255,.72);
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .visualStats {
+          position: relative;
+          z-index: 2;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .visualStats div {
+          border-radius: 16px;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(255,255,255,.16);
+          padding: 14px;
+        }
+
+        .visualStats span {
+          display: block;
+          color: rgba(255,255,255,.64);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .4px;
+        }
+
+        .visualStats strong {
+          display: block;
+          margin-top: 7px;
+          color: #fff8e6;
+          font-size: 15px;
         }
 
         .progressGlass {
+          position: relative;
+          z-index: 2;
           padding: 18px;
           border-radius: 18px;
           color: #fff8e6;
-          background: rgba(5, 44, 24, .88);
+          background: rgba(5, 44, 24, .82);
           border: 1px solid rgba(255,255,255,.18);
           backdrop-filter: blur(13px);
-          z-index: 6;
         }
 
         .progressGlass div:first-child,
@@ -908,7 +1085,7 @@ export default function DashboardPage() {
         }
 
         .progressGlass span {
-          font-size: 34px;
+          font-size: 26px;
           font-weight: 900;
         }
 
@@ -1014,8 +1191,7 @@ export default function DashboardPage() {
         }
 
         .panel {
-          background: rgba(7, 31, 22, .82);
-          color: white;
+          background: rgba(255, 253, 246, .88);
           padding: 22px;
           min-height: 255px;
           backdrop-filter: blur(8px);
@@ -1054,7 +1230,7 @@ export default function DashboardPage() {
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: rgba(255,255,255,.16);
+          background: #efe3cc;
         }
 
         .inventoryRow strong {
@@ -1064,11 +1240,11 @@ export default function DashboardPage() {
         .inventoryRow p {
           margin: 3px 0 0;
           font-size: 11px;
-          color: rgba(255,255,255,.68);
+          color: #666;
         }
 
         .inventoryRow.warn b {
-          color: #ffd36b;
+          color: #a66c22;
         }
 
         .inventory small {
@@ -1081,7 +1257,7 @@ export default function DashboardPage() {
 
         .taskIntro {
           margin: 12px 0 0;
-          color: rgba(255,255,255,.72);
+          color: #5c6259;
           font-size: 13px;
           line-height: 1.5;
         }
@@ -1099,7 +1275,7 @@ export default function DashboardPage() {
           gap: 10px;
           padding: 11px;
           border-radius: 14px;
-          background: rgba(255,255,255,.12);
+          background: #f3ead8;
           border: 1px solid rgba(92, 70, 35, .06);
         }
 
@@ -1107,7 +1283,7 @@ export default function DashboardPage() {
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: rgba(255,255,255,.16);
+          background: #efe3cc;
           display: grid;
           place-items: center;
         }
@@ -1120,17 +1296,17 @@ export default function DashboardPage() {
         .taskOrder p {
           margin: 3px 0 0;
           font-size: 12px;
-          color: rgba(255,255,255,.68);
+          color: #6b6b62;
         }
 
         .taskOrder b {
           font-size: 11px;
-          color: rgba(255,255,255,.68);
+          color: #6b6b62;
           text-align: right;
         }
 
         .taskOrder.covered b {
-          color: #d9b45f;
+          color: #31553d;
         }
 
         .taskCode {
@@ -1138,7 +1314,7 @@ export default function DashboardPage() {
           margin-bottom: 3px;
           font-size: 10px;
           font-weight: 900;
-          color: #d9b45f;
+          color: #8c6a3c;
           letter-spacing: .6px;
         }
 
@@ -1185,7 +1361,7 @@ export default function DashboardPage() {
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: rgba(255,255,255,.16);
+          background: #efe3cc;
         }
 
         .activityRow strong {
@@ -1195,21 +1371,21 @@ export default function DashboardPage() {
         .activityRow p {
           margin: 4px 0 0;
           font-size: 12px;
-          color: rgba(255,255,255,.68);
+          color: #6b6b62;
         }
 
         .activityRow b {
-          color: #d9b45f;
+          color: #31553d;
           font-size: 13px;
           text-align: right;
         }
 
         .activityRow.danger b {
-          color: #ff9b8e;
+          color: #a33c2a;
         }
 
         .activityRow.warning b {
-          color: #ffd36b;
+          color: #a66c22;
         }
 
         footer {
@@ -1238,6 +1414,9 @@ export default function DashboardPage() {
           .mainGrid, .stats { grid-template-columns: 1fr; }
           .inventory, .taskOrders, .activity { grid-column: 1; }
           .header { flex-direction: column; gap: 20px; }
+          .headerActions { flex-wrap: wrap; }
+          .logoutButton { width: auto; }
+          .visualStats { grid-template-columns: 1fr; }
         }
       `}</style>
     </main>
