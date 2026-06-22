@@ -162,45 +162,19 @@ export default function TreeOperationsPage() {
     amount: number,
     description: string
   ) {
-    const basePayload = {
+    const referenceNo = `AUTO-RENEW-${Date.now()}`;
+
+    const { error } = await supabase.from("wallet_transactions").insert({
       profile_id: currentProfile.id,
-      wallet_id: walletId ?? null,
-      amount: -Math.abs(amount),
-      type: "DEBIT",
       transaction_type: "DEBIT",
+      amount: Math.abs(amount),
+      reference_no: referenceNo,
       description,
       status: "COMPLETED",
-    };
+      created_at: new Date().toISOString(),
+    });
 
-    const positiveAmountPayload = {
-      ...basePayload,
-      amount: Math.abs(amount),
-    };
-
-    const payloadAttempts: Array<typeof basePayload & { category?: string }> = [
-      {
-        ...basePayload,
-        category: "TREE_CARE_PROGRAM_AUTO_RENEW",
-      },
-      {
-        ...basePayload,
-      },
-      {
-        ...positiveAmountPayload,
-      },
-    ];
-
-    let lastError = "Auto-renew wallet transaction failed.";
-
-    for (const payload of payloadAttempts) {
-      const { error } = await supabase.from("wallet_transactions").insert(payload);
-
-      if (!error) return;
-
-      lastError = error.message;
-    }
-
-    throw new Error(lastError);
+    if (error) throw error;
   }
 
   async function createAutoRenewLog(
@@ -688,46 +662,19 @@ export default function TreeOperationsPage() {
     if (!profile) throw new Error("Profile not found.");
 
     const description = `${actionLabel}: ${operation?.name || "Tree Care Program"} for ${treeLabel}`;
+    const referenceNo = `CARE-${Date.now()}`;
 
-    const basePayload = {
+    const { error } = await supabase.from("wallet_transactions").insert({
       profile_id: profile.id,
-      wallet_id: wallet?.id ?? null,
-      amount: -Math.abs(amount),
-      type: "DEBIT",
       transaction_type: "DEBIT",
+      amount: Math.abs(amount),
+      reference_no: referenceNo,
       description,
       status: "COMPLETED",
-    };
+      created_at: new Date().toISOString(),
+    });
 
-    const positiveAmountPayload = {
-      ...basePayload,
-      amount: Math.abs(amount),
-    };
-
-    const payloadAttempts: Array<typeof basePayload & { category?: string }> = [
-      {
-        ...basePayload,
-        category: "TREE_CARE_PROGRAM",
-      },
-      {
-        ...basePayload,
-      },
-      {
-        ...positiveAmountPayload,
-      },
-    ];
-
-    let lastError = "Wallet transaction failed.";
-
-    for (const payload of payloadAttempts) {
-      const { error } = await supabase.from("wallet_transactions").insert(payload);
-
-      if (!error) return;
-
-      lastError = error.message;
-    }
-
-    throw new Error(lastError);
+    if (error) throw error;
   }
 
   async function createWalletTransactionLog(args: {
@@ -740,40 +687,19 @@ export default function TreeOperationsPage() {
     if (!profile) throw new Error("Profile not found.");
 
     const isDebit = args.amount < 0;
-    const basePayload = {
+    const referenceNo = args.referenceId || `${args.transactionType}-${Date.now()}`;
+
+    const { error } = await supabase.from("wallet_transactions").insert({
       profile_id: profile.id,
-      wallet_id: wallet?.id ?? null,
-      amount: args.amount,
-      type: isDebit ? "DEBIT" : "CREDIT",
-      transaction_type: args.transactionType,
+      transaction_type: isDebit ? "DEBIT" : "CREDIT",
+      amount: Math.abs(args.amount),
+      reference_no: referenceNo,
       description: args.description,
       status: "COMPLETED",
-      reference_id: args.referenceId || null,
-      reference_no: args.referenceId || null,
-    };
+      created_at: new Date().toISOString(),
+    });
 
-    const payloadAttempts: any[] = [
-      { ...basePayload, category: args.category || args.transactionType },
-      { ...basePayload },
-      {
-        profile_id: profile.id,
-        amount: Math.abs(args.amount),
-        type: isDebit ? "DEBIT" : "CREDIT",
-        transaction_type: args.transactionType,
-        description: args.description,
-        status: "COMPLETED",
-      },
-    ];
-
-    let lastError = "Wallet transaction log failed.";
-
-    for (const payload of payloadAttempts) {
-      const { error } = await supabase.from("wallet_transactions").insert(payload);
-      if (!error) return;
-      lastError = error.message;
-    }
-
-    throw new Error(lastError);
+    if (error) throw error;
   }
 
   async function deductServiceWallet(amount: number) {
