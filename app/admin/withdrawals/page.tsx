@@ -28,14 +28,16 @@ type WalletRow = {
   created_at: string | null;
 };
 
+type TabKey = "PENDING" | "PROCESSING" | "PAID" | "REJECTED" | "ALL";
+
 export default function AdminWithdrawalsPage() {
   const [requests, setRequests] = useState<WithdrawalRequest[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [wallets, setWallets] = useState<WalletRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
-  const [errorText, setErrorText] = useState("");
-  const [filter, setFilter] = useState("PENDING");
+  const [message, setMessage] = useState("");
+  const [tab, setTab] = useState<TabKey>("PENDING");
 
   useEffect(() => {
     loadData();
@@ -43,7 +45,7 @@ export default function AdminWithdrawalsPage() {
 
   async function loadData() {
     setLoading(true);
-    setErrorText("");
+    setMessage("");
 
     const { data: requestRows, error: requestError } = await supabase
       .from("withdrawal_requests")
@@ -53,7 +55,7 @@ export default function AdminWithdrawalsPage() {
       .order("created_at", { ascending: false });
 
     if (requestError) {
-      setErrorText(requestError.message);
+      setMessage(requestError.message);
       setRequests([]);
       setLoading(false);
       return;
@@ -73,7 +75,7 @@ export default function AdminWithdrawalsPage() {
         .in("id", profileIds);
 
       if (profileError) {
-        setErrorText(profileError.message);
+        setMessage(profileError.message);
       } else {
         profileRows = (profileData || []) as ProfileRow[];
       }
@@ -85,7 +87,7 @@ export default function AdminWithdrawalsPage() {
         .order("created_at", { ascending: false });
 
       if (walletError) {
-        setErrorText(walletError.message);
+        setMessage(walletError.message);
       } else {
         walletRows = (walletData || []) as WalletRow[];
       }
@@ -97,29 +99,60 @@ export default function AdminWithdrawalsPage() {
     setLoading(false);
   }
 
-  const filteredRequests = useMemo(() => {
-    if (filter === "ALL") return requests;
+  function normalizeStatus(value: string | null) {
+    const status = String(value || "PENDING").toUpperCase();
 
-    return requests.filter(
-      (request) => (request.status || "").toUpperCase() === filter
-    );
-  }, [requests, filter]);
+    if (status === "APPROVED") return "PROCESSING";
+    if (status === "COMPLETED") return "PAID";
 
-  const pendingCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "PENDING"
-  ).length;
+    return status;
+  }
 
-  const approvedCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "APPROVED"
-  ).length;
+  const pendingRequests = useMemo(
+    () => requests.filter((item) => normalizeStatus(item.status) === "PENDING"),
+    [requests]
+  );
 
-  const rejectedCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "REJECTED"
-  ).length;
+  const processingRequests = useMemo(
+    () =>
+      requests.filter(
+        (item) => normalizeStatus(item.status) === "PROCESSING"
+      ),
+    [requests]
+  );
 
-  const totalPendingAmount = requests
-    .filter((request) => (request.status || "").toUpperCase() === "PENDING")
-    .reduce((sum, request) => sum + Number(request.amount || 0), 0);
+  const paidRequests = useMemo(
+    () => requests.filter((item) => normalizeStatus(item.status) === "PAID"),
+    [requests]
+  );
+
+  const rejectedRequests = useMemo(
+    () => requests.filter((item) => normalizeStatus(item.status) === "REJECTED"),
+    [requests]
+  );
+
+  const activeRequests = useMemo(() => {
+    if (tab === "PENDING") return pendingRequests;
+    if (tab === "PROCESSING") return processingRequests;
+    if (tab === "PAID") return paidRequests;
+    if (tab === "REJECTED") return rejectedRequests;
+    return requests;
+  }, [tab, requests, pendingRequests, processingRequests, paidRequests, rejectedRequests]);
+
+  const totalPendingAmount = pendingRequests.reduce(
+    (sum, request) => sum + Number(request.amount || 0),
+    0
+  );
+
+  const totalProcessingAmount = processingRequests.reduce(
+    (sum, request) => sum + Number(request.amount || 0),
+    0
+  );
+
+  const totalPaidAmount = paidRequests.reduce(
+    (sum, request) => sum + Number(request.amount || 0),
+    0
+  );
 
   function getProfile(profileId: string | null) {
     return profiles.find((profile) => profile.id === profileId) || null;
@@ -139,7 +172,7 @@ export default function AdminWithdrawalsPage() {
   function formatDate(dateValue: string | null) {
     if (!dateValue) return "—";
 
-    return new Date(dateValue).toLocaleString("en-US", {
+    return new Date(dateValue).toLocaleString("en-PH", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -149,46 +182,116 @@ export default function AdminWithdrawalsPage() {
   }
 
   function badgeClass(value: string | null) {
-    const status = (value || "UNKNOWN").toUpperCase();
+    const status = normalizeStatus(value);
 
-    if (status === "APPROVED" || status === "COMPLETED" || status === "PAID") {
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
+    if (status === "PAID") {
+      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
+    }
+
+    if (status === "PROCESSING") {
+      return "border-blue-400/30 bg-blue-500/20 text-blue-200";
     }
 
     if (status === "PENDING") {
-      return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
+      return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
     }
 
     if (status === "REJECTED" || status === "FAILED") {
-      return "bg-red-500/20 text-red-200 border-red-400/30";
+      return "border-red-400/30 bg-red-500/20 text-red-200";
     }
 
-    return "bg-white/10 text-white/60 border-white/10";
+    return "border-white/10 bg-white/10 text-white/60";
   }
 
-  async function approveWithdrawal(request: WithdrawalRequest) {
+  async function markProcessing(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
 
     const amount = Number(request.amount || 0);
 
     if (amount <= 0) {
-      setErrorText("Invalid withdrawal amount.");
+      setMessage("Invalid withdrawal amount.");
+      return;
+    }
+
+    if (!request.account_name || !request.account_number || !request.payout_method) {
+      setMessage("Payout method, account name, and account number are required before processing.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Approve withdrawal of ${formatMoney(amount)}? This will mark the payout as approved and record a wallet transaction.`
+      `Move withdrawal of ${formatMoney(amount)} to PROCESSING?`
     );
 
     if (!confirmed) return;
 
     setActionLoading(request.id);
-    setErrorText("");
+    setMessage("");
+
+    const { error: requestError } = await supabase
+      .from("withdrawal_requests")
+      .update({
+        status: "PROCESSING",
+        notes:
+          request.notes ||
+          "Withdrawal verified by admin and moved to processing.",
+      })
+      .eq("id", request.id);
+
+    if (requestError) {
+      setMessage(requestError.message);
+      setActionLoading("");
+      return;
+    }
+
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: "WITHDRAWAL_PROCESSING",
+      amount: 0,
+      reference_no: request.id,
+      status: "PROCESSING",
+      description: `Withdrawal processing via ${
+        request.payout_method || "payout method"
+      }. Account: ${request.account_name || "N/A"} - ${
+        request.account_number || "N/A"
+      }.`,
+    });
+
+    if (txError) {
+      setMessage(`Moved to processing, but transaction log failed: ${txError.message}`);
+      setActionLoading("");
+      await loadData();
+      return;
+    }
+
+    setMessage("Withdrawal moved to PROCESSING.");
+    setActionLoading("");
+    await loadData();
+    setTab("PROCESSING");
+  }
+
+  async function markPaid(request: WithdrawalRequest) {
+    if (!request.id || !request.profile_id) return;
+
+    const amount = Number(request.amount || 0);
+
+    if (amount <= 0) {
+      setMessage("Invalid withdrawal amount.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Mark this payout as PAID? Confirm that money was already sent to the customer's account.`
+    );
+
+    if (!confirmed) return;
+
+    setActionLoading(request.id);
+    setMessage("");
 
     const wallet = getLatestWallet(request.profile_id);
 
     if (!wallet) {
-      setErrorText("Wallet not found for this customer.");
+      setMessage("Wallet not found for this customer.");
       setActionLoading("");
       return;
     }
@@ -196,7 +299,7 @@ export default function AdminWithdrawalsPage() {
     const currentBalance = Number(wallet.balance || 0);
 
     if (currentBalance < amount) {
-      setErrorText("Insufficient wallet balance for this withdrawal.");
+      setMessage("Insufficient wallet balance for this withdrawal.");
       setActionLoading("");
       return;
     }
@@ -211,7 +314,7 @@ export default function AdminWithdrawalsPage() {
       .eq("id", wallet.id);
 
     if (walletError) {
-      setErrorText(walletError.message);
+      setMessage(walletError.message);
       setActionLoading("");
       return;
     }
@@ -219,113 +322,160 @@ export default function AdminWithdrawalsPage() {
     const { error: requestError } = await supabase
       .from("withdrawal_requests")
       .update({
-        status: "APPROVED",
+        status: "PAID",
+        notes:
+          request.notes ||
+          "Payout completed by admin. Money was sent to destination account.",
       })
       .eq("id", request.id);
 
     if (requestError) {
-      setErrorText(requestError.message);
+      setMessage(requestError.message);
       setActionLoading("");
       return;
     }
 
-    const { error: transactionError } = await supabase
-      .from("wallet_transactions")
-      .insert({
-        profile_id: request.profile_id,
-        wallet_id: wallet.id,
-        type: "WITHDRAWAL",
-        amount: -amount,
-        status: "APPROVED",
-        description: `Withdrawal approved via ${request.payout_method || "payout method"}`,
-      });
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: "WITHDRAWAL_PAID",
+      amount: -Math.abs(amount),
+      reference_no: request.id,
+      status: "PAID",
+      description: `Withdrawal paid via ${
+        request.payout_method || "payout method"
+      }. Account: ${request.account_name || "N/A"} - ${
+        request.account_number || "N/A"
+      }.`,
+    });
 
-    if (transactionError) {
-      setErrorText(transactionError.message);
+    if (txError) {
+      setMessage(`Wallet deducted, but transaction log failed: ${txError.message}`);
       setActionLoading("");
+      await loadData();
       return;
     }
 
-    await loadData();
+    setMessage("Withdrawal marked as PAID. Wallet deducted and transaction recorded.");
     setActionLoading("");
+    await loadData();
+    setTab("PAID");
   }
 
   async function rejectWithdrawal(request: WithdrawalRequest) {
-    if (!request.id) return;
+    if (!request.id || !request.profile_id) return;
 
     const confirmed = window.confirm("Reject this withdrawal request?");
     if (!confirmed) return;
 
     setActionLoading(request.id);
-    setErrorText("");
+    setMessage("");
 
-    const { error } = await supabase
+    const { error: requestError } = await supabase
       .from("withdrawal_requests")
       .update({
         status: "REJECTED",
+        notes: request.notes || "Withdrawal rejected by admin.",
       })
       .eq("id", request.id);
 
-    if (error) {
-      setErrorText(error.message);
+    if (requestError) {
+      setMessage(requestError.message);
       setActionLoading("");
       return;
     }
 
-    await loadData();
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: "WITHDRAWAL_REJECTED",
+      amount: 0,
+      reference_no: request.id,
+      status: "REJECTED",
+      description: `Withdrawal rejected. Amount: ${formatMoney(
+        Number(request.amount || 0)
+      )}.`,
+    });
+
+    if (txError) {
+      setMessage(`Rejected, but transaction log failed: ${txError.message}`);
+      setActionLoading("");
+      await loadData();
+      return;
+    }
+
+    setMessage("Withdrawal rejected and moved to rejected history.");
     setActionLoading("");
+    await loadData();
+    setTab("REJECTED");
   }
 
   return (
-    <main className="min-h-screen text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
               Admin Finance Center
             </p>
+
             <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Withdrawal Approval
+              Payout Queue / Withdrawals
             </h1>
+
             <p className="mt-2 text-white/70">
-              Review customer payout requests, verify destination accounts, and approve wallet deductions.
+              Review customer withdrawal requests, verify account details, move
+              to processing, then mark as paid after sending money.
             </p>
           </div>
 
           <button
             onClick={loadData}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25"
+            disabled={loading}
+            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
           >
-            Refresh Withdrawals
+            {loading ? "Refreshing..." : "Refresh Withdrawals"}
           </button>
         </div>
 
-        {errorText && (
-          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">
-            {errorText}
+        {message && (
+          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
+            {message}
           </div>
         )}
 
-        <section className="grid gap-4 md:grid-cols-4">
-          <StatCard label="Pending Requests" value={String(pendingCount)} />
-          <StatCard label="Approved Requests" value={String(approvedCount)} />
-          <StatCard label="Rejected Requests" value={String(rejectedCount)} />
+        <section className="grid gap-4 md:grid-cols-5">
+          <StatCard label="Pending" value={String(pendingRequests.length)} />
+          <StatCard label="Processing" value={String(processingRequests.length)} />
+          <StatCard label="Paid" value={String(paidRequests.length)} />
+          <StatCard label="Rejected" value={String(rejectedRequests.length)} />
           <StatCard label="Pending Amount" value={formatMoney(totalPendingAmount)} />
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2">
+          <StatCard label="Processing Amount" value={formatMoney(totalProcessingAmount)} />
+          <StatCard label="Total Paid" value={formatMoney(totalPaidAmount)} />
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
           <div className="flex flex-wrap gap-3">
-            {["PENDING", "APPROVED", "REJECTED", "ALL"].map((item) => (
+            {["PENDING", "PROCESSING", "PAID", "REJECTED", "ALL"].map((item) => (
               <button
                 key={item}
-                onClick={() => setFilter(item)}
+                onClick={() => setTab(item as TabKey)}
                 className={`rounded-full px-5 py-3 text-sm font-bold transition ${
-                  filter === item
+                  tab === item
                     ? "bg-[#f7d774] text-[#071f16]"
                     : "bg-white/10 text-white hover:bg-white/15"
                 }`}
               >
-                {item}
+                {item === "PENDING"
+                  ? "Pending Queue"
+                  : item === "PROCESSING"
+                  ? "Processing"
+                  : item === "PAID"
+                  ? "Paid History"
+                  : item === "REJECTED"
+                  ? "Rejected History"
+                  : "All Records"}
               </button>
             ))}
           </div>
@@ -334,11 +484,11 @@ export default function AdminWithdrawalsPage() {
         <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
           {loading ? (
             <div className="p-8 text-white/70">Loading withdrawal requests...</div>
-          ) : filteredRequests.length === 0 ? (
-            <div className="p-8 text-white/70">No withdrawal requests found.</div>
+          ) : activeRequests.length === 0 ? (
+            <div className="p-8 text-white/70">No withdrawal requests in this tab.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1200px] text-left text-sm">
+              <table className="w-full min-w-[1250px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
@@ -348,16 +498,16 @@ export default function AdminWithdrawalsPage() {
                     <th className="px-5 py-4">Account Details</th>
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4">Created</th>
+                    <th className="px-5 py-4">Notes</th>
                     <th className="px-5 py-4">Action</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {filteredRequests.map((request) => {
+                  {activeRequests.map((request) => {
                     const profile = getProfile(request.profile_id);
                     const wallet = getLatestWallet(request.profile_id);
-                    const isPending =
-                      (request.status || "").toUpperCase() === "PENDING";
+                    const status = normalizeStatus(request.status);
 
                     return (
                       <tr
@@ -400,7 +550,7 @@ export default function AdminWithdrawalsPage() {
                               request.status
                             )}`}
                           >
-                            {(request.status || "UNKNOWN").toUpperCase()}
+                            {status}
                           </span>
                         </td>
 
@@ -408,15 +558,19 @@ export default function AdminWithdrawalsPage() {
                           {formatDate(request.created_at)}
                         </td>
 
+                        <td className="px-5 py-4 text-white/60">
+                          {request.notes || "—"}
+                        </td>
+
                         <td className="px-5 py-4">
-                          {isPending ? (
-                            <div className="flex gap-2">
+                          {status === "PENDING" && (
+                            <div className="flex flex-wrap gap-2">
                               <button
-                                onClick={() => approveWithdrawal(request)}
+                                onClick={() => markProcessing(request)}
                                 disabled={actionLoading === request.id}
-                                className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
+                                className="rounded-xl bg-blue-500/20 px-4 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
                               >
-                                Approve
+                                Processing
                               </button>
 
                               <button
@@ -427,7 +581,29 @@ export default function AdminWithdrawalsPage() {
                                 Reject
                               </button>
                             </div>
-                          ) : (
+                          )}
+
+                          {status === "PROCESSING" && (
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                onClick={() => markPaid(request)}
+                                disabled={actionLoading === request.id}
+                                className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
+                              >
+                                Mark Paid
+                              </button>
+
+                              <button
+                                onClick={() => rejectWithdrawal(request)}
+                                disabled={actionLoading === request.id}
+                                className="rounded-xl bg-red-500/20 px-4 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+
+                          {["PAID", "REJECTED"].includes(status) && (
                             <span className="text-xs text-white/50">
                               Completed
                             </span>
@@ -450,7 +626,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
       <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
+      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type ProductType = "TREE" | "PACKAGE" | "SUPPLY";
+type ProductType = "TREE" | "TREE_PACKAGE" | "CARE_PACKAGE" | "SUPPLY";
 
 type SupplyCategory =
   | "All Supplies"
@@ -605,22 +605,31 @@ export default function MarketplacePage() {
   const stats = useMemo(() => {
     return {
       trees: preparedProducts.filter((p) => getProductType(p) === "TREE").length,
-      packages: preparedProducts.filter((p) => getProductType(p) === "PACKAGE").length,
-      supplies: preparedProducts.filter((p) => getProductType(p) === "SUPPLY").length,
+      treePackages: preparedProducts.filter((p) => getProductType(p) === "PACKAGE").length,
+      carePackages: preparedProducts.filter((p) => normalizeSupplyCategory(p.category) === "Tree Care Programs").length,
+      supplies: preparedProducts.filter(
+        (p) => getProductType(p) === "SUPPLY" && normalizeSupplyCategory(p.category) !== "Tree Care Programs"
+      ).length,
     };
   }, [preparedProducts]);
 
   const filteredProducts = useMemo(() => {
     return preparedProducts.filter((product) => {
       const type = getProductType(product);
+      const category = normalizeSupplyCategory(product.category);
 
-      if (type !== activeTab) return false;
+      if (activeTab === "TREE") return type === "TREE";
+      if (activeTab === "TREE_PACKAGE") return type === "PACKAGE";
+      if (activeTab === "CARE_PACKAGE") return category === "Tree Care Programs";
 
-      if (activeTab !== "SUPPLY") return true;
+      if (activeTab === "SUPPLY") {
+        if (type !== "SUPPLY") return false;
+        if (category === "Tree Care Programs") return false;
+        if (activeSupplyCategory === "All Supplies") return true;
+        return category === activeSupplyCategory;
+      }
 
-      if (activeSupplyCategory === "All Supplies") return true;
-
-      return normalizeSupplyCategory(product.category) === activeSupplyCategory;
+      return false;
     });
   }, [preparedProducts, activeTab, activeSupplyCategory]);
 
@@ -675,6 +684,39 @@ export default function MarketplacePage() {
 
     await supabase.from("wallets").update({ balance: previousBalance }).eq("id", wallet.id);
     setWallet({ ...wallet, balance: previousBalance });
+  }
+
+  async function createMarketplaceWalletTransaction(product: MarketplaceProduct, amount: number, productType: ProductType) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const description = `Marketplace purchase: ${product.name || "Product"}`;
+
+    const basePayload = {
+      profile_id: profile.id,
+      wallet_id: wallet?.id ?? null,
+      amount: -Math.abs(amount),
+      type: "DEBIT",
+      transaction_type: "DEBIT",
+      description,
+      status: "COMPLETED",
+      reference_id: product.id,
+    };
+
+    const attempts: Array<typeof basePayload & { category?: string }> = [
+      { ...basePayload, category: `MARKETPLACE_${productType}` },
+      { ...basePayload },
+      { ...basePayload, amount: Math.abs(amount) },
+    ];
+
+    let lastError = "Marketplace wallet transaction failed.";
+
+    for (const payload of attempts) {
+      const { error } = await supabase.from("wallet_transactions").insert(payload);
+      if (!error) return;
+      lastError = error.message;
+    }
+
+    throw new Error(lastError);
   }
 
   async function addInventoryStock(product: MarketplaceProduct, quantity: number) {
@@ -799,19 +841,22 @@ export default function MarketplacePage() {
 
       if (productType === "SUPPLY") {
         await addInventoryStock(product, 1);
-        setMessage(`${product.name || "Supply"} purchased. Wallet deducted and inventory stock added.`);
+        await createMarketplaceWalletTransaction(product, price, "SUPPLY");
+        setMessage(`${product.name || "Supply"} purchased. Wallet deducted, transaction recorded, and inventory stock added.`);
       }
 
       if (productType === "TREE") {
         await addTreesFromProduct(product, 1);
-        setMessage(`${product.name || "Tree"} purchased. Wallet deducted and tree added.`);
+        await createMarketplaceWalletTransaction(product, price, "TREE");
+        setMessage(`${product.name || "Tree"} purchased. Wallet deducted, transaction recorded, and tree added.`);
       }
 
       if (productType === "PACKAGE") {
         const quantity = getPurchaseQuantity(product);
         await addTreesFromProduct(product, quantity);
         await addStarterStock(product);
-        setMessage(`${product.name || "Package"} purchased. Wallet deducted, ${quantity} trees added, and starter stock added to inventory.`);
+        await createMarketplaceWalletTransaction(product, price, "TREE_PACKAGE");
+        setMessage(`${product.name || "Tree Package"} purchased. Wallet deducted, transaction recorded, ${quantity} trees added, and starter stock added to inventory.`);
       }
 
       closeModal();
@@ -840,10 +885,10 @@ export default function MarketplacePage() {
           </Link>
 
           <p className="eyebrow">Agarwood Marketplace V5</p>
-          <h1>Buy Trees, Packages & Supplies</h1>
+          <h1>Buy Trees, Tree Packages, Care Packages & Supplies</h1>
           <span>
-            Choose agarwood planting products, package bundles, and care supplies.
-            Step 7 is active: Buy Supplies deducts wallet and adds inventory, Buy Trees deducts wallet and adds trees, and Buy Packages deducts wallet, adds trees, and adds starter stock.
+            Choose Arganwood planting products, tree bundles, care packages, and care supplies.
+            Marketplace purchases now deduct wallet, record wallet_transactions, and sync inventory or trees.
           </span>
         </div>
 
@@ -869,13 +914,24 @@ export default function MarketplacePage() {
         </button>
 
         <button
-          className={activeTab === "PACKAGE" ? "active" : ""}
-          onClick={() => setActiveTab("PACKAGE")}
+          className={activeTab === "TREE_PACKAGE" ? "active" : ""}
+          onClick={() => setActiveTab("TREE_PACKAGE")}
         >
           <span className="tabIcon">📦</span>
           <span>
-            Buy Packages
-            <small>{stats.packages} items</small>
+            Tree Package
+            <small>{stats.treePackages} items</small>
+          </span>
+        </button>
+
+        <button
+          className={activeTab === "CARE_PACKAGE" ? "active" : ""}
+          onClick={() => setActiveTab("CARE_PACKAGE")}
+        >
+          <span className="tabIcon">🌿</span>
+          <span>
+            Care Package
+            <small>{stats.carePackages} items</small>
           </span>
         </button>
 
@@ -929,19 +985,22 @@ export default function MarketplacePage() {
               <div>
                 <p className="eyebrow small">
                   {activeTab === "TREE" && "Single planting items"}
-                  {activeTab === "PACKAGE" && "Bulk planting bundles"}
+                  {activeTab === "TREE_PACKAGE" && "Bulk planting bundles"}
+                  {activeTab === "CARE_PACKAGE" && "Care program packages"}
                   {activeTab === "SUPPLY" && activeSupplyCategory}
                 </p>
                 <h2>
                   {activeTab === "TREE" && "Available Trees"}
-                  {activeTab === "PACKAGE" && "Available Packages"}
+                  {activeTab === "TREE_PACKAGE" && "Available Tree Packages"}
+                  {activeTab === "CARE_PACKAGE" && "Available Care Packages"}
                   {activeTab === "SUPPLY" && "Available Supplies"}
                 </h2>
               </div>
 
               <div className="modeNote">
                 {activeTab === "TREE" && "Only Seed, Seedling, and Young Seedling."}
-                {activeTab === "PACKAGE" && "Bulk quantities are separated here."}
+                {activeTab === "TREE_PACKAGE" && "Bulk tree quantities are separated here."}
+                {activeTab === "CARE_PACKAGE" && "Care packages are separated from tree packages."}
                 {activeTab === "SUPPLY" && "Supplies are grouped by sidebar category."}
               </div>
             </div>
@@ -1317,7 +1376,7 @@ export default function MarketplacePage() {
 
         .tabs {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(4, 1fr);
           gap: 12px;
           padding: 12px;
           margin-bottom: 18px;

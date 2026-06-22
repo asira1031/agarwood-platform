@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type TreeRow = Record<string, any>;
-type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME";
+type UpdateRow = Record<string, any>;
+
+type PanelType = "NONE" | "PHOTOS" | "GPS" | "HEALTH" | "QR" | "RENAME";
 
 const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
 
@@ -20,6 +22,11 @@ export default function MyTreesPage() {
 
   const [activePanel, setActivePanel] = useState<PanelType>("NONE");
   const [renameValue, setRenameValue] = useState("");
+
+  const [photoUpdates, setPhotoUpdates] = useState<UpdateRow[]>([]);
+  const [gpsLogs, setGpsLogs] = useState<UpdateRow[]>([]);
+  const [healthReports, setHealthReports] = useState<UpdateRow[]>([]);
+  const [panelLoading, setPanelLoading] = useState(false);
 
   async function loadTrees() {
     setLoading(true);
@@ -88,6 +95,47 @@ export default function MyTreesPage() {
     loadTrees();
   }, []);
 
+  async function loadTreeUpdates(tree: TreeRow) {
+    setPanelLoading(true);
+    setPhotoUpdates([]);
+    setGpsLogs([]);
+    setHealthReports([]);
+
+    const treeId = String(tree.id || "");
+    const treeCode = String(tree.tree_code || tree.code || "");
+
+    const photoQuery = supabase
+      .from("tree_photo_updates")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    const gpsQuery = supabase
+      .from("tree_gps_logs")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    const healthQuery = supabase
+      .from("tree_health_reports")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    const [{ data: photos }, { data: gps }, { data: health }] = await Promise.all([
+      photoQuery,
+      gpsQuery,
+      healthQuery,
+    ]);
+
+    const matchesTree = (row: UpdateRow) => {
+      const rowTreeId = String(row.tree_id || "");
+      return rowTreeId === treeId || rowTreeId === treeCode;
+    };
+
+    setPhotoUpdates((photos || []).filter(matchesTree));
+    setGpsLogs((gps || []).filter(matchesTree));
+    setHealthReports((health || []).filter(matchesTree));
+    setPanelLoading(false);
+  }
+
   const stats = useMemo(() => {
     const owned = trees.length;
     const totalSpent = trees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
@@ -144,11 +192,15 @@ export default function MyTreesPage() {
     ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
     : "";
 
-  function openPanel(panel: PanelType) {
+  async function openPanel(panel: PanelType) {
     if (!selectedTree) return;
 
     if (panel === "RENAME") {
       setRenameValue(selectedTree.custom_name || selectedTree.name || "Agarwood Tree");
+    }
+
+    if (panel === "PHOTOS" || panel === "GPS" || panel === "HEALTH") {
+      await loadTreeUpdates(selectedTree);
     }
 
     setActivePanel(panel);
@@ -188,8 +240,8 @@ export default function MyTreesPage() {
           <p className="eyebrow">Agarwood Portfolio</p>
           <h1>My Trees</h1>
           <span>
-            Search, group, rename, verify QR identity, track care program sync,
-            spending, and profit/loss before selling your agarwood trees.
+            Search, group, rename, verify QR identity, track caretaker photos,
+            GPS logs, health reports, care program sync, spending, and profit/loss.
           </span>
         </div>
       </section>
@@ -391,10 +443,11 @@ export default function MyTreesPage() {
                 <section className="actions">
                   <button onClick={() => openPanel("PHOTOS")}>View Photos</button>
                   <button onClick={() => openPanel("GPS")}>View GPS</button>
+                  <button onClick={() => openPanel("HEALTH")}>View Health</button>
                   <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
                     Request Care
-                  </button>                </section>
-
+                  </button>
+                </section>
               </section>
             )}
           </section>
@@ -405,11 +458,42 @@ export default function MyTreesPage() {
                 {activePanel === "PHOTOS" && (
                   <>
                     <h3>Tree Photos</h3>
-                    <p>
-                      Photos will appear here after caretaker uploads real tree photo updates.
-                      No fake images are shown.
-                    </p>
-                    <div className="empty small">No caretaker photo uploaded yet.</div>
+                    <p>Live caretaker photo updates for this tree.</p>
+
+                    {panelLoading ? (
+                      <div className="empty small">Loading photos...</div>
+                    ) : photoUpdates.length === 0 ? (
+                      <div className="empty small">No caretaker photo uploaded yet.</div>
+                    ) : (
+                      <div className="updateList">
+                        {photoUpdates.map((item) => (
+                          <div key={item.id} className="updateCard">
+                            <strong>{item.caption || "Tree Photo Update"}</strong>
+                            <p>{item.notes || "No notes."}</p>
+                            <small>{formatDateTime(item.created_at)}</small>
+
+                            <div className="photoLinks">
+                              {item.photo_url && (
+                                <a href={item.photo_url} target="_blank" rel="noreferrer">
+                                  Open Main Photo
+                                </a>
+                              )}
+                              {item.before_photo_url && (
+                                <a href={item.before_photo_url} target="_blank" rel="noreferrer">
+                                  Before
+                                </a>
+                              )}
+                              {item.after_photo_url && (
+                                <a href={item.after_photo_url} target="_blank" rel="noreferrer">
+                                  After
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <ModalActions close={() => setActivePanel("NONE")} />
                   </>
                 )}
@@ -417,15 +501,72 @@ export default function MyTreesPage() {
                 {activePanel === "GPS" && (
                   <>
                     <h3>GPS Verification</h3>
-                    <p>
-                      GPS details will appear here once field staff or caretaker uploads verified
-                      plantation location data.
-                    </p>
-                    <div className="modalGrid">
-                      <Mini label="GPS Status" value={selectedTree.gps_status || "Pending"} />
-                      <Mini label="Plantation Block" value={selectedTree.plantation_block || "Not assigned"} />
-                      <Mini label="GPS Location" value={selectedTree.gps_location || "Not uploaded"} />
-                    </div>
+                    <p>Live GPS logs submitted by gardener or field staff.</p>
+
+                    {panelLoading ? (
+                      <div className="empty small">Loading GPS logs...</div>
+                    ) : gpsLogs.length === 0 ? (
+                      <div className="empty small">No GPS log uploaded yet.</div>
+                    ) : (
+                      <div className="updateList">
+                        {gpsLogs.map((item) => {
+                          const lat = item.latitude;
+                          const lng = item.longitude;
+                          const mapUrl =
+                            lat && lng
+                              ? `https://www.google.com/maps?q=${lat},${lng}`
+                              : "";
+
+                          return (
+                            <div key={item.id} className="updateCard">
+                              <strong>GPS Verification</strong>
+                              <p>Latitude: {lat || "—"}</p>
+                              <p>Longitude: {lng || "—"}</p>
+                              <p>Accuracy: {item.accuracy_meters || "—"} meters</p>
+                              <p>{item.gps_note || item.notes || "No GPS note."}</p>
+                              <small>{formatDateTime(item.created_at)}</small>
+
+                              {mapUrl && (
+                                <div className="photoLinks">
+                                  <a href={mapUrl} target="_blank" rel="noreferrer">
+                                    Open Google Maps
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <ModalActions close={() => setActivePanel("NONE")} />
+                  </>
+                )}
+
+                {activePanel === "HEALTH" && (
+                  <>
+                    <h3>Tree Health Reports</h3>
+                    <p>Live health reports submitted by gardener.</p>
+
+                    {panelLoading ? (
+                      <div className="empty small">Loading health reports...</div>
+                    ) : healthReports.length === 0 ? (
+                      <div className="empty small">No health report submitted yet.</div>
+                    ) : (
+                      <div className="updateList">
+                        {healthReports.map((item) => (
+                          <div key={item.id} className="updateCard">
+                            <strong>{item.health_status || "Health Report"}</strong>
+                            <p>Disease Found: {item.disease_found ? "YES" : "NO"}</p>
+                            <p>Pest Found: {item.pest_found ? "YES" : "NO"}</p>
+                            <p>Issue Notes: {item.issue_notes || "—"}</p>
+                            <p>Recommendation: {item.recommendation || "—"}</p>
+                            <small>{formatDateTime(item.created_at)}</small>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <ModalActions close={() => setActivePanel("NONE")} />
                   </>
                 )}
@@ -484,10 +625,8 @@ export default function MyTreesPage() {
               </div>
             </div>
           )}
-        </>
-      )}
 
-      <style>{`
+<style>{`
         * { box-sizing: border-box; }
 
         .page {
@@ -923,39 +1062,6 @@ export default function MyTreesPage() {
           cursor: pointer;
         }
 
-        .actions .sell {
-          background: linear-gradient(135deg, #d6b25e, #b99242);
-          color: #10281f;
-        }
-
-        .requestList {
-          display: grid;
-          gap: 12px;
-          margin-top: 16px;
-        }
-
-        .requestRow {
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-        }
-
-        .requestRow p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-        }
-
-        .requestRow span {
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-          font-weight: 900;
-          font-size: 12px;
-        }
-
         .modal {
           position: fixed;
           inset: 0;
@@ -967,7 +1073,9 @@ export default function MyTreesPage() {
         }
 
         .modalCard {
-          width: min(600px, 100%);
+          width: min(720px, 100%);
+          max-height: 88vh;
+          overflow: auto;
           border-radius: 28px;
           padding: 24px;
           background: #fffdf6;
@@ -1006,6 +1114,54 @@ export default function MyTreesPage() {
         .modalActions .primary {
           background: linear-gradient(135deg, #244536, #10281f);
           color: white;
+        }
+
+        .updateList {
+          display: grid;
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        .updateCard {
+          border-radius: 18px;
+          background: #f3ead8;
+          border: 1px solid rgba(92,70,35,.08);
+          padding: 15px;
+        }
+
+        .updateCard strong {
+          color: #101a14;
+          font-size: 16px;
+        }
+
+        .updateCard p {
+          margin: 7px 0 0;
+          color: #5f665e;
+          font-size: 13px;
+        }
+
+        .updateCard small {
+          display: block;
+          margin-top: 8px;
+          color: #8c6a3c;
+          font-weight: 900;
+        }
+
+        .photoLinks {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        .photoLinks a {
+          border-radius: 999px;
+          padding: 9px 12px;
+          background: linear-gradient(135deg, #244536, #10281f);
+          color: white;
+          text-decoration: none;
+          font-size: 12px;
+          font-weight: 900;
         }
 
         .qrPreview {
@@ -1105,22 +1261,21 @@ export default function MyTreesPage() {
           }
         }
       `}</style>
+        </>
+      )}
     </main>
   );
 }
 
-function ModalActions({ close }: { close: () => void }) {
-  return (
-    <div className="modalActions">
-      <button onClick={close}>Close</button>
-      <button className="primary" onClick={close}>
-        Done
-      </button>
-    </div>
-  );
-}
-
-function Stat({ label, value, good }: { label: string; value: string; good?: boolean }) {
+function Stat({
+  label,
+  value,
+  good,
+}: {
+  label: string;
+  value: string;
+  good?: boolean;
+}) {
   return (
     <div className={`stat ${good ? "good" : ""}`}>
       <p>{label}</p>
@@ -1129,11 +1284,11 @@ function Stat({ label, value, good }: { label: string; value: string; good?: boo
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function Mini({ label, value }: { label: string; value: any }) {
   return (
     <div className="mini">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{value || "—"}</strong>
     </div>
   );
 }
@@ -1154,9 +1309,106 @@ function Money({
   return (
     <div className={`money ${strong ? "strong" : ""} ${good ? "good" : ""}`}>
       <span>{label}</span>
-      <strong>{percent ? `${value.toFixed(2)}%` : peso(value)}</strong>
+      <strong>{percent ? `${Number(value || 0).toFixed(2)}%` : peso(value)}</strong>
     </div>
   );
+}
+
+function ModalActions({ close }: { close: () => void }) {
+  return (
+    <div className="modalActions">
+      <button onClick={close}>Close</button>
+      <button className="primary" onClick={close}>
+        Done
+      </button>
+    </div>
+  );
+}
+
+function normalizeStage(stage: any) {
+  const value = String(stage || "").trim().toLowerCase();
+
+  if (!value) return "Seedling";
+  if (value.includes("harvest")) return "Harvest Ready";
+  if (value.includes("mature")) return "Mature Tree";
+  if (value.includes("young")) return "Young Tree";
+  if (value.includes("sapling")) return "Sapling";
+  if (value.includes("seed")) return "Seedling";
+
+  return String(stage || "Seedling");
+}
+
+function getPurchasePrice(tree: TreeRow) {
+  return Number(
+    tree.purchase_price ||
+      tree.price ||
+      tree.tree_price ||
+      tree.base_price ||
+      tree.amount_paid ||
+      0
+  );
+}
+
+function getOperationCost(tree: TreeRow) {
+  return Number(
+    tree.operation_cost ||
+      tree.total_operation_cost ||
+      tree.care_operation_cost ||
+      tree.service_cost ||
+      0
+  );
+}
+
+function getCareProgramCost(tree: TreeRow) {
+  return Number(
+    tree.care_program_total_cost ||
+      tree.care_program_cost ||
+      tree.care_program_price ||
+      tree.subscription_total ||
+      0
+  );
+}
+
+function getVerificationCost(tree: TreeRow) {
+  return Number(
+    tree.verification_cost ||
+      tree.gps_fee ||
+      tree.photo_fee ||
+      tree.gps_photo_fee ||
+      0
+  );
+}
+
+function getTotalSpent(tree: TreeRow) {
+  return (
+    getPurchasePrice(tree) +
+    getOperationCost(tree) +
+    getCareProgramCost(tree) +
+    getVerificationCost(tree)
+  );
+}
+
+function getEstimatedValue(tree: TreeRow) {
+  const explicit = Number(
+    tree.estimated_value ||
+      tree.estimated_sell_value ||
+      tree.market_value ||
+      tree.current_value ||
+      tree.valuation_amount ||
+      0
+  );
+
+  if (explicit > 0) return explicit;
+
+  const purchase = getPurchasePrice(tree);
+  const stage = normalizeStage(tree.stage || tree.growth_stage).toLowerCase();
+
+  if (stage === "harvest ready") return purchase * 4;
+  if (stage === "mature tree") return purchase * 3;
+  if (stage === "young tree") return purchase * 2;
+  if (stage === "sapling") return purchase * 1.35;
+
+  return purchase;
 }
 
 function getTreeMath(tree: TreeRow) {
@@ -1168,72 +1420,67 @@ function getTreeMath(tree: TreeRow) {
   return { totalSpent, estimatedValue, profit, roi };
 }
 
-function getPurchasePrice(tree: TreeRow) {
-  return Number(tree.purchase_price || tree.buy_price || tree.price || tree.investment_amount || 0);
-}
-
-function getOperationCost(tree: TreeRow) {
-  return Number(tree.operation_cost || tree.operations_cost || tree.care_cost || tree.total_operation_cost || 0);
-}
-
-function getVerificationCost(tree: TreeRow) {
-  return Number(tree.verification_cost || tree.gps_photo_cost || tree.photo_fee_total || tree.gps_fee_total || 0);
-}
-
-function getCareProgramCost(tree: TreeRow) {
-  return Number(tree.care_program_price || 0);
-}
-
-function getTotalSpent(tree: TreeRow) {
-  const computedTotal =
-    getPurchasePrice(tree) +
-    getOperationCost(tree) +
-    getCareProgramCost(tree) +
-    getVerificationCost(tree);
-
-  return Number(tree.total_spent || computedTotal);
-}
-
-function getEstimatedValue(tree: TreeRow) {
-  return Number(tree.estimated_value || tree.current_value || tree.selling_price || 0);
-}
-
-function normalizeStage(value: string | null | undefined) {
-  if (!value) return "Seedling";
-  return value;
-}
-
 function getAgeText(tree: TreeRow) {
-  if (tree.age_text) return tree.age_text;
-  if (!tree.planting_date && !tree.created_at) return "—";
+  const plantedDate = tree.planted_at || tree.planted_date || tree.created_at;
 
-  const start = new Date(tree.planting_date || tree.created_at);
+  if (!plantedDate) return "—";
+
+  const start = new Date(plantedDate);
   const now = new Date();
-  const months = Math.max(
-    0,
-    (now.getFullYear() - start.getFullYear()) * 12 + now.getMonth() - start.getMonth()
-  );
 
-  const years = Math.floor(months / 12);
-  const remainingMonths = months % 12;
+  if (Number.isNaN(start.getTime())) return "—";
 
-  if (years <= 0) return `${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
-  return `${years} year${years === 1 ? "" : "s"} ${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
+  const diffMs = now.getTime() - start.getTime();
+  const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+
+  if (diffDays < 30) return `${diffDays} day${diffDays === 1 ? "" : "s"}`;
+  if (diffDays < 365) {
+    const months = Math.floor(diffDays / 30);
+    return `${months} month${months === 1 ? "" : "s"}`;
+  }
+
+  const years = Math.floor(diffDays / 365);
+  const months = Math.floor((diffDays % 365) / 30);
+
+  if (months <= 0) return `${years} year${years === 1 ? "" : "s"}`;
+
+  return `${years}y ${months}m`;
 }
 
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatDate(value: string | null) {
+function formatDate(value: any) {
   if (!value) return "—";
 
-  return new Date(value).toLocaleDateString("en-PH", {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return date.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
+}
+
+function formatDateTime(value: any) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function peso(value: any) {
+  const amount = Number(value || 0);
+
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    maximumFractionDigits: 0,
+  }).format(amount);
 }

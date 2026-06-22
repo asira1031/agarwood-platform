@@ -13,11 +13,11 @@ type WalletRow = {
 type TransactionRow = {
   id: string;
   profile_id: string | null;
-  wallet_id: string | null;
-  type: string | null;
+  transaction_type: string | null;
   amount: number | null;
-  status: string | null;
+  reference_no: string | null;
   description: string | null;
+  status: string | null;
   created_at: string | null;
 };
 
@@ -56,19 +56,26 @@ export default function AdminWalletPage() {
 
     const { data: transactionRows, error: transactionError } = await supabase
       .from("wallet_transactions")
-      .select("id, profile_id, wallet_id, type, amount, status, description, created_at")
+      .select(
+        "id, profile_id, transaction_type, amount, reference_no, description, status, created_at"
+      )
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (transactionError) {
       setErrorText(transactionError.message);
+      setTransactions([]);
+    } else {
+      setTransactions((transactionRows || []) as TransactionRow[]);
     }
 
     const profileIds = Array.from(
-      new Set([
-        ...(walletRows || []).map((item) => item.profile_id),
-        ...(transactionRows || []).map((item) => item.profile_id),
-      ].filter(Boolean))
+      new Set(
+        [
+          ...(walletRows || []).map((item) => item.profile_id),
+          ...(transactionRows || []).map((item) => item.profile_id),
+        ].filter(Boolean)
+      )
     ) as string[];
 
     let profileRows: ProfileRow[] = [];
@@ -87,7 +94,6 @@ export default function AdminWalletPage() {
     }
 
     setWallets((walletRows || []) as WalletRow[]);
-    setTransactions((transactionRows || []) as TransactionRow[]);
     setProfiles(profileRows);
     setLoading(false);
   }
@@ -107,7 +113,11 @@ export default function AdminWalletPage() {
       const email = profile?.email?.toLowerCase() || "";
       const id = wallet.profile_id?.toLowerCase() || "";
 
-      return name.includes(keyword) || email.includes(keyword) || id.includes(keyword);
+      return (
+        name.includes(keyword) ||
+        email.includes(keyword) ||
+        id.includes(keyword)
+      );
     });
   }, [wallets, profiles, search]);
 
@@ -124,6 +134,14 @@ export default function AdminWalletPage() {
     .filter((item) => Number(item.amount || 0) < 0)
     .reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
 
+  const platformFees = transactions
+    .filter((item) =>
+      String(item.transaction_type || "")
+        .toUpperCase()
+        .includes("PLATFORM_FEE")
+    )
+    .reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
+
   function formatMoney(value: number | null) {
     return Number(value || 0).toLocaleString("en-PH", {
       style: "currency",
@@ -134,7 +152,7 @@ export default function AdminWalletPage() {
   function formatDate(dateValue: string | null) {
     if (!dateValue) return "—";
 
-    return new Date(dateValue).toLocaleString("en-US", {
+    return new Date(dateValue).toLocaleString("en-PH", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -150,38 +168,48 @@ export default function AdminWalletPage() {
       return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
     }
 
-    if (status === "PENDING") {
+    if (status === "PENDING" || status === "PROCESSING") {
       return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
     }
 
-    if (status === "REJECTED" || status === "FAILED") {
+    if (status === "REJECTED" || status === "FAILED" || status === "CANCELLED") {
       return "bg-red-500/20 text-red-200 border-red-400/30";
     }
 
     return "bg-white/10 text-white/60 border-white/10";
   }
 
+  function amountClass(amount: number) {
+    if (amount < 0) return "text-red-200";
+    if (amount > 0) return "text-emerald-200";
+    return "text-white/70";
+  }
+
   return (
-    <main className="min-h-screen text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
               Admin Center
             </p>
+
             <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
               Wallet Overview
             </h1>
+
             <p className="mt-2 text-white/70">
-              Monitor wallet balances and latest wallet transactions.
+              Monitor customer wallet balances, transaction history, debits,
+              credits, and platform fee logs.
             </p>
           </div>
 
           <button
             onClick={loadWalletData}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25"
+            disabled={loading}
+            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
           >
-            Refresh Wallets
+            {loading ? "Refreshing..." : "Refresh Wallets"}
           </button>
         </div>
 
@@ -191,11 +219,15 @@ export default function AdminWalletPage() {
           </div>
         )}
 
-        <section className="grid gap-4 md:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-5">
           <StatCard label="Total Wallets" value={String(wallets.length)} />
-          <StatCard label="Total Balance" value={formatMoney(totalWalletBalance)} />
+          <StatCard
+            label="Total Balance"
+            value={formatMoney(totalWalletBalance)}
+          />
           <StatCard label="Recent Credits" value={formatMoney(totalCredits)} />
           <StatCard label="Recent Debits" value={formatMoney(totalDebits)} />
+          <StatCard label="Platform Fees" value={formatMoney(platformFees)} />
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
@@ -209,7 +241,10 @@ export default function AdminWalletPage() {
 
         <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
           <div className="border-b border-white/10 px-5 py-4">
-            <h2 className="text-xl font-bold text-[#d9b45f]">Wallet Balances</h2>
+            <h2 className="text-xl font-bold text-[#d9b45f]">
+              Wallet Balances
+            </h2>
+
             <p className="text-sm text-white/60">
               Showing {filteredWallets.length} of {wallets.length} wallets.
             </p>
@@ -225,6 +260,7 @@ export default function AdminWalletPage() {
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
+                    <th className="px-5 py-4">Profile ID</th>
                     <th className="px-5 py-4">Wallet ID</th>
                     <th className="px-5 py-4">Balance</th>
                     <th className="px-5 py-4">Created</th>
@@ -236,17 +272,26 @@ export default function AdminWalletPage() {
                     const profile = getProfile(wallet.profile_id);
 
                     return (
-                      <tr key={wallet.id} className="border-t border-white/10 hover:bg-white/5">
+                      <tr
+                        key={wallet.id}
+                        className="border-t border-white/10 hover:bg-white/5"
+                      >
                         <td className="px-5 py-4">
                           <div className="font-semibold text-white">
                             {profile?.full_name || "Unknown Customer"}
                           </div>
                           <div className="mt-1 text-xs text-white/50">
-                            {profile?.email || wallet.profile_id || "No profile"}
+                            {profile?.email || "No email"}
                           </div>
                         </td>
 
-                        <td className="px-5 py-4 text-white/70">{wallet.id}</td>
+                        <td className="px-5 py-4 text-xs text-white/60">
+                          {wallet.profile_id || "No profile"}
+                        </td>
+
+                        <td className="px-5 py-4 text-xs text-white/60">
+                          {wallet.id}
+                        </td>
 
                         <td className="px-5 py-4 font-bold text-[#f7d774]">
                           {formatMoney(wallet.balance)}
@@ -269,24 +314,28 @@ export default function AdminWalletPage() {
             <h2 className="text-xl font-bold text-[#d9b45f]">
               Latest Wallet Transactions
             </h2>
+
             <p className="text-sm text-white/60">
-              Latest 50 wallet transaction records.
+              Latest 100 records from wallet_transactions.
             </p>
           </div>
 
           {loading ? (
             <div className="p-8 text-white/70">Loading transactions...</div>
           ) : transactions.length === 0 ? (
-            <div className="p-8 text-white/70">No wallet transactions found.</div>
+            <div className="p-8 text-white/70">
+              No wallet transactions found.
+            </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] text-left text-sm">
+              <table className="w-full min-w-[1200px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Type</th>
+                    <th className="px-5 py-4">Transaction Type</th>
                     <th className="px-5 py-4">Amount</th>
                     <th className="px-5 py-4">Status</th>
+                    <th className="px-5 py-4">Reference No.</th>
                     <th className="px-5 py-4">Description</th>
                     <th className="px-5 py-4">Date</th>
                   </tr>
@@ -298,7 +347,10 @@ export default function AdminWalletPage() {
                     const amount = Number(tx.amount || 0);
 
                     return (
-                      <tr key={tx.id} className="border-t border-white/10 hover:bg-white/5">
+                      <tr
+                        key={tx.id}
+                        className="border-t border-white/10 hover:bg-white/5"
+                      >
                         <td className="px-5 py-4">
                           <div className="font-semibold text-white">
                             {profile?.full_name || "Unknown Customer"}
@@ -308,12 +360,14 @@ export default function AdminWalletPage() {
                           </div>
                         </td>
 
-                        <td className="px-5 py-4">{tx.type || "—"}</td>
+                        <td className="px-5 py-4 font-semibold text-white/80">
+                          {tx.transaction_type || "—"}
+                        </td>
 
                         <td
-                          className={`px-5 py-4 font-bold ${
-                            amount < 0 ? "text-red-200" : "text-emerald-200"
-                          }`}
+                          className={`px-5 py-4 font-bold ${amountClass(
+                            amount
+                          )}`}
                         >
                           {formatMoney(amount)}
                         </td>
@@ -326,6 +380,10 @@ export default function AdminWalletPage() {
                           >
                             {(tx.status || "UNKNOWN").toUpperCase()}
                           </span>
+                        </td>
+
+                        <td className="px-5 py-4 text-white/70">
+                          {tx.reference_no || "—"}
                         </td>
 
                         <td className="px-5 py-4 text-white/70">
@@ -343,6 +401,19 @@ export default function AdminWalletPage() {
             </div>
           )}
         </section>
+
+        <section className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-5">
+          <h2 className="text-lg font-bold text-[#f7d774]">
+            Wallet System Note
+          </h2>
+
+          <p className="mt-2 text-sm text-white/70">
+            This page is now matched to your current database schema:
+            wallet_transactions uses profile_id, transaction_type, amount,
+            reference_no, description, status, and created_at. It does not use
+            wallet_id or type.
+          </p>
+        </section>
       </div>
     </main>
   );
@@ -352,7 +423,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
       <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
+      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
     </div>
   );
 }

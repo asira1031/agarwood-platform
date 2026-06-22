@@ -27,14 +27,16 @@ type WalletRow = {
   created_at: string | null;
 };
 
+type TabKey = "PENDING" | "APPROVED" | "REJECTED" | "ALL";
+
 export default function AdminTreePurchasesPage() {
   const [requests, setRequests] = useState<TreePurchaseRequest[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [wallets, setWallets] = useState<WalletRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
-  const [errorText, setErrorText] = useState("");
-  const [filter, setFilter] = useState("PENDING");
+  const [message, setMessage] = useState("");
+  const [tab, setTab] = useState<TabKey>("PENDING");
 
   useEffect(() => {
     loadData();
@@ -42,7 +44,7 @@ export default function AdminTreePurchasesPage() {
 
   async function loadData() {
     setLoading(true);
-    setErrorText("");
+    setMessage("");
 
     const { data: requestRows, error: requestError } = await supabase
       .from("tree_purchase_requests")
@@ -52,7 +54,7 @@ export default function AdminTreePurchasesPage() {
       .order("created_at", { ascending: false });
 
     if (requestError) {
-      setErrorText(requestError.message);
+      setMessage(requestError.message);
       setRequests([]);
       setLoading(false);
       return;
@@ -72,7 +74,7 @@ export default function AdminTreePurchasesPage() {
         .in("id", profileIds);
 
       if (profileError) {
-        setErrorText(profileError.message);
+        setMessage(profileError.message);
       } else {
         profileRows = (profileData || []) as ProfileRow[];
       }
@@ -84,7 +86,7 @@ export default function AdminTreePurchasesPage() {
         .order("created_at", { ascending: false });
 
       if (walletError) {
-        setErrorText(walletError.message);
+        setMessage(walletError.message);
       } else {
         walletRows = (walletData || []) as WalletRow[];
       }
@@ -96,29 +98,40 @@ export default function AdminTreePurchasesPage() {
     setLoading(false);
   }
 
-  const filteredRequests = useMemo(() => {
-    if (filter === "ALL") return requests;
-
+  const pendingRequests = useMemo(() => {
     return requests.filter(
-      (request) => (request.status || "").toUpperCase() === filter
+      (request) => String(request.status || "PENDING").toUpperCase() === "PENDING"
     );
-  }, [requests, filter]);
+  }, [requests]);
 
-  const pendingCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "PENDING"
-  ).length;
+  const approvedRequests = useMemo(() => {
+    return requests.filter(
+      (request) => String(request.status || "").toUpperCase() === "APPROVED"
+    );
+  }, [requests]);
 
-  const approvedCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "APPROVED"
-  ).length;
+  const rejectedRequests = useMemo(() => {
+    return requests.filter(
+      (request) => String(request.status || "").toUpperCase() === "REJECTED"
+    );
+  }, [requests]);
 
-  const rejectedCount = requests.filter(
-    (request) => (request.status || "").toUpperCase() === "REJECTED"
-  ).length;
+  const activeRequests = useMemo(() => {
+    if (tab === "PENDING") return pendingRequests;
+    if (tab === "APPROVED") return approvedRequests;
+    if (tab === "REJECTED") return rejectedRequests;
+    return requests;
+  }, [tab, requests, pendingRequests, approvedRequests, rejectedRequests]);
 
-  const pendingAmount = requests
-    .filter((request) => (request.status || "").toUpperCase() === "PENDING")
-    .reduce((sum, request) => sum + Number(request.total_amount || 0), 0);
+  const pendingAmount = pendingRequests.reduce(
+    (sum, request) => sum + Number(request.total_amount || 0),
+    0
+  );
+
+  const approvedAmount = approvedRequests.reduce(
+    (sum, request) => sum + Number(request.total_amount || 0),
+    0
+  );
 
   function getProfile(profileId: string | null) {
     return profiles.find((profile) => profile.id === profileId) || null;
@@ -138,7 +151,7 @@ export default function AdminTreePurchasesPage() {
   function formatDate(dateValue: string | null) {
     if (!dateValue) return "—";
 
-    return new Date(dateValue).toLocaleString("en-US", {
+    return new Date(dateValue).toLocaleString("en-PH", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -148,34 +161,38 @@ export default function AdminTreePurchasesPage() {
   }
 
   function badgeClass(value: string | null) {
-    const status = (value || "UNKNOWN").toUpperCase();
+    const status = String(value || "PENDING").toUpperCase();
 
     if (status === "APPROVED" || status === "COMPLETED") {
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
-    }
-
-    if (status === "PENDING") {
-      return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
+      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
     }
 
     if (status === "REJECTED" || status === "FAILED") {
-      return "bg-red-500/20 text-red-200 border-red-400/30";
+      return "border-red-400/30 bg-red-500/20 text-red-200";
     }
 
-    return "bg-white/10 text-white/60 border-white/10";
+    return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
   }
 
   function buildTreeCode(index: number) {
     const timestamp = Date.now().toString().slice(-8);
     const suffix = String(index + 1).padStart(3, "0");
-    return `AGW-${timestamp}-${suffix}`;
+    return `ARG-${timestamp}-${suffix}`;
   }
 
   async function approveRequest(request: TreePurchaseRequest) {
-    if (!request.id || !request.profile_id) return;
+    if (!request.id || !request.profile_id) {
+      setMessage("Missing request ID or profile ID.");
+      return;
+    }
 
     const quantity = Math.max(1, Number(request.quantity || 1));
     const totalAmount = Number(request.total_amount || 0);
+
+    if (totalAmount <= 0) {
+      setMessage("Invalid tree purchase amount.");
+      return;
+    }
 
     const confirmed = window.confirm(
       `Approve this tree purchase and assign ${quantity} tree record(s)?`
@@ -184,15 +201,9 @@ export default function AdminTreePurchasesPage() {
     if (!confirmed) return;
 
     setActionLoading(request.id);
-    setErrorText("");
+    setMessage("");
 
     const wallet = getLatestWallet(request.profile_id);
-
-    if (!wallet) {
-      setErrorText("Wallet not found for this customer.");
-      setActionLoading("");
-      return;
-    }
 
     const treesToInsert = Array.from({ length: quantity }).map((_, index) => {
       const treeCode = buildTreeCode(index);
@@ -201,8 +212,8 @@ export default function AdminTreePurchasesPage() {
         profile_id: request.profile_id,
         tree_code: treeCode,
         custom_name: treeCode,
-        display_name: request.tree_type || "Agarwood Tree",
-        tree_type: request.tree_type || "Agarwood Tree",
+        display_name: request.tree_type || "Arganwood Tree",
+        tree_type: request.tree_type || "Arganwood Tree",
         stage: "NEW",
         growth_stage: "NEW",
         current_stage: "NEW",
@@ -213,7 +224,7 @@ export default function AdminTreePurchasesPage() {
     const { error: treeError } = await supabase.from("trees").insert(treesToInsert);
 
     if (treeError) {
-      setErrorText(treeError.message);
+      setMessage(treeError.message);
       setActionLoading("");
       return;
     }
@@ -226,43 +237,51 @@ export default function AdminTreePurchasesPage() {
       .eq("id", request.id);
 
     if (requestError) {
-      setErrorText(requestError.message);
+      setMessage(requestError.message);
       setActionLoading("");
       return;
     }
 
-    const { error: transactionError } = await supabase
-      .from("wallet_transactions")
-      .insert({
-        profile_id: request.profile_id,
-        wallet_id: wallet.id,
-        type: "TREE_PURCHASE_APPROVED",
-        amount: -Math.abs(totalAmount),
-        status: "APPROVED",
-        description: `Tree purchase approved: ${quantity} ${request.tree_type || "Agarwood Tree"}`,
-      });
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: "TREE_PURCHASE_APPROVED",
+      amount: -Math.abs(totalAmount),
+      reference_no: request.id,
+      status: "APPROVED",
+      description: `Tree purchase approved: ${quantity} ${
+        request.tree_type || "Arganwood Tree"
+      }. Platform/Admin received ${formatMoney(totalAmount)}.`,
+    });
 
-    if (transactionError) {
-      setErrorText(transactionError.message);
+    if (txError) {
+      setMessage(`Approved, but wallet transaction log failed: ${txError.message}`);
       setActionLoading("");
+      await loadData();
       return;
     }
 
-    await loadData();
+    setMessage(
+      `Tree purchase approved. ${quantity} tree(s) created and platform/admin received ${formatMoney(
+        totalAmount
+      )}.`
+    );
+
     setActionLoading("");
+    await loadData();
+    setTab("PENDING");
   }
 
   async function rejectRequest(request: TreePurchaseRequest) {
-    if (!request.id || !request.profile_id) return;
+    if (!request.id) {
+      setMessage("Missing request ID.");
+      return;
+    }
 
-    const confirmed = window.confirm(
-      "Reject this tree purchase request? This will only mark the request as rejected."
-    );
-
+    const confirmed = window.confirm("Reject this tree purchase request?");
     if (!confirmed) return;
 
     setActionLoading(request.id);
-    setErrorText("");
+    setMessage("");
 
     const { error: requestError } = await supabase
       .from("tree_purchase_requests")
@@ -272,50 +291,75 @@ export default function AdminTreePurchasesPage() {
       .eq("id", request.id);
 
     if (requestError) {
-      setErrorText(requestError.message);
+      setMessage(requestError.message);
       setActionLoading("");
       return;
     }
 
-    await loadData();
+    const { error: txError } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: "TREE_PURCHASE_REJECTED",
+      amount: 0,
+      reference_no: request.id,
+      status: "REJECTED",
+      description: `Tree purchase rejected: ${
+        request.tree_type || "Arganwood Tree"
+      }. No tree assigned.`,
+    });
+
+    if (txError) {
+      setMessage(`Rejected, but transaction log failed: ${txError.message}`);
+      setActionLoading("");
+      await loadData();
+      return;
+    }
+
+    setMessage("Tree purchase rejected and moved to rejected history.");
     setActionLoading("");
+    await loadData();
+    setTab("PENDING");
   }
 
   return (
-    <main className="min-h-screen text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
               Admin Tree Center
             </p>
+
             <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
               Tree Purchase Approval
             </h1>
+
             <p className="mt-2 text-white/70">
-              Review customer tree purchase requests and assign approved trees to My Trees.
+              Review pending tree purchases. Approved and rejected requests move
+              to history logs.
             </p>
           </div>
 
           <button
             onClick={loadData}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25"
+            disabled={loading}
+            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
           >
-            Refresh Requests
+            {loading ? "Refreshing..." : "Refresh Requests"}
           </button>
         </div>
 
-        {errorText && (
-          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">
-            {errorText}
+        {message && (
+          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
+            {message}
           </div>
         )}
 
-        <section className="grid gap-4 md:grid-cols-4">
-          <StatCard label="Pending Requests" value={String(pendingCount)} />
-          <StatCard label="Approved Requests" value={String(approvedCount)} />
-          <StatCard label="Rejected Requests" value={String(rejectedCount)} />
+        <section className="grid gap-4 md:grid-cols-5">
+          <StatCard label="Pending" value={String(pendingRequests.length)} />
+          <StatCard label="Approved" value={String(approvedRequests.length)} />
+          <StatCard label="Rejected" value={String(rejectedRequests.length)} />
           <StatCard label="Pending Value" value={formatMoney(pendingAmount)} />
+          <StatCard label="Admin Received" value={formatMoney(approvedAmount)} />
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
@@ -323,14 +367,20 @@ export default function AdminTreePurchasesPage() {
             {["PENDING", "APPROVED", "REJECTED", "ALL"].map((item) => (
               <button
                 key={item}
-                onClick={() => setFilter(item)}
+                onClick={() => setTab(item as TabKey)}
                 className={`rounded-full px-5 py-3 text-sm font-bold transition ${
-                  filter === item
+                  tab === item
                     ? "bg-[#f7d774] text-[#071f16]"
                     : "bg-white/10 text-white hover:bg-white/15"
                 }`}
               >
-                {item}
+                {item === "PENDING"
+                  ? "Pending Queue"
+                  : item === "APPROVED"
+                  ? "Approved History"
+                  : item === "REJECTED"
+                  ? "Rejected History"
+                  : "All Records"}
               </button>
             ))}
           </div>
@@ -338,12 +388,16 @@ export default function AdminTreePurchasesPage() {
 
         <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
           {loading ? (
-            <div className="p-8 text-white/70">Loading tree purchase requests...</div>
-          ) : filteredRequests.length === 0 ? (
-            <div className="p-8 text-white/70">No tree purchase requests found.</div>
+            <div className="p-8 text-white/70">
+              Loading tree purchase requests...
+            </div>
+          ) : activeRequests.length === 0 ? (
+            <div className="p-8 text-white/70">
+              No tree purchase requests found in this tab.
+            </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1150px] text-left text-sm">
+              <table className="w-full min-w-[1200px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
@@ -359,11 +413,11 @@ export default function AdminTreePurchasesPage() {
                 </thead>
 
                 <tbody>
-                  {filteredRequests.map((request) => {
+                  {activeRequests.map((request) => {
                     const profile = getProfile(request.profile_id);
                     const wallet = getLatestWallet(request.profile_id);
-                    const isPending =
-                      (request.status || "").toUpperCase() === "PENDING";
+                    const status = String(request.status || "PENDING").toUpperCase();
+                    const isPending = status === "PENDING";
 
                     return (
                       <tr
@@ -380,7 +434,7 @@ export default function AdminTreePurchasesPage() {
                         </td>
 
                         <td className="px-5 py-4">
-                          {request.tree_type || "Agarwood Tree"}
+                          {request.tree_type || "Arganwood Tree"}
                         </td>
 
                         <td className="px-5 py-4">
@@ -395,17 +449,17 @@ export default function AdminTreePurchasesPage() {
                           {formatMoney(request.total_amount)}
                         </td>
 
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-4 text-white/80">
                           {formatMoney(wallet?.balance || 0)}
                         </td>
 
                         <td className="px-5 py-4">
                           <span
                             className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              request.status
+                              status
                             )}`}
                           >
-                            {(request.status || "UNKNOWN").toUpperCase()}
+                            {status}
                           </span>
                         </td>
 
@@ -421,7 +475,9 @@ export default function AdminTreePurchasesPage() {
                                 disabled={actionLoading === request.id}
                                 className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
                               >
-                                Approve
+                                {actionLoading === request.id
+                                  ? "Working..."
+                                  : "Approve"}
                               </button>
 
                               <button
@@ -455,7 +511,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
       <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
+      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
     </div>
   );
 }

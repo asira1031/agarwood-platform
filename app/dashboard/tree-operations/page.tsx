@@ -579,6 +579,33 @@ export default function TreeOperationsPage() {
   const platformFeePreview = operation?.category === "Care Program" ? 0 : baseOperationFee * 0.02;
   const totalPreview = baseOperationFee + platformFeePreview;
 
+  const activeSameRequest = useMemo(() => {
+    if (!selectedTree || !operation) return null;
+
+    const activeStatuses = ["PENDING", "ASSIGNED", "IN_PROGRESS", "PROCESSING"];
+    const operationName = String(operation.name || "").trim().toUpperCase();
+
+    return (
+      requests.find((request) => {
+        const requestTreeId = String(request.tree_id || "");
+        const requestName = String(
+          request.care_program_name || request.operation_type || ""
+        )
+          .trim()
+          .toUpperCase();
+        const requestStatus = String(request.status || "PENDING").toUpperCase();
+
+        return (
+          requestTreeId === String(selectedTree.id) &&
+          requestName === operationName &&
+          activeStatuses.includes(requestStatus)
+        );
+      }) || null
+    );
+  }, [requests, selectedTree, operation]);
+
+  const hasActiveSameRequest = !!activeSameRequest;
+
   const stats = useMemo(() => {
     const pending = requests.filter(
       (item) => (item.status || "PENDING").toUpperCase() === "PENDING"
@@ -701,6 +728,213 @@ export default function TreeOperationsPage() {
     }
 
     throw new Error(lastError);
+  }
+
+  async function createWalletTransactionLog(args: {
+    amount: number;
+    transactionType: string;
+    description: string;
+    referenceId?: string | null;
+    category?: string;
+  }) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const isDebit = args.amount < 0;
+    const basePayload = {
+      profile_id: profile.id,
+      wallet_id: wallet?.id ?? null,
+      amount: args.amount,
+      type: isDebit ? "DEBIT" : "CREDIT",
+      transaction_type: args.transactionType,
+      description: args.description,
+      status: "COMPLETED",
+      reference_id: args.referenceId || null,
+      reference_no: args.referenceId || null,
+    };
+
+    const payloadAttempts: any[] = [
+      { ...basePayload, category: args.category || args.transactionType },
+      { ...basePayload },
+      {
+        profile_id: profile.id,
+        amount: Math.abs(args.amount),
+        type: isDebit ? "DEBIT" : "CREDIT",
+        transaction_type: args.transactionType,
+        description: args.description,
+        status: "COMPLETED",
+      },
+    ];
+
+    let lastError = "Wallet transaction log failed.";
+
+    for (const payload of payloadAttempts) {
+      const { error } = await supabase.from("wallet_transactions").insert(payload);
+      if (!error) return;
+      lastError = error.message;
+    }
+
+    throw new Error(lastError);
+  }
+
+  async function deductServiceWallet(amount: number) {
+    if (!wallet) throw new Error("Wallet not found.");
+
+    const currentBalance = Number(wallet.balance || 0);
+
+    if (amount <= 0) throw new Error("Invalid service amount.");
+    if (currentBalance < amount) throw new Error("Insufficient wallet balance.");
+
+    const newBalance = currentBalance - amount;
+
+    const { error } = await supabase
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
+
+    if (error) throw error;
+
+    setWallet({ ...wallet, balance: newBalance });
+    return currentBalance;
+  }
+
+  async function restoreServiceWallet(previousBalance: number) {
+    if (!wallet) return;
+
+    await supabase
+      .from("wallets")
+      .update({ balance: previousBalance })
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
+
+    setWallet({ ...wallet, balance: previousBalance });
+  }
+
+  async function deductInventoryForOperation() {
+    if (!operation?.requiredInventoryCategory) return null;
+    if (!requiredInventoryItem) throw new Error(`${operation.requiredInventoryCategory} inventory not found.`);
+
+    const currentQty = Number(requiredInventoryItem.remaining_qty || 0);
+    const requiredQty = Number(operation.requiredQty || 1);
+    const nextQty = currentQty - requiredQty;
+
+    if (nextQty < 0) {
+      throw new Error(`Not enough ${operation.requiredInventoryCategory} inventory.`);
+    }
+
+    const { error } = await supabase
+      .from("inventory")
+      .update({
+        remaining_qty: nextQty,
+        status: nextQty <= 0 ? "USED" : "AVAILABLE",
+      })
+      .eq("id", requiredInventoryItem.id);
+
+    if (error) throw error;
+
+    return {
+      id: requiredInventoryItem.id,
+      previousQty: currentQty,
+    };
+  }
+
+  async function restoreInventory(snapshot: { id: string; previousQty: number } | null) {
+    if (!snapshot) return;
+
+    await supabase
+      .from("inventory")
+      .update({
+        remaining_qty: snapshot.previousQty,
+        status: snapshot.previousQty > 0 ? "AVAILABLE" : "USED",
+      })
+      .eq("id", snapshot.id);
+  }
+
+  async function createServiceOperationRequest() {
+    setMessage("");
+
+    if (!profile) return setMessage("Profile not found.");
+    if (!wallet) return setMessage("Wallet not found.");
+    if (!selectedTree) return setMessage("Please select a tree.");
+    if (!operation) return setMessage("Please choose a service.");
+
+    if (operation.category === "Care Program") {
+      setMessage("Use Buy Once or Subscribe for Tree Care Programs.");
+      return;
+    }
+
+    if (hasActiveSameRequest) {
+      setMessage(
+        `${operation.name} already has an active request for this tree. Wait until it is completed before buying again.`
+      );
+      return;
+    }
+
+    if (operation.category === "Inventory Use" && !hasRequiredInventory) {
+      setMessage(
+        `${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`
+      );
+      return;
+    }
+
+    setProcessing(true);
+
+    const operationFee = Number(operation.price || 0);
+    const platformFee = operationFee * 0.02;
+    const totalAmount = operationFee + platformFee;
+    const treeLabel = selectedTree.tree_code || selectedTree.id;
+
+    let previousBalance: number | null = null;
+    let inventorySnapshot: { id: string; previousQty: number } | null = null;
+
+    try {
+      previousBalance = await deductServiceWallet(totalAmount);
+      inventorySnapshot = await deductInventoryForOperation();
+
+      const requestPayload = {
+        profile_id: profile.id,
+        tree_id: selectedTree.id,
+        operation_type: operation.name,
+        operation_fee: operationFee,
+        platform_fee: platformFee,
+        total_amount: totalAmount,
+        notes: note.trim() || null,
+        status: "PENDING",
+      };
+
+      const { data: createdRequest, error: requestError } = await supabase
+        .from("tree_operation_requests")
+        .insert(requestPayload)
+        .select("id")
+        .single();
+
+      if (requestError || !createdRequest) {
+        throw new Error(requestError?.message || "Operation request creation failed.");
+      }
+
+      await createWalletTransactionLog({
+        amount: -Math.abs(totalAmount),
+        transactionType: "TREE_OPERATION",
+        category: operation.category === "Inventory Use" ? "TREE_OPERATION_INVENTORY" : "TREE_OPERATION_SERVICE",
+        description: `${operation.name} request for ${treeLabel}`,
+        referenceId: createdRequest.id,
+      });
+
+      setNote("");
+      setMessage(
+        `${operation.name} request created for ${treeLabel}. Wallet deducted, transaction recorded, and ${
+          operation.category === "Inventory Use" ? "inventory was deducted." : "request is waiting for admin assignment."
+        }`
+      );
+
+      await loadData();
+    } catch (error: any) {
+      if (previousBalance !== null) await restoreServiceWallet(previousBalance);
+      await restoreInventory(inventorySnapshot);
+      setMessage(error?.message || "Operation request failed. Wallet/inventory restored when possible.");
+    } finally {
+      setProcessing(false);
+    }
   }
 
   async function createOperationRequest(autoRenewEnabled: boolean) {
@@ -860,7 +1094,7 @@ export default function TreeOperationsPage() {
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
       setMessage(
-        `Preview only: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace before this is connected later.`
+        `Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`
       );
       return;
     }
@@ -868,7 +1102,7 @@ export default function TreeOperationsPage() {
     setMessage(
       `${operation.name} preview checked for ${
         selectedTree.tree_code || selectedTree.id
-      }. Step 10 paid flow is active for Tree Care Programs. Non-care services are still preview only.`
+      }. Total charge will be ${peso(totalPreview)}. Click Buy Request to submit this paid operation to admin.`
     );
   }
 
@@ -931,7 +1165,7 @@ export default function TreeOperationsPage() {
                         {tree.custom_name ||
                           tree.display_name ||
                           tree.tree_code ||
-                          "Agarwood Tree"}
+                          "Arganwood Tree"}
                       </p>
                       <small>
                         {tree.stage || tree.growth_stage || tree.current_stage || "Stage Pending"} •{" "}
@@ -991,7 +1225,7 @@ export default function TreeOperationsPage() {
                     {selectedTree.custom_name ||
                       selectedTree.display_name ||
                       selectedTree.tree_code ||
-                      "Agarwood Tree"}
+                      "Arganwood Tree"}
                   </p>
                 </div>
               )}
@@ -1035,6 +1269,15 @@ export default function TreeOperationsPage() {
                 <h3>{operation?.name || "Tree Operation"}</h3>
                 <p>{operation?.description || "Operation preview."}</p>
               </div>
+
+              {hasActiveSameRequest && (
+                <div className="inventoryCheck ok">
+                  <strong>Active Request Found</strong>
+                  <p>
+                    This same service is already {String(activeSameRequest?.status || "PENDING").replace("_", " ")} for this tree. It will unlock after completion or cancellation.
+                  </p>
+                </div>
+              )}
 
               {operation?.category === "Care Program" && (
                 <div className="careSyncBox">
@@ -1140,13 +1383,27 @@ export default function TreeOperationsPage() {
                   </button>
                 </div>
               ) : (
-                <button
-                  className="submitButton"
-                  disabled={processing}
-                  onClick={previewOperation}
-                >
-                  Preview Only
-                </button>
+                <div className="actionGrid">
+                  <button
+                    className="submitButton secondary"
+                    disabled={processing}
+                    onClick={previewOperation}
+                  >
+                    Preview
+                  </button>
+
+                  <button
+                    className="submitButton"
+                    disabled={processing || hasActiveSameRequest}
+                    onClick={createServiceOperationRequest}
+                  >
+                    {processing
+                      ? "Processing..."
+                      : hasActiveSameRequest
+                      ? "Already Requested"
+                      : "Buy Request"}
+                  </button>
+                </div>
               )}
 
               <button
@@ -1159,7 +1416,7 @@ export default function TreeOperationsPage() {
               </button>
 
               <p className="warning">
-                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads active care_program_subscriptions where auto_renew_enabled is ON and next_renewal_date is due. It checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. Still disabled: no inventory deduction, no billing engine, no cron jobs, and no background jobs.
+                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads active care_program_subscriptions where auto_renew_enabled is ON and next_renewal_date is due. It checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. Normal services now create paid requests and inventory-use services deduct inventory. Still disabled: no cron jobs and no background jobs.
               </p>
             </section>
           </section>

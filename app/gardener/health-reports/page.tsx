@@ -3,10 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+type Assignment = Record<string, any>;
+type HealthReport = Record<string, any>;
+
 export default function GardenerHealthReportsPage() {
   const [caretaker, setCaretaker] = useState<any>(null);
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [reports, setReports] = useState<any[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [reports, setReports] = useState<HealthReport[]>([]);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [healthStatus, setHealthStatus] = useState("HEALTHY");
   const [diseaseFound, setDiseaseFound] = useState(false);
@@ -17,15 +20,20 @@ export default function GardenerHealthReportsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
+  useEffect(() => {
+    loadData();
+  }, []);
+
   async function loadData() {
     setLoading(true);
     setMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       window.location.href = "/login";
       return;
     }
@@ -50,13 +58,19 @@ export default function GardenerHealthReportsPage() {
       return;
     }
 
+    if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
+      setMessage("Your gardener account is not ACTIVE.");
+      setLoading(false);
+      return;
+    }
+
     setCaretaker(caretakerRow);
 
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from("caretaker_assignments")
       .select("*")
       .eq("caretaker_id", caretakerRow.id)
-      .order("created_at", { ascending: false });
+      .order("started_at", { ascending: false });
 
     if (assignmentError) {
       setMessage(assignmentError.message);
@@ -64,11 +78,17 @@ export default function GardenerHealthReportsPage() {
       return;
     }
 
-    const { data: reportRows } = await supabase
+    const { data: reportRows, error: reportError } = await supabase
       .from("tree_health_reports")
       .select("*")
       .eq("caretaker_id", caretakerRow.id)
       .order("created_at", { ascending: false });
+
+    if (reportError) {
+      setMessage(reportError.message);
+      setLoading(false);
+      return;
+    }
 
     const rows = assignmentRows || [];
 
@@ -78,10 +98,6 @@ export default function GardenerHealthReportsPage() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const selectedAssignment = useMemo(() => {
     return assignments.find((item) => item.id === selectedAssignmentId) || null;
   }, [assignments, selectedAssignmentId]);
@@ -89,8 +105,15 @@ export default function GardenerHealthReportsPage() {
   async function saveHealthReport() {
     setMessage("");
 
-    if (!caretaker) return setMessage("Caretaker profile not found.");
-    if (!selectedAssignment) return setMessage("Please select an assignment.");
+    if (!caretaker) {
+      setMessage("Caretaker profile not found.");
+      return;
+    }
+
+    if (!selectedAssignment) {
+      setMessage("Please select an assignment.");
+      return;
+    }
 
     setSaving(true);
 
@@ -108,15 +131,17 @@ export default function GardenerHealthReportsPage() {
       status: "SUBMITTED",
     };
 
-    const { error } = await supabase.from("tree_health_reports").insert(payload);
+    const { error: reportError } = await supabase
+      .from("tree_health_reports")
+      .insert(payload);
 
-    if (error) {
-      setMessage(error.message);
+    if (reportError) {
+      setMessage(reportError.message);
       setSaving(false);
       return;
     }
 
-    await supabase.from("caretaker_task_logs").insert({
+    const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
       assignment_id: selectedAssignment.id,
       caretaker_id: caretaker.id,
       customer_profile_id: selectedAssignment.customer_profile_id || null,
@@ -127,170 +152,219 @@ export default function GardenerHealthReportsPage() {
       status: "SUBMITTED",
     });
 
+    if (taskError) {
+      setMessage(taskError.message);
+      setSaving(false);
+      return;
+    }
+
+    await supabase
+      .from("caretaker_assignments")
+      .update({ status: "IN_PROGRESS" })
+      .eq("id", selectedAssignment.id);
+
+    if (selectedAssignment.operation_request_id) {
+      await supabase
+        .from("tree_operation_requests")
+        .update({ status: "IN_PROGRESS" })
+        .eq("id", selectedAssignment.operation_request_id);
+    }
+
     setHealthStatus("HEALTHY");
     setDiseaseFound(false);
     setPestFound(false);
     setIssueNotes("");
     setRecommendation("");
     setSaving(false);
-    setMessage("Health report submitted successfully.");
+    setMessage("Health report submitted and synced to Admin Operations.");
     await loadData();
   }
 
+  function formatDate(value: string | null | undefined) {
+    if (!value) return "—";
+
+    return new Date(value).toLocaleString("en-PH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
   return (
-    <main style={{ padding: 30 }}>
-      <p style={eyebrowStyle}>Arganwood Gardener Portal</p>
-      <h1 style={{ margin: 0, fontSize: 42 }}>Health Reports</h1>
-      <p style={{ maxWidth: 850, color: "#5f665e" }}>
-        Submit tree condition reports, disease checks, pest checks, and recommendations.
-      </p>
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
+        <div>
+          <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
+            Arganwood Gardener Portal
+          </p>
 
-      {message && <div style={messageStyle}>{message}</div>}
+          <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
+            Health Reports
+          </h1>
 
-      {loading ? (
-        <div style={cardStyle}>Loading health reports...</div>
-      ) : assignments.length === 0 ? (
-        <div style={cardStyle}>No assigned jobs yet.</div>
-      ) : (
-        <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginTop: 24 }}>
-          <div style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Submit Health Report</h2>
+          <p className="mt-2 text-white/70">
+            Submit tree condition reports, pest checks, disease checks, and recommendations.
+          </p>
+        </div>
 
-            <label style={labelStyle}>Assignment</label>
-            <select value={selectedAssignmentId} onChange={(e) => setSelectedAssignmentId(e.target.value)} style={inputStyle}>
-              {assignments.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.assignment_type || "Tree Assignment"} — {item.tree_id || "No tree"}
-                </option>
-              ))}
-            </select>
-
-            <label style={labelStyle}>Health Status</label>
-            <select value={healthStatus} onChange={(e) => setHealthStatus(e.target.value)} style={inputStyle}>
-              <option value="HEALTHY">HEALTHY</option>
-              <option value="NEEDS_MONITORING">NEEDS MONITORING</option>
-              <option value="TREATMENT_REQUIRED">TREATMENT REQUIRED</option>
-              <option value="CRITICAL">CRITICAL</option>
-            </select>
-
-            <label style={checkStyle}>
-              <input type="checkbox" checked={diseaseFound} onChange={(e) => setDiseaseFound(e.target.checked)} />
-              Disease found
-            </label>
-
-            <label style={checkStyle}>
-              <input type="checkbox" checked={pestFound} onChange={(e) => setPestFound(e.target.checked)} />
-              Pest found
-            </label>
-
-            <label style={labelStyle}>Issue Notes</label>
-            <textarea value={issueNotes} onChange={(e) => setIssueNotes(e.target.value)} placeholder="Observed issues..." style={{ ...inputStyle, minHeight: 100 }} />
-
-            <label style={labelStyle}>Recommendation</label>
-            <textarea value={recommendation} onChange={(e) => setRecommendation(e.target.value)} placeholder="Recommended action..." style={{ ...inputStyle, minHeight: 100 }} />
-
-            <button onClick={saveHealthReport} disabled={saving} style={buttonStyle}>
-              {saving ? "Submitting..." : "Submit Health Report"}
-            </button>
+        {message && (
+          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
+            {message}
           </div>
+        )}
 
-          <div style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Recent Health Reports</h2>
+        {loading ? (
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
+            Loading health reports...
+          </div>
+        ) : assignments.length === 0 ? (
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
+            No assigned jobs yet.
+          </div>
+        ) : (
+          <section className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-2xl font-bold text-[#ffe49a]">
+                Submit Health Report
+              </h2>
 
-            {reports.length === 0 ? (
-              <p style={{ color: "#5f665e" }}>No health reports submitted yet.</p>
-            ) : (
-              <div style={{ display: "grid", gap: 12 }}>
-                {reports.slice(0, 8).map((item) => (
-                  <div key={item.id} style={rowStyle}>
-                    <strong>{item.health_status || "Health Report"}</strong>
-                    <p style={{ margin: "6px 0 0", color: "#5f665e" }}>Tree: {item.tree_id || "—"}</p>
-                    <p style={{ margin: "4px 0 0", color: "#5f665e" }}>
-                      Disease: {item.disease_found ? "YES" : "NO"} • Pest: {item.pest_found ? "YES" : "NO"}
-                    </p>
-                    <p style={{ margin: "4px 0 0", color: "#5f665e" }}>
-                      Status: {item.status || "SUBMITTED"}
-                    </p>
-                  </div>
+              <label className="mt-5 block text-sm font-bold text-white/70">
+                Assignment
+              </label>
+
+              <select
+                value={selectedAssignmentId}
+                onChange={(e) => setSelectedAssignmentId(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
+              >
+                {assignments.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.assignment_type || "Tree Assignment"} —{" "}
+                    {item.tree_id || "No tree"}
+                  </option>
                 ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+              </select>
+
+              <label className="mt-4 block text-sm font-bold text-white/70">
+                Health Status
+              </label>
+
+              <select
+                value={healthStatus}
+                onChange={(e) => setHealthStatus(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
+              >
+                <option value="HEALTHY">HEALTHY</option>
+                <option value="NEEDS_MONITORING">NEEDS MONITORING</option>
+                <option value="TREATMENT_REQUIRED">TREATMENT REQUIRED</option>
+                <option value="CRITICAL">CRITICAL</option>
+              </select>
+
+              <label className="mt-4 flex items-center gap-3 rounded-xl border border-white/10 bg-white/10 p-4 font-bold text-white/80">
+                <input
+                  type="checkbox"
+                  checked={diseaseFound}
+                  onChange={(e) => setDiseaseFound(e.target.checked)}
+                />
+                Disease Found
+              </label>
+
+              <label className="mt-3 flex items-center gap-3 rounded-xl border border-white/10 bg-white/10 p-4 font-bold text-white/80">
+                <input
+                  type="checkbox"
+                  checked={pestFound}
+                  onChange={(e) => setPestFound(e.target.checked)}
+                />
+                Pest Found
+              </label>
+
+              <label className="mt-4 block text-sm font-bold text-white/70">
+                Issue Notes
+              </label>
+
+              <textarea
+                value={issueNotes}
+                onChange={(e) => setIssueNotes(e.target.value)}
+                placeholder="Observed issues..."
+                className="mt-2 min-h-[120px] w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+
+              <label className="mt-4 block text-sm font-bold text-white/70">
+                Recommendation
+              </label>
+
+              <textarea
+                value={recommendation}
+                onChange={(e) => setRecommendation(e.target.value)}
+                placeholder="Recommended action..."
+                className="mt-2 min-h-[120px] w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+
+              <button
+                onClick={saveHealthReport}
+                disabled={saving}
+                className="mt-5 w-full rounded-xl bg-[#d9b45f] px-5 py-3 font-black text-[#071f16] disabled:opacity-50"
+              >
+                {saving ? "Submitting..." : "Submit Health Report"}
+              </button>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-2xl font-bold text-[#ffe49a]">
+                Recent Health Reports
+              </h2>
+
+              {reports.length === 0 ? (
+                <p className="mt-5 text-white/70">No health reports submitted yet.</p>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  {reports.slice(0, 10).map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-2xl border border-white/10 bg-black/20 p-4"
+                    >
+                      <h3 className="font-bold text-white">
+                        {item.health_status || "Health Report"}
+                      </h3>
+
+                      <p className="mt-1 text-sm text-white/60">
+                        Tree: {item.tree_id || "—"}
+                      </p>
+
+                      <p className="mt-1 text-sm text-white/60">
+                        Disease: {item.disease_found ? "YES" : "NO"} • Pest:{" "}
+                        {item.pest_found ? "YES" : "NO"}
+                      </p>
+
+                      <p className="mt-1 text-sm text-white/60">
+                        Status: {item.status || "SUBMITTED"}
+                      </p>
+
+                      <p className="mt-1 text-sm text-white/60">
+                        Date: {formatDate(item.created_at)}
+                      </p>
+
+                      {item.issue_notes && (
+                        <p className="mt-3 rounded-xl bg-white/10 p-3 text-sm text-white/70">
+                          Issue: {item.issue_notes}
+                        </p>
+                      )}
+
+                      {item.recommendation && (
+                        <p className="mt-3 rounded-xl bg-white/10 p-3 text-sm text-white/70">
+                          Recommendation: {item.recommendation}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
     </main>
   );
 }
-
-const cardStyle = {
-  borderRadius: 24,
-  background: "rgba(255,253,246,.9)",
-  border: "1px solid rgba(92,70,35,.08)",
-  boxShadow: "0 18px 42px rgba(82,60,27,.09)",
-  padding: 22,
-};
-
-const messageStyle = {
-  ...cardStyle,
-  marginTop: 20,
-  color: "#31553d",
-  fontWeight: 900,
-};
-
-const eyebrowStyle = {
-  margin: 0,
-  color: "#8c6a3c",
-  fontWeight: 900,
-  fontSize: 12,
-  textTransform: "uppercase" as const,
-  letterSpacing: ".12em",
-};
-
-const labelStyle = {
-  display: "block",
-  marginTop: 14,
-  marginBottom: 6,
-  color: "#6b6b62",
-  fontWeight: 900,
-  fontSize: 12,
-  textTransform: "uppercase" as const,
-  letterSpacing: ".12em",
-};
-
-const checkStyle = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  marginTop: 14,
-  color: "#10281f",
-  fontWeight: 900,
-};
-
-const inputStyle = {
-  width: "100%",
-  border: "1px solid rgba(92,70,35,.14)",
-  borderRadius: 14,
-  padding: "13px 14px",
-  background: "rgba(255,253,246,.94)",
-  color: "#101a14",
-  outline: "none",
-  fontWeight: 800,
-};
-
-const buttonStyle = {
-  width: "100%",
-  marginTop: 18,
-  border: 0,
-  borderRadius: 16,
-  padding: "14px",
-  background: "#d9b45f",
-  color: "#10281f",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const rowStyle = {
-  borderRadius: 18,
-  background: "#f3ead8",
-  padding: 14,
-};

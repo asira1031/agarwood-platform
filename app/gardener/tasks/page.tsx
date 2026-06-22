@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 type Task = Record<string, any>;
-type Filter = "ALL" | "ASSIGNED" | "IN_PROGRESS" | "COMPLETED";
+type Filter = "ALL" | "ASSIGNED" | "IN_PROGRESS" | "SUBMITTED" | "COMPLETED";
 
 export default function GardenerTasksPage() {
   const [caretaker, setCaretaker] = useState<any>(null);
@@ -14,15 +15,20 @@ export default function GardenerTasksPage() {
   const [message, setMessage] = useState("");
   const [savingId, setSavingId] = useState("");
 
+  useEffect(() => {
+    loadData();
+  }, []);
+
   async function loadData() {
     setLoading(true);
     setMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       window.location.href = "/login";
       return;
     }
@@ -43,6 +49,12 @@ export default function GardenerTasksPage() {
 
     if (!caretakerRow) {
       setMessage("Caretaker profile not found.");
+      setLoading(false);
+      return;
+    }
+
+    if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
+      setMessage("Your gardener account is not ACTIVE.");
       setLoading(false);
       return;
     }
@@ -73,9 +85,7 @@ export default function GardenerTasksPage() {
 
     const { error: taskError } = await supabase
       .from("caretaker_task_logs")
-      .update({
-        status: cleanStatus,
-      })
+      .update({ status: cleanStatus })
       .eq("id", task.id);
 
     if (taskError) {
@@ -85,46 +95,62 @@ export default function GardenerTasksPage() {
     }
 
     if (task.assignment_id) {
-      await supabase
+      const { error: assignmentError } = await supabase
         .from("caretaker_assignments")
         .update({ status: cleanStatus })
         .eq("id", task.assignment_id);
+
+      if (assignmentError) {
+        setMessage(assignmentError.message);
+        setSavingId("");
+        return;
+      }
     }
 
     if (task.operation_request_id) {
-      await supabase
+      const { error: requestError } = await supabase
         .from("tree_operation_requests")
         .update({ status: cleanStatus })
         .eq("id", task.operation_request_id);
+
+      if (requestError) {
+        setMessage(requestError.message);
+        setSavingId("");
+        return;
+      }
     }
 
-    setMessage(`Task status updated to ${cleanStatus.replace("_", " ")}.`);
+    await supabase.from("caretaker_task_logs").insert({
+      assignment_id: task.assignment_id || null,
+      caretaker_id: task.caretaker_id,
+      customer_profile_id: task.customer_profile_id || null,
+      tree_id: task.tree_id || null,
+      operation_request_id: task.operation_request_id || null,
+      task_type: task.task_type || "Tree Task",
+      notes: `Gardener updated task status to ${cleanStatus.replace("_", " ")}.`,
+      status: cleanStatus,
+    });
+
+    setMessage(`Task synced as ${cleanStatus.replace("_", " ")}.`);
     setSavingId("");
     await loadData();
   }
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const stats = useMemo(() => {
-    const assigned = tasks.filter(
-      (task) => String(task.status || "ASSIGNED").toUpperCase() === "ASSIGNED"
-    ).length;
-
-    const inProgress = tasks.filter(
-      (task) => String(task.status || "").toUpperCase() === "IN_PROGRESS"
-    ).length;
-
-    const completed = tasks.filter(
-      (task) => String(task.status || "").toUpperCase() === "COMPLETED"
-    ).length;
-
     return {
       total: tasks.length,
-      assigned,
-      inProgress,
-      completed,
+      assigned: tasks.filter(
+        (task) => String(task.status || "ASSIGNED").toUpperCase() === "ASSIGNED"
+      ).length,
+      inProgress: tasks.filter(
+        (task) => String(task.status || "").toUpperCase() === "IN_PROGRESS"
+      ).length,
+      submitted: tasks.filter(
+        (task) => String(task.status || "").toUpperCase() === "SUBMITTED"
+      ).length,
+      completed: tasks.filter(
+        (task) => String(task.status || "").toUpperCase() === "COMPLETED"
+      ).length,
     };
   }, [tasks]);
 
@@ -136,357 +162,242 @@ export default function GardenerTasksPage() {
     );
   }, [tasks, filter]);
 
+  function formatDate(value: string | null | undefined) {
+    if (!value) return "—";
+
+    return new Date(value).toLocaleString("en-PH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function badgeClass(status: string) {
+    if (status === "COMPLETED") {
+      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
+    }
+
+    if (status === "SUBMITTED") {
+      return "border-purple-400/30 bg-purple-500/20 text-purple-200";
+    }
+
+    if (status === "IN_PROGRESS") {
+      return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
+    }
+
+    return "border-blue-400/30 bg-blue-500/20 text-blue-200";
+  }
+
   return (
-    <main style={pageStyle}>
-      <section style={shellStyle}>
-        <div style={headerStyle}>
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p style={eyebrowStyle}>Arganwood Gardener Portal</p>
-            <h1 style={titleStyle}>Gardener Tasks</h1>
-            <p style={subtitleStyle}>
-              Track assigned work, update progress, and mark finished tasks clearly.
+            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
+              Arganwood Gardener Portal
+            </p>
+
+            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
+              Gardener Tasks
+            </h1>
+
+            <p className="mt-2 text-white/70">
+              Track assigned tasks, update progress, and sync work status back to Admin Operations.
             </p>
           </div>
 
-          <div style={gardenerCardStyle}>
-            <p style={smallLabelStyle}>Logged Gardener</p>
-            <h3 style={{ margin: "6px 0 0", color: "#244536" }}>
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-white/50">
+              Logged Gardener
+            </p>
+            <h3 className="mt-2 font-bold text-[#f7d774]">
               {caretaker?.full_name || caretaker?.email || "—"}
             </h3>
           </div>
         </div>
 
-        {message && <div style={messageStyle}>{message}</div>}
+        {message && (
+          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
+            {message}
+          </div>
+        )}
 
-        <section style={statsGridStyle}>
-          <StatCard label="Total Tasks" value={stats.total} />
-          <StatCard label="Assigned" value={stats.assigned} />
-          <StatCard label="In Progress" value={stats.inProgress} />
-          <StatCard label="Finished" value={stats.completed} />
+        <section className="grid gap-4 md:grid-cols-5">
+          <StatCard label="Total Tasks" value={String(stats.total)} />
+          <StatCard label="Assigned" value={String(stats.assigned)} />
+          <StatCard label="In Progress" value={String(stats.inProgress)} />
+          <StatCard label="Submitted" value={String(stats.submitted)} />
+          <StatCard label="Completed" value={String(stats.completed)} />
         </section>
 
-        <section style={toolbarStyle}>
-          {(["ALL", "ASSIGNED", "IN_PROGRESS", "COMPLETED"] as Filter[]).map(
-            (item) => (
-              <button
-                key={item}
-                onClick={() => setFilter(item)}
-                style={{
-                  ...filterButtonStyle,
-                  background: filter === item ? "#244536" : "rgba(255,255,255,.78)",
-                  color: filter === item ? "white" : "#244536",
-                }}
-              >
-                {item.replace("_", " ")}
-              </button>
-            )
-          )}
+        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
+          <div className="flex flex-wrap gap-3">
+            {(["ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"] as Filter[]).map(
+              (item) => (
+                <button
+                  key={item}
+                  onClick={() => setFilter(item)}
+                  className={`rounded-full px-5 py-3 text-sm font-bold transition ${
+                    filter === item
+                      ? "bg-[#f7d774] text-[#071f16]"
+                      : "bg-white/10 text-white hover:bg-white/15"
+                  }`}
+                >
+                  {item.replace("_", " ")}
+                </button>
+              )
+            )}
+          </div>
         </section>
 
         {loading ? (
-          <div style={cardStyle}>Loading tasks...</div>
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
+            Loading tasks...
+          </div>
         ) : filteredTasks.length === 0 ? (
-          <div style={cardStyle}>No tasks found for this status.</div>
+          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
+            No tasks found for this status.
+          </div>
         ) : (
-          <section style={taskGridStyle}>
+          <section className="space-y-5">
             {filteredTasks.map((task) => {
               const status = String(task.status || "ASSIGNED").toUpperCase();
               const completed = status === "COMPLETED";
 
               return (
-                <article key={task.id} style={taskCardStyle}>
-                  <div style={taskTopStyle}>
-                    <div>
-                      <p style={eyebrowStyle}>{task.task_type || "Tree Task"}</p>
-                      <h2 style={taskTitleStyle}>Tree: {task.tree_id || "—"}</h2>
+                <div
+                  key={task.id}
+                  className="rounded-3xl border border-white/10 bg-white/[0.06] p-6"
+                >
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex-1">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <h2 className="text-2xl font-black text-[#ffe49a]">
+                          {task.task_type || "Tree Task"}
+                        </h2>
+
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-black ${badgeClass(
+                            status
+                          )}`}
+                        >
+                          {status.replace("_", " ")}
+                        </span>
+                      </div>
+
+                      <div className="mt-5 grid gap-3 md:grid-cols-4">
+                        <Info label="Tree" value={task.tree_id || "—"} />
+                        <Info label="Assignment" value={task.assignment_id || "—"} />
+                        <Info label="Operation Request" value={task.operation_request_id || "—"} />
+                        <Info label="Created" value={formatDate(task.created_at)} />
+                      </div>
+
+                      {task.notes && (
+                        <div className="mt-4 rounded-2xl bg-black/20 p-4 text-sm text-white/70">
+                          Notes: {task.notes}
+                        </div>
+                      )}
+
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <Link
+                          href="/gardener/photo-updates"
+                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
+                        >
+                          Photo Update
+                        </Link>
+
+                        <Link
+                          href="/gardener/gps-updates"
+                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
+                        >
+                          GPS Update
+                        </Link>
+
+                        <Link
+                          href="/gardener/health-reports"
+                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
+                        >
+                          Health Report
+                        </Link>
+                      </div>
                     </div>
 
-                    <span
-                      style={{
-                        ...badgeStyle,
-                        background: completed ? "#1f6f4a" : status === "IN_PROGRESS" ? "#b98124" : "#244536",
-                      }}
-                    >
-                      {status.replace("_", " ")}
-                    </span>
-                  </div>
+                    <div className="w-full rounded-2xl bg-black/20 p-4 lg:w-[320px]">
+                      <label className="text-sm font-bold text-white/70">
+                        Update Task Status
+                      </label>
 
-                  <div style={detailsGridStyle}>
-                    <Info label="Operation Request" value={task.operation_request_id || "—"} />
-                    <Info label="Assignment ID" value={task.assignment_id || "—"} />
-                    <Info
-                      label="Created"
-                      value={
-                        task.created_at
-                          ? new Date(task.created_at).toLocaleString()
-                          : "—"
-                      }
-                    />
-                    <Info label="Status" value={status.replace("_", " ")} />
-                  </div>
-
-                  {task.notes && (
-                    <div style={notesStyle}>
-                      <p style={smallLabelStyle}>Notes</p>
-                      <p style={{ margin: "6px 0 0", color: "#4d5a4f" }}>
-                        {task.notes}
-                      </p>
-                    </div>
-                  )}
-
-                  <div style={actionRowStyle}>
-                    <select
-                      value={status}
-                      disabled={savingId === task.id}
-                      onChange={(event) =>
-                        updateTaskStatus(task, event.target.value)
-                      }
-                      style={selectStyle}
-                    >
-                      <option value="ASSIGNED">ASSIGNED</option>
-                      <option value="IN_PROGRESS">IN PROGRESS</option>
-                      <option value="COMPLETED">COMPLETED</option>
-                    </select>
-
-                    {!completed && (
-                      <button
-                        onClick={() => updateTaskStatus(task, "COMPLETED")}
+                      <select
+                        value={status}
                         disabled={savingId === task.id}
-                        style={buttonStyle}
+                        onChange={(event) =>
+                          updateTaskStatus(task, event.target.value)
+                        }
+                        className="mt-2 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none disabled:opacity-50"
                       >
-                        {savingId === task.id ? "Saving..." : "Finish Task"}
-                      </button>
-                    )}
+                        <option value="ASSIGNED">ASSIGNED</option>
+                        <option value="IN_PROGRESS">IN PROGRESS</option>
+                        <option value="SUBMITTED">SUBMITTED</option>
+                        <option value="COMPLETED">COMPLETED</option>
+                      </select>
+
+                      <div className="mt-4 grid gap-3">
+                        {status === "ASSIGNED" && (
+                          <button
+                            onClick={() => updateTaskStatus(task, "IN_PROGRESS")}
+                            disabled={savingId === task.id}
+                            className="rounded-xl bg-blue-500/20 px-4 py-3 font-bold text-blue-100 hover:bg-blue-500/30 disabled:opacity-50"
+                          >
+                            {savingId === task.id ? "Saving..." : "Start Task"}
+                          </button>
+                        )}
+
+                        {!completed && (
+                          <button
+                            onClick={() => updateTaskStatus(task, "COMPLETED")}
+                            disabled={savingId === task.id}
+                            className="rounded-xl bg-emerald-500/20 px-4 py-3 font-bold text-emerald-100 hover:bg-emerald-500/30 disabled:opacity-50"
+                          >
+                            {savingId === task.id ? "Saving..." : "Finish Task"}
+                          </button>
+                        )}
+
+                        {completed && (
+                          <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-center text-sm font-bold text-emerald-100">
+                            Completed and synced to Admin.
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </article>
+                </div>
               );
             })}
           </section>
         )}
-      </section>
+      </div>
     </main>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={statCardStyle}>
-      <p style={smallLabelStyle}>{label}</p>
-      <h3 style={statValueStyle}>{value}</h3>
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
+      <p className="text-sm text-white/70">{label}</p>
+      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
     </div>
   );
 }
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div style={infoStyle}>
-      <p style={smallLabelStyle}>{label}</p>
-      <p style={{ margin: "5px 0 0", color: "#244536", fontWeight: 900 }}>
-        {value}
+    <div className="rounded-xl bg-white/10 p-3">
+      <p className="text-xs uppercase tracking-[0.12em] text-white/40">
+        {label}
       </p>
+      <p className="mt-1 break-all font-bold text-white/85">{value}</p>
     </div>
   );
 }
-
-const pageStyle: React.CSSProperties = {
-  minHeight: "100vh",
-  padding: 30,
-  backgroundImage:
-    "linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.72)), url('/images/agarwood-real-tree.jpg')",
-  backgroundSize: "cover",
-  backgroundPosition: "center",
-  backgroundRepeat: "no-repeat",
-  backgroundAttachment: "fixed",
-};
-
-const shellStyle: React.CSSProperties = {
-  maxWidth: 1200,
-  margin: "0 auto",
-  borderRadius: 32,
-  padding: 30,
-  background: "rgba(7,31,22,.78)",
-  border: "1px solid rgba(255,255,255,.14)",
-  boxShadow: "0 24px 80px rgba(0,0,0,.35)",
-  backdropFilter: "blur(10px)",
-};
-
-const headerStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 20,
-  alignItems: "flex-start",
-  flexWrap: "wrap",
-};
-
-const eyebrowStyle: React.CSSProperties = {
-  margin: 0,
-  color: "#d9b45f",
-  fontWeight: 900,
-  fontSize: 12,
-  textTransform: "uppercase",
-  letterSpacing: ".12em",
-};
-
-const titleStyle: React.CSSProperties = {
-  margin: "8px 0 0",
-  fontSize: 42,
-  color: "white",
-  fontWeight: 900,
-};
-
-const subtitleStyle: React.CSSProperties = {
-  maxWidth: 850,
-  color: "rgba(255,255,255,.78)",
-  fontWeight: 600,
-  lineHeight: 1.7,
-};
-
-const cardStyle: React.CSSProperties = {
-  borderRadius: 24,
-  background: "rgba(255,255,255,.92)",
-  border: "1px solid rgba(255,255,255,.22)",
-  boxShadow: "0 18px 42px rgba(0,0,0,.16)",
-  padding: 22,
-  color: "#244536",
-  fontWeight: 900,
-};
-
-const gardenerCardStyle: React.CSSProperties = {
-  ...cardStyle,
-  minWidth: 260,
-};
-
-const messageStyle: React.CSSProperties = {
-  ...cardStyle,
-  marginTop: 20,
-  color: "#31553d",
-};
-
-const statsGridStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 16,
-  marginTop: 24,
-};
-
-const statCardStyle: React.CSSProperties = {
-  ...cardStyle,
-  minHeight: 110,
-};
-
-const smallLabelStyle: React.CSSProperties = {
-  margin: 0,
-  color: "#6b6b62",
-  fontSize: 12,
-  fontWeight: 900,
-  textTransform: "uppercase",
-  letterSpacing: ".08em",
-};
-
-const statValueStyle: React.CSSProperties = {
-  margin: "10px 0 0",
-  fontSize: 32,
-  color: "#244536",
-  fontWeight: 900,
-};
-
-const toolbarStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  flexWrap: "wrap",
-  marginTop: 22,
-  marginBottom: 18,
-};
-
-const filterButtonStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,.25)",
-  borderRadius: 999,
-  padding: "10px 14px",
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const taskGridStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 16,
-  marginTop: 12,
-};
-
-const taskCardStyle: React.CSSProperties = {
-  borderRadius: 26,
-  background: "rgba(255,253,246,.94)",
-  border: "1px solid rgba(217,180,95,.22)",
-  boxShadow: "0 20px 55px rgba(0,0,0,.20)",
-  padding: 22,
-};
-
-const taskTopStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 16,
-  alignItems: "flex-start",
-};
-
-const taskTitleStyle: React.CSSProperties = {
-  margin: "8px 0 0",
-  color: "#10281f",
-  fontSize: 24,
-};
-
-const badgeStyle: React.CSSProperties = {
-  height: "fit-content",
-  borderRadius: 999,
-  padding: "9px 13px",
-  color: "white",
-  fontWeight: 900,
-  whiteSpace: "nowrap",
-};
-
-const detailsGridStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 12,
-  marginTop: 18,
-};
-
-const infoStyle: React.CSSProperties = {
-  borderRadius: 18,
-  background: "#f3ead8",
-  padding: 14,
-};
-
-const notesStyle: React.CSSProperties = {
-  marginTop: 14,
-  borderRadius: 18,
-  background: "rgba(36,69,54,.08)",
-  padding: 14,
-};
-
-const actionRowStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 12,
-  marginTop: 18,
-  flexWrap: "wrap",
-};
-
-const selectStyle: React.CSSProperties = {
-  flex: "1 1 220px",
-  border: "1px solid rgba(36,69,54,.18)",
-  borderRadius: 16,
-  padding: "13px 14px",
-  background: "white",
-  color: "#244536",
-  fontWeight: 900,
-  outline: "none",
-};
-
-const buttonStyle: React.CSSProperties = {
-  flex: "1 1 180px",
-  border: 0,
-  borderRadius: 16,
-  padding: "13px 16px",
-  background: "#d9b45f",
-  color: "#10281f",
-  fontWeight: 900,
-  cursor: "pointer",
-};

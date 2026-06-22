@@ -10,703 +10,490 @@ type Profile = {
   email: string | null;
 };
 
-type WalletTransaction = {
+type WalletTransaction = Record<string, any>;
+type SellTreeRequest = Record<string, any>;
+type WithdrawalRequest = Record<string, any>;
+type CashInRequest = Record<string, any>;
+type MembershipOrder = Record<string, any>;
+type OperationRequest = Record<string, any>;
+
+type LedgerEntry = {
   id: string;
-  profile_id: string;
-  transaction_type: string | null;
-  amount: number | null;
-  status: string | null;
-  reference_no: string | null;
-  description: string | null;
-  created_at: string | null;
+  source: string;
+  title: string;
+  description: string;
+  amount: number;
+  direction: "CREDIT" | "DEBIT" | "NEUTRAL";
+  status: string;
+  date: string | null;
+  reference?: string | null;
 };
 
-type SellTreeRequest = {
-  id: string;
-  profile_id: string;
-  tree_id: string | null;
-  tree_value: number | null;
-  platform_fee: number | null;
-  net_receive: number | null;
-  status: string | null;
-  created_at: string | null;
-};
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
 
-type WithdrawalRequest = {
-  id: string;
-  profile_id: string;
-  amount: number | null;
-  processing_fee: number | null;
-  net_receive: number | null;
-  status: string | null;
-  created_at: string | null;
-};
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function normalizeStatus(value: any) {
+  return String(value || "PENDING").trim().toUpperCase();
+}
+
+function normalizeType(value: any) {
+  return String(value || "TRANSACTION")
+    .replaceAll("_", " ")
+    .trim()
+    .toUpperCase();
+}
+
+function getDirectionFromWalletTx(tx: WalletTransaction): "CREDIT" | "DEBIT" | "NEUTRAL" {
+  const type = normalizeType(tx.transaction_type || tx.type || tx.category);
+  const amount = Number(tx.amount || 0);
+
+  if (type.includes("CREDIT") || type.includes("CASH IN") || type.includes("ADD FUND") || amount > 0) {
+    return "CREDIT";
+  }
+
+  if (
+    type.includes("DEBIT") ||
+    type.includes("WITHDRAW") ||
+    type.includes("PURCHASE") ||
+    type.includes("PAYMENT") ||
+    type.includes("MEMBERSHIP") ||
+    amount < 0
+  ) {
+    return "DEBIT";
+  }
+
+  return "NEUTRAL";
+}
+
+function signedAmount(amount: number, direction: "CREDIT" | "DEBIT" | "NEUTRAL") {
+  const value = Math.abs(Number(amount || 0));
+  if (direction === "DEBIT") return -value;
+  if (direction === "CREDIT") return value;
+  return Number(amount || 0);
+}
 
 export default function TransactionsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [walletTransactions, setWalletTransactions] = useState<
-    WalletTransaction[]
-  >([]);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
   const [sellRequests, setSellRequests] = useState<SellTreeRequest[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [cashIns, setCashIns] = useState<CashInRequest[]>([]);
+  const [membershipOrders, setMembershipOrders] = useState<MembershipOrder[]>([]);
+  const [operationRequests, setOperationRequests] = useState<OperationRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [filter, setFilter] = useState<"ALL" | "CREDIT" | "DEBIT" | "PENDING">("ALL");
 
-  useEffect(() => {
-    async function loadTransactions() {
-      setLoading(true);
+  async function getCurrentProfile() {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    if (userError) throw userError;
+    if (!user) {
+      window.location.href = "/login";
+      return null;
+    }
 
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
+    const email = user.email?.trim() || "";
+    const lowerEmail = email.toLowerCase();
 
-      const email = user.email?.trim().toLowerCase() || "";
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("id", user.id)
+      .maybeSingle();
 
-      const { data: profileById } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .eq("id", user.id)
-        .maybeSingle();
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", email)
+      .maybeSingle();
 
-      const { data: profileByEmail } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .eq("email", email)
-        .maybeSingle();
+    const { data: profileByLowerEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", lowerEmail)
+      .maybeSingle();
 
-      const currentProfile = profileById || profileByEmail;
+    const { data: profileByIlike } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    return (profileById || profileByEmail || profileByLowerEmail || profileByIlike) as Profile | null;
+  }
+
+  async function loadTransactions() {
+    setLoading(true);
+    setMessage("");
+
+    try {
+      const currentProfile = await getCurrentProfile();
 
       if (!currentProfile) {
+        setMessage("Profile not found.");
         setLoading(false);
         return;
       }
 
       setProfile(currentProfile);
-
       const profileId = currentProfile.id;
 
-      const { data: transactionData } = await supabase
-        .from("wallet_transactions")
-        .select(
-          "id, profile_id, transaction_type, amount, status, reference_no, description, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
+      const [walletTxResult, sellResult, withdrawalResult, cashInResult, membershipResult, operationsResult] =
+        await Promise.all([
+          supabase
+            .from("wallet_transactions")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("sell_tree_requests")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("withdrawal_requests")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("cashin_requests")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("membership_orders")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("tree_operation_requests")
+            .select("*")
+            .eq("profile_id", profileId)
+            .order("created_at", { ascending: false }),
+        ]);
 
-      const { data: sellData } = await supabase
-        .from("sell_tree_requests")
-        .select(
-          "id, profile_id, tree_id, tree_value, platform_fee, net_receive, status, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
+      if (walletTxResult.error) throw walletTxResult.error;
 
-      const { data: withdrawalData } = await supabase
-        .from("withdrawal_requests")
-        .select(
-          "id, profile_id, amount, processing_fee, net_receive, status, created_at"
-        )
-        .eq("profile_id", profileId)
-        .order("created_at", { ascending: false });
-
-      setWalletTransactions(transactionData || []);
-      setSellRequests(sellData || []);
-      setWithdrawals(withdrawalData || []);
+      setWalletTransactions(walletTxResult.data || []);
+      setSellRequests(sellResult.error ? [] : sellResult.data || []);
+      setWithdrawals(withdrawalResult.error ? [] : withdrawalResult.data || []);
+      setCashIns(cashInResult.error ? [] : cashInResult.data || []);
+      setMembershipOrders(membershipResult.error ? [] : membershipResult.data || []);
+      setOperationRequests(operationsResult.error ? [] : operationsResult.data || []);
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to load transactions.");
+    } finally {
       setLoading(false);
     }
+  }
 
+  useEffect(() => {
     loadTransactions();
   }, []);
 
+  const ledger = useMemo<LedgerEntry[]>(() => {
+    const rows: LedgerEntry[] = [];
+
+    walletTransactions.forEach((tx) => {
+      const direction = getDirectionFromWalletTx(tx);
+      const amount = signedAmount(Number(tx.amount || 0), direction);
+      const type = normalizeType(tx.transaction_type || tx.type || tx.category);
+
+      rows.push({
+        id: `wallet-${tx.id}`,
+        source: "Wallet Transactions",
+        title: type,
+        description: tx.description || tx.note || "Wallet movement",
+        amount,
+        direction,
+        status: normalizeStatus(tx.status),
+        date: tx.created_at,
+        reference: tx.reference_no || tx.reference_id || tx.id,
+      });
+    });
+
+    cashIns.forEach((item) => {
+      rows.push({
+        id: `cashin-${item.id}`,
+        source: "Add Funds / Cash-In",
+        title: "ADD FUNDS",
+        description: item.method || item.reference_no || item.reference || "Cash-in request",
+        amount: Math.abs(Number(item.amount || 0)),
+        direction: "CREDIT",
+        status: normalizeStatus(item.status),
+        date: item.created_at,
+        reference: item.reference_no || item.reference || item.id,
+      });
+    });
+
+    withdrawals.forEach((item) => {
+      rows.push({
+        id: `withdraw-${item.id}`,
+        source: "Cash-Out / Withdrawal",
+        title: "CASH OUT",
+        description: `Fee: ${peso(Number(item.processing_fee || 0))} • Net: ${peso(Number(item.net_receive || 0))}`,
+        amount: -Math.abs(Number(item.amount || 0)),
+        direction: "DEBIT",
+        status: normalizeStatus(item.status),
+        date: item.created_at,
+        reference: item.reference_no || item.id,
+      });
+    });
+
+    membershipOrders.forEach((item) => {
+      rows.push({
+        id: `membership-${item.id}`,
+        source: "Membership",
+        title: "MEMBERSHIP PAYMENT",
+        description: `Payment: ${normalizeStatus(item.payment_status)} • Plan: ${item.plan_id || "Plan"}`,
+        amount: -Math.abs(Number(item.amount || 0)),
+        direction: "DEBIT",
+        status: normalizeStatus(item.status || item.payment_status),
+        date: item.created_at,
+        reference: item.id,
+      });
+    });
+
+    operationRequests.forEach((item) => {
+      const amount = Number(item.total_amount || item.care_program_price || item.operation_fee || 0);
+      rows.push({
+        id: `operation-${item.id}`,
+        source: "Tree Operations",
+        title: normalizeType(item.care_program_name || item.operation_type || "TREE OPERATION"),
+        description: item.notes || item.tree_id || "Tree care/service request",
+        amount: -Math.abs(amount),
+        direction: amount > 0 ? "DEBIT" : "NEUTRAL",
+        status: normalizeStatus(item.status || item.care_program_status),
+        date: item.created_at,
+        reference: item.id,
+      });
+    });
+
+    sellRequests.forEach((item) => {
+      rows.push({
+        id: `sell-${item.id}`,
+        source: "Sell Tree",
+        title: "SELL TREE REQUEST",
+        description: `Value: ${peso(Number(item.tree_value || 0))} • Fee: ${peso(Number(item.platform_fee || 0))}`,
+        amount: Math.abs(Number(item.net_receive || 0)),
+        direction: "CREDIT",
+        status: normalizeStatus(item.status),
+        date: item.created_at,
+        reference: item.tree_id || item.id,
+      });
+    });
+
+    const seen = new Set<string>();
+    return rows
+      .filter((row) => {
+        const key = `${row.source}-${row.reference}-${row.title}-${row.amount}-${row.date}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+  }, [walletTransactions, cashIns, withdrawals, membershipOrders, operationRequests, sellRequests]);
+
+  const filteredLedger = useMemo(() => {
+    if (filter === "ALL") return ledger;
+    if (filter === "PENDING") {
+      return ledger.filter((item) => ["PENDING", "PROCESSING", "WAITING"].includes(item.status));
+    }
+    return ledger.filter((item) => item.direction === filter);
+  }, [ledger, filter]);
+
   const stats = useMemo(() => {
-    const totalRecords =
-      walletTransactions.length + sellRequests.length + withdrawals.length;
+    const credits = ledger
+      .filter((item) => item.direction === "CREDIT")
+      .reduce((sum, item) => sum + Math.abs(item.amount), 0);
 
-    const completedWallet = walletTransactions.filter((item) =>
-      ["COMPLETED", "APPROVED", "PAID"].includes(item.status || "")
-    ).length;
+    const debits = ledger
+      .filter((item) => item.direction === "DEBIT")
+      .reduce((sum, item) => sum + Math.abs(item.amount), 0);
 
-    const completedSell = sellRequests.filter((item) =>
-      ["COMPLETED", "APPROVED", "PAID"].includes(item.status || "")
-    ).length;
-
-    const completedWithdrawals = withdrawals.filter((item) =>
-      ["COMPLETED", "APPROVED", "PAID"].includes(item.status || "")
-    ).length;
-
-    const pendingWallet = walletTransactions.filter((item) =>
-      ["PENDING", "PROCESSING"].includes(item.status || "")
-    ).length;
-
-    const pendingSell = sellRequests.filter((item) =>
-      ["PENDING", "PROCESSING"].includes(item.status || "")
-    ).length;
-
-    const pendingWithdrawals = withdrawals.filter((item) =>
-      ["PENDING", "PROCESSING"].includes(item.status || "")
-    ).length;
-
-    const walletValue = walletTransactions.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
-    );
-
-    const sellValue = sellRequests.reduce(
-      (sum, item) => sum + Number(item.net_receive || 0),
-      0
-    );
-
-    const withdrawalValue = withdrawals.reduce(
-      (sum, item) => sum + Number(item.amount || 0),
-      0
-    );
+    const pending = ledger.filter((item) => ["PENDING", "PROCESSING", "WAITING"].includes(item.status)).length;
 
     return {
-      totalRecords,
-      completed: completedWallet + completedSell + completedWithdrawals,
-      pending: pendingWallet + pendingSell + pendingWithdrawals,
-      totalValue: walletValue + sellValue + withdrawalValue,
+      total: ledger.length,
+      credits,
+      debits,
+      net: credits - debits,
+      pending,
     };
-  }, [walletTransactions, sellRequests, withdrawals]);
+  }, [ledger]);
 
   return (
-    <main className="transactionsPage">
+    <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Real Database Connected</p>
+          <p className="eyebrow">Arganwood Synced Ledger</p>
           <h1>Transactions</h1>
           <span>
-            View wallet activity, sell tree requests, withdrawals, and platform
-            money movement from Supabase.
+            All money movement from wallet transactions, marketplace purchases, tree operations,
+            membership, add funds, cash-out, and sell tree requests.
           </span>
         </div>
 
         <div className="heroActions">
-          <Link href="/dashboard/earnings">Earnings</Link>
-          <Link href="/dashboard/wallet" className="primary">
-            Wallet
-          </Link>
+          <Link href="/dashboard/wallet">Wallet</Link>
+          <Link href="/dashboard/marketplace" className="primary">Marketplace</Link>
+          <button type="button" onClick={loadTransactions}>Refresh</button>
         </div>
       </section>
 
+      {message && <div className="message">{message}</div>}
+
       {loading ? (
-        <div className="loadingBox">Loading real transaction data...</div>
+        <div className="empty">Loading transactions...</div>
       ) : (
         <>
           <section className="cards">
-            <SummaryCard
-              icon="🧾"
-              label="Total Records"
-              value={String(stats.totalRecords)}
-              note="All transaction records"
-            />
-            <SummaryCard
-              icon="✅"
-              label="Completed"
-              value={String(stats.completed)}
-              note="Completed, approved, or paid"
-              gold
-            />
-            <SummaryCard
-              icon="⏳"
-              label="Pending"
-              value={String(stats.pending)}
-              note="Pending or processing"
-            />
-            <SummaryCard
-              icon="💳"
-              label="Total Value"
-              value={peso(stats.totalValue)}
-              note="Combined transaction value"
-              gold
-            />
+            <SummaryCard icon="🧾" label="Records" value={String(stats.total)} note="Combined ledger" />
+            <SummaryCard icon="⬆️" label="Credits" value={peso(stats.credits)} note="Add funds / sell tree" good />
+            <SummaryCard icon="⬇️" label="Debits" value={peso(stats.debits)} note="Purchases / payments" bad />
+            <SummaryCard icon="⏳" label="Pending" value={String(stats.pending)} note="Waiting / processing" />
+          </section>
+
+          <section className="filters">
+            {(["ALL", "CREDIT", "DEBIT", "PENDING"] as const).map((item) => (
+              <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>
+                {item}
+              </button>
+            ))}
           </section>
 
           <section className="panel">
             <div className="panelHead">
               <div>
-                <h2>Wallet Transactions</h2>
-                <p>Real records from wallet_transactions.</p>
+                <h2>Unified Transaction Ledger</h2>
+                <p>Profile: {profile?.email || "Customer"}</p>
               </div>
+              <strong className={stats.net >= 0 ? "netGood" : "netBad"}>Net {peso(stats.net)}</strong>
             </div>
 
-            {walletTransactions.length === 0 ? (
-              <EmptyState message="No wallet transactions yet." />
+            {filteredLedger.length === 0 ? (
+              <div className="empty small">No transactions found for this filter.</div>
             ) : (
-              <div className="tableWrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Reference</th>
-                      <th>Type</th>
-                      <th>Description</th>
-                      <th>Amount</th>
-                      <th>Status</th>
-                      <th>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {walletTransactions.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          <strong>{item.reference_no || "—"}</strong>
-                        </td>
-                        <td>{cleanType(item.transaction_type)}</td>
-                        <td>{item.description || "—"}</td>
-                        <td>
-                          <strong>{peso(Number(item.amount || 0))}</strong>
-                        </td>
-                        <td>
-                          <span className={`status ${statusClass(item.status)}`}>
-                            {item.status || "UNKNOWN"}
-                          </span>
-                        </td>
-                        <td>{formatDate(item.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="ledgerList">
+                {filteredLedger.map((item) => (
+                  <article className="ledgerRow" key={item.id}>
+                    <div className={`direction ${item.direction.toLowerCase()}`}>
+                      {item.direction === "CREDIT" ? "+" : item.direction === "DEBIT" ? "−" : "•"}
+                    </div>
+
+                    <div className="ledgerMain">
+                      <div className="titleLine">
+                        <strong>{item.title}</strong>
+                        <span>{item.source}</span>
+                      </div>
+                      <p>{item.description}</p>
+                      <small>Ref: {item.reference || "—"} • {formatDate(item.date)}</small>
+                    </div>
+
+                    <div className="ledgerRight">
+                      <b className={item.direction === "CREDIT" ? "amountCredit" : item.direction === "DEBIT" ? "amountDebit" : ""}>
+                        {item.direction === "CREDIT" ? "+" : item.direction === "DEBIT" ? "-" : ""}{peso(Math.abs(item.amount))}
+                      </b>
+                      <span className={`status ${item.status.toLowerCase()}`}>{item.status}</span>
+                    </div>
+                  </article>
+                ))}
               </div>
             )}
-          </section>
-
-          <section className="lowerGrid">
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Sell Tree Activity</h2>
-                  <p>Real records from sell_tree_requests.</p>
-                </div>
-                <Link href="/dashboard/sell-tree">Sell Tree ›</Link>
-              </div>
-
-              {sellRequests.length === 0 ? (
-                <EmptyState message="No sell tree requests yet." />
-              ) : (
-                <div className="requestList">
-                  {sellRequests.map((item) => (
-                    <div className="requestCard" key={item.id}>
-                      <div>
-                        <strong>{item.tree_id || "No Tree ID"}</strong>
-                        <p>Tree Value: {peso(Number(item.tree_value || 0))}</p>
-                        <p>
-                          Platform Fee: {peso(Number(item.platform_fee || 0))}
-                        </p>
-                      </div>
-                      <div>
-                        <span className={`status ${statusClass(item.status)}`}>
-                          {item.status || "UNKNOWN"}
-                        </span>
-                        <b>Net: {peso(Number(item.net_receive || 0))}</b>
-                        <small>{formatDate(item.created_at)}</small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Withdrawal Activity</h2>
-                  <p>Real records from withdrawal_requests.</p>
-                </div>
-                <Link href="/dashboard/wallet">Withdraw ›</Link>
-              </div>
-
-              {withdrawals.length === 0 ? (
-                <EmptyState message="No withdrawal requests yet." />
-              ) : (
-                <div className="requestList">
-                  {withdrawals.map((item) => (
-                    <div className="requestCard" key={item.id}>
-                      <div>
-                        <strong>{peso(Number(item.amount || 0))}</strong>
-                        <p>
-                          Processing Fee:{" "}
-                          {peso(Number(item.processing_fee || 0))}
-                        </p>
-                        <p>Net Receive: {peso(Number(item.net_receive || 0))}</p>
-                      </div>
-                      <div>
-                        <span className={`status ${statusClass(item.status)}`}>
-                          {item.status || "UNKNOWN"}
-                        </span>
-                        <small>{formatDate(item.created_at)}</small>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </section>
         </>
       )}
 
       <style>{`
         * { box-sizing: border-box; }
-
-        .transactionsPage {
+        .page {
           min-height: 100vh;
-          padding: 28px;
+          padding: 30px;
           color: #18261d;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 22%),
-            radial-gradient(circle at 90% 12%, rgba(255,255,255,.72), transparent 28%),
+            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
+            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
             linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
         }
-
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 20px;
-          margin-bottom: 22px;
-        }
-
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          letter-spacing: .5px;
-          text-transform: uppercase;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 42px;
-          letter-spacing: -1.4px;
-          color: #101a14;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 720px;
-        }
-
-        .heroActions {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-
-        .heroActions a,
-        .panelHead a {
-          border-radius: 14px;
-          padding: 13px 18px;
-          text-decoration: none;
-          color: #244536;
-          background: rgba(255,253,246,.78);
-          border: 1px solid rgba(92,70,35,.10);
-          font-weight: 900;
-          box-shadow: 0 14px 30px rgba(82,60,27,.08);
-        }
-
-        .heroActions a.primary {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .cards {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .summaryCard,
-        .panel,
-        .loadingBox,
-        .emptyState {
-          border-radius: 22px;
-          background: rgba(255,253,246,.86);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .summaryCard {
-          min-height: 145px;
-          padding: 20px;
-          display: flex;
-          align-items: center;
-          gap: 18px;
-        }
-
-        .summaryIcon {
-          width: 66px;
-          height: 66px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          font-size: 28px;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-        }
-
-        .summaryIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
-        }
-
-        .summaryCard p {
-          margin: 0 0 8px;
-          font-size: 13px;
-          color: #5f665e;
-          font-weight: 900;
-        }
-
-        .summaryCard h3 {
-          margin: 0 0 8px;
-          font-size: 27px;
-          letter-spacing: -1px;
-          color: #101a14;
-        }
-
-        .summaryCard small {
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .panel {
-          padding: 22px;
-          margin-bottom: 16px;
-        }
-
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: start;
-          gap: 18px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-          font-size: 22px;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 14px;
-        }
-
-        .loadingBox,
-        .emptyState {
-          padding: 28px;
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .tableWrap {
-          overflow-x: auto;
-        }
-
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          min-width: 850px;
-        }
-
-        th {
-          text-align: left;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: .4px;
-          color: #8c6a3c;
-          padding: 14px 12px;
-          border-bottom: 1px solid rgba(92,70,35,.14);
-          background: rgba(243,234,216,.55);
-        }
-
-        td {
-          padding: 15px 12px;
-          border-bottom: 1px solid rgba(92,70,35,.10);
-          color: #2c352e;
-          font-size: 14px;
-        }
-
-        .status {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 92px;
-          padding: 8px 10px;
-          border-radius: 999px;
-          font-size: 11px;
-          font-weight: 900;
-        }
-
-        .status.completed,
-        .status.approved,
-        .status.paid {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .status.pending,
-        .status.processing {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-        }
-
-        .status.rejected,
-        .status.failed {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        .lowerGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 16px;
-        }
-
-        .requestList {
-          display: grid;
-          gap: 12px;
-        }
-
-        .requestCard {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 14px;
-          padding: 15px;
-          border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .requestCard strong {
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .requestCard p {
-          margin: 5px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-        }
-
-        .requestCard div:last-child {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-        }
-
-        .requestCard b {
-          color: #31553d;
-          font-size: 14px;
-        }
-
-        .requestCard small {
-          color: #6b6b62;
-          font-weight: 800;
-        }
-
-        @media (max-width: 1200px) {
-          .cards {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .lowerGrid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .transactionsPage {
-            padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .cards {
-            grid-template-columns: 1fr;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .requestCard {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .requestCard div:last-child {
-            justify-items: start;
-          }
-        }
+        .hero { display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:22px; }
+        .eyebrow { margin:0 0 8px; color:#8c6a3c; font-weight:900; text-transform:uppercase; letter-spacing:.12em; font-size:12px; }
+        h1 { margin:0; font-size:44px; color:#101a14; letter-spacing:-1.6px; }
+        .hero span { display:block; margin-top:8px; color:#5f665e; max-width:850px; line-height:1.6; font-weight:700; }
+        .heroActions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        .heroActions a, .heroActions button { border:0; border-radius:16px; padding:13px 17px; background:rgba(255,253,246,.9); color:#244536; font-weight:900; text-decoration:none; cursor:pointer; box-shadow:0 14px 30px rgba(82,60,27,.08); }
+        .heroActions .primary { background:linear-gradient(135deg,#244536,#10281f); color:white; }
+        .message, .empty, .summaryCard, .filters, .panel { border-radius:26px; background:rgba(255,253,246,.88); border:1px solid rgba(92,70,35,.08); box-shadow:0 18px 42px rgba(82,60,27,.09); }
+        .message, .empty { padding:20px; margin-bottom:18px; color:#31553d; font-weight:900; }
+        .small { box-shadow:none; background:#f3ead8; border-radius:18px; }
+        .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:18px; }
+        .summaryCard { padding:22px; display:flex; gap:16px; align-items:center; }
+        .summaryIcon { width:58px; height:58px; border-radius:20px; background:#f3ead8; display:grid; place-items:center; font-size:26px; }
+        .summaryCard p { margin:0; color:#6b6b62; font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.1em; }
+        .summaryCard h3 { margin:7px 0; color:#244536; font-size:25px; }
+        .summaryCard small { color:#8c6a3c; font-weight:900; }
+        .summaryCard.good h3 { color:#31553d; }
+        .summaryCard.bad h3 { color:#a33c2a; }
+        .filters { display:flex; gap:10px; padding:12px; margin-bottom:18px; }
+        .filters button { flex:1; border:0; border-radius:999px; padding:13px 14px; background:#f3ead8; color:#244536; font-weight:900; cursor:pointer; }
+        .filters button.active { background:linear-gradient(135deg,#244536,#10281f); color:white; }
+        .panel { padding:24px; }
+        .panelHead { display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:18px; }
+        .panelHead h2 { margin:0; font-size:24px; color:#101a14; }
+        .panelHead p { margin:6px 0 0; color:#6b6b62; font-weight:800; }
+        .netGood { color:#31553d; } .netBad { color:#a33c2a; }
+        .ledgerList { display:grid; gap:12px; }
+        .ledgerRow { display:grid; grid-template-columns:54px 1fr auto; gap:14px; align-items:center; padding:16px; border-radius:22px; background:#f3ead8; border:1px solid rgba(92,70,35,.08); }
+        .direction { width:48px; height:48px; border-radius:18px; display:grid; place-items:center; font-size:28px; font-weight:900; background:rgba(36,69,54,.12); color:#244536; }
+        .direction.credit { background:rgba(49,85,61,.14); color:#31553d; }
+        .direction.debit { background:rgba(163,60,42,.12); color:#a33c2a; }
+        .titleLine { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+        .titleLine strong { color:#101a14; font-size:16px; }
+        .titleLine span { padding:6px 9px; border-radius:999px; background:rgba(255,253,246,.85); color:#8c6a3c; font-size:11px; font-weight:900; }
+        .ledgerMain p { margin:6px 0; color:#5f665e; font-weight:700; }
+        .ledgerMain small { color:#8c6a3c; font-weight:900; }
+        .ledgerRight { display:grid; justify-items:end; gap:8px; }
+        .ledgerRight b { font-size:17px; color:#244536; }
+        .amountCredit { color:#31553d !important; } .amountDebit { color:#a33c2a !important; }
+        .status { display:inline-flex; align-items:center; justify-content:center; min-width:94px; padding:8px 10px; border-radius:999px; font-size:11px; font-weight:900; background:rgba(36,69,54,.10); color:#244536; }
+        .status.completed, .status.approved, .status.paid, .status.active { background:rgba(49,85,61,.12); color:#31553d; }
+        .status.pending, .status.processing, .status.waiting { background:rgba(214,178,94,.20); color:#8c6a3c; }
+        .status.rejected, .status.failed, .status.cancelled { background:rgba(163,60,42,.12); color:#a33c2a; }
+        @media (max-width: 1100px) { .cards { grid-template-columns:repeat(2,1fr); } .hero { flex-direction:column; } .heroActions { justify-content:flex-start; } }
+        @media (max-width: 720px) { .page { padding:18px; } h1 { font-size:34px; } .cards { grid-template-columns:1fr; } .filters { display:grid; grid-template-columns:repeat(2,1fr); } .ledgerRow { grid-template-columns:1fr; } .ledgerRight { justify-items:start; } }
       `}</style>
     </main>
   );
 }
 
-function SummaryCard({
-  label,
-  value,
-  note,
-  icon,
-  gold,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  icon: string;
-  gold?: boolean;
-}) {
+function SummaryCard({ icon, label, value, note, good, bad }: { icon: string; label: string; value: string; note: string; good?: boolean; bad?: boolean }) {
   return (
-    <div className="summaryCard">
-      <div className={`summaryIcon ${gold ? "gold" : ""}`}>{icon}</div>
+    <article className={`summaryCard ${good ? "good" : ""} ${bad ? "bad" : ""}`}>
+      <div className="summaryIcon">{icon}</div>
       <div>
         <p>{label}</p>
         <h3>{value}</h3>
         <small>{note}</small>
       </div>
-    </div>
+    </article>
   );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return <div className="emptyState">{message}</div>;
-}
-
-function peso(value: number) {
-  return `₱ ${value.toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function cleanType(value: string | null) {
-  if (!value) return "—";
-  return value.replaceAll("_", " ");
-}
-
-function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase();
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }

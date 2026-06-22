@@ -1,7 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+
+type Profile = {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+};
 
 type InventoryItem = {
   id: string;
@@ -15,27 +22,52 @@ type InventoryItem = {
   low_stock_level: number | null;
   status: string | null;
   created_at: string | null;
+  updated_at?: string | null;
+};
+
+type OperationRequest = {
+  id: string;
+  profile_id: string | null;
+  tree_id: string | null;
+  operation_type: string | null;
+  total_amount: number | null;
+  status: string | null;
+  notes: string | null;
+  created_at: string | null;
 };
 
 type TreeRow = {
   id: string;
   profile_id: string | null;
+  tree_code?: string | null;
   ownership_status?: string | null;
   availability_status?: string | null;
+  status?: string | null;
 };
+
+type ViewMode = "ALL" | "READY" | "LOW" | "OUT" | "USED";
 
 const CARE_REQUIREMENTS_PER_TREE_PER_WEEK: Record<string, number> = {
   FERTILIZER: 1,
+  FERTILIZERS: 1,
   FUNGICIDE: 0.5,
+  FUNGICIDES: 0.5,
   INSECTICIDE: 0.25,
+  "PEST CONTROL": 0.25,
   NUTRIENTS: 0.5,
+  "NUTRIENTS & BOOSTERS": 0.5,
   BOOSTER: 0.5,
+  "SOIL PRODUCTS": 0.5,
   "SOIL CONDITIONER": 0.5,
+  "TREE HEALTH": 0.25,
   "DISEASE PREVENTION": 0.25,
 };
 
-function normalizeCategory(value: string | null) {
-  return String(value || "UNCATEGORIZED").trim().toUpperCase();
+function normalize(value: any) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
 }
 
 function pesoNumber(value: number) {
@@ -44,12 +76,88 @@ function pesoNumber(value: number) {
   });
 }
 
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+  return new Date(value).toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getItemStatus(item: InventoryItem, activeTreeCount: number) {
+  const remaining = Number(item.remaining_qty || 0);
+  const low = Number(item.low_stock_level || 0);
+  const status = normalize(item.status || "AVAILABLE");
+  const weeklyNeed = weeklyNeedForItem(item, activeTreeCount);
+  const weeks = weeklyNeed > 0 ? remaining / weeklyNeed : 999;
+
+  if (status === "USED" || status === "CONSUMED") {
+    return { label: "Used", level: "used" };
+  }
+
+  if (remaining <= 0) {
+    return { label: "Out of Stock", level: "out" };
+  }
+
+  if (low > 0 && remaining <= low) {
+    return { label: "Low Stock", level: "low" };
+  }
+
+  if (weeklyNeed > 0 && weeks < 1) {
+    return { label: "Not Enough", level: "low" };
+  }
+
+  return { label: "Ready", level: "ready" };
+}
+
+function weeklyNeedForItem(item: InventoryItem, activeTreeCount: number) {
+  const category = normalize(item.category || item.item_name || "");
+  const matchedKey = Object.keys(CARE_REQUIREMENTS_PER_TREE_PER_WEEK).find((key) =>
+    category.includes(key)
+  );
+
+  if (!matchedKey) return 0;
+
+  return CARE_REQUIREMENTS_PER_TREE_PER_WEEK[matchedKey] * Math.max(activeTreeCount, 1);
+}
+
+function matchesInventoryOperation(request: OperationRequest, item: InventoryItem) {
+  const operation = normalize(request.operation_type);
+  const itemName = normalize(item.item_name);
+  const category = normalize(item.category);
+
+  if (!operation) return false;
+
+  if (operation.includes("FERTILIZER")) {
+    return itemName.includes("FERTILIZER") || category.includes("FERTILIZER");
+  }
+
+  if (operation.includes("FUNGICIDE")) {
+    return itemName.includes("FUNGICIDE") || category.includes("FUNGICIDE");
+  }
+
+  if (operation.includes("INSECTICIDE") || operation.includes("PEST")) {
+    return itemName.includes("INSECTICIDE") || itemName.includes("PEST") || category.includes("PEST");
+  }
+
+  if (operation.includes("NUTRIENT") || operation.includes("BOOSTER")) {
+    return itemName.includes("NUTRIENT") || itemName.includes("BOOSTER") || category.includes("NUTRIENT");
+  }
+
+  return false;
+}
+
 export default function InventoryPage() {
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [operations, setOperations] = useState<OperationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [viewMode, setViewMode] = useState<"ALL" | "LOW" | "READY" | "NOT_READY">("ALL");
+  const [viewMode, setViewMode] = useState<ViewMode>("ALL");
 
   async function loadInventory() {
     setLoading(true);
@@ -57,7 +165,14 @@ export default function InventoryPage() {
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
+
+    if (userError) {
+      setMessage(userError.message);
+      setLoading(false);
+      return;
+    }
 
     if (!user) {
       window.location.href = "/login";
@@ -65,91 +180,67 @@ export default function InventoryPage() {
     }
 
     const email = user.email?.trim() || "";
-    const normalizedEmail = email.toLowerCase();
+    const lowerEmail = email.toLowerCase();
 
-    const { data: profileById, error: profileByIdError } = await supabase
+    const { data: profileById } = await supabase
       .from("profiles")
-      .select("id, email")
+      .select("id, email, full_name")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (profileByIdError) {
-      setMessage(profileByIdError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: profileByExactEmail, error: profileByExactEmailError } = await supabase
+    const { data: profileByEmail } = await supabase
       .from("profiles")
-      .select("id, email")
-      .eq("email", email)
+      .select("id, email, full_name")
+      .eq("email", lowerEmail)
       .maybeSingle();
 
-    if (profileByExactEmailError) {
-      setMessage(profileByExactEmailError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: profileByLowerEmail, error: profileByLowerEmailError } = await supabase
+    const { data: profileByEmailFallback } = await supabase
       .from("profiles")
-      .select("id, email")
-      .eq("email", normalizedEmail)
-      .maybeSingle();
-
-    if (profileByLowerEmailError) {
-      setMessage(profileByLowerEmailError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: profileByEmailFallback, error: profileByEmailFallbackError } = await supabase
-      .from("profiles")
-      .select("id, email")
+      .select("id, email, full_name")
       .ilike("email", email)
       .maybeSingle();
 
-    if (profileByEmailFallbackError) {
-      setMessage(profileByEmailFallbackError.message);
+    const currentProfile = profileById || profileByEmail || profileByEmailFallback;
+
+    if (!currentProfile) {
+      setMessage(`Profile not found for ${email || user.id}.`);
       setLoading(false);
       return;
     }
 
-    const profile =
-      profileById ||
-      profileByExactEmail ||
-      profileByLowerEmail ||
-      profileByEmailFallback;
+    setProfile(currentProfile as Profile);
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      setLoading(false);
-      return;
-    }
-
-    const { data: inventoryData, error: inventoryError } = await supabase
+    const { data: inventoryRows, error: inventoryError } = await supabase
       .from("inventory")
-      .select(
-        "id, profile_id, tree_id, item_name, category, unit, starting_qty, remaining_qty, low_stock_level, status, created_at"
-      )
-      .eq("profile_id", profile.id)
+      .select("*")
+      .eq("profile_id", currentProfile.id)
       .order("created_at", { ascending: false });
 
     if (inventoryError) {
-      setMessage("Inventory table not found yet. Run the inventory SQL table first.");
       setItems([]);
       setTrees([]);
+      setOperations([]);
+      setMessage(`Inventory load failed: ${inventoryError.message}`);
       setLoading(false);
       return;
     }
 
-    const { data: treeData } = await supabase
+    const { data: treeRows } = await supabase
       .from("trees")
-      .select("id, profile_id, ownership_status, availability_status")
-      .eq("profile_id", profile.id);
+      .select("*")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false });
 
-    setItems(inventoryData || []);
-    setTrees(treeData || []);
+    const { data: operationRows } = await supabase
+      .from("tree_operation_requests")
+      .select("id, profile_id, tree_id, operation_type, total_amount, status, notes, created_at")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    setItems((inventoryRows || []) as InventoryItem[]);
+    setTrees((treeRows || []) as TreeRow[]);
+    setOperations((operationRows || []) as OperationRequest[]);
     setLoading(false);
   }
 
@@ -159,115 +250,73 @@ export default function InventoryPage() {
 
   const activeTreeCount = useMemo(() => {
     return trees.filter((tree) => {
-      const ownership = String(tree.ownership_status || "OWNED").toUpperCase();
-      const availability = String(tree.availability_status || "OWNED").toUpperCase();
-      return ownership !== "SOLD" && availability !== "SOLD";
+      const ownership = normalize(tree.ownership_status || "OWNED");
+      const availability = normalize(tree.availability_status || "OWNED");
+      const status = normalize(tree.status || "ACTIVE");
+      return ownership !== "SOLD" && availability !== "SOLD" && status !== "SOLD";
     }).length;
   }, [trees]);
 
-  function weeklyNeedForItem(item: InventoryItem) {
-    const category = normalizeCategory(item.category);
-    const perTree = CARE_REQUIREMENTS_PER_TREE_PER_WEEK[category] || 0;
-    return perTree * Math.max(activeTreeCount, 1);
-  }
-
-  function weeksRemaining(item: InventoryItem) {
-    const remaining = Number(item.remaining_qty || 0);
-    const weeklyNeed = weeklyNeedForItem(item);
-
-    if (weeklyNeed <= 0) return 999;
-
-    return remaining / weeklyNeed;
-  }
-
-  function statusInfo(item: InventoryItem) {
-    const remaining = Number(item.remaining_qty || 0);
-    const low = Number(item.low_stock_level || 0);
-    const weeks = weeksRemaining(item);
-    const isLow = low > 0 && remaining <= low;
-
-    if (remaining <= 0) {
-      return {
-        label: "Out of Stock",
-        level: "danger",
-      };
-    }
-
-    if (weeks < 1) {
-      return {
-        label: "Not Enough for 1 Week",
-        level: "danger",
-      };
-    }
-
-    if (isLow || weeks < 4) {
-      return {
-        label: "Low Supply",
-        level: "warning",
-      };
-    }
-
-    return {
-      label: "Ready for 1 Month+",
-      level: "good",
-    };
-  }
-
-  const stats = useMemo(() => {
-    const totalItems = items.length;
-
-    const active = items.filter(
-      (item) => ["ACTIVE", "AVAILABLE"].includes(String(item.status || "AVAILABLE").toUpperCase())
-    ).length;
-
-    const lowStock = items.filter((item) => {
-      const info = statusInfo(item);
-      return info.level === "warning";
-    }).length;
-
-    const notReady = items.filter((item) => {
-      const info = statusInfo(item);
-      return info.level === "danger";
-    }).length;
-
-    const ready = items.filter((item) => {
-      const info = statusInfo(item);
-      return info.level === "good";
-    }).length;
-
-    return { totalItems, active, lowStock, notReady, ready };
-  }, [items, activeTreeCount]);
-
   const filteredItems = useMemo(() => {
-    if (viewMode === "ALL") return items;
-
     return items.filter((item) => {
-      const info = statusInfo(item);
+      const info = getItemStatus(item, activeTreeCount);
 
-      if (viewMode === "LOW") return info.level === "warning";
-      if (viewMode === "READY") return info.level === "good";
-      if (viewMode === "NOT_READY") return info.level === "danger";
+      if (viewMode === "ALL") return true;
+      if (viewMode === "READY") return info.level === "ready";
+      if (viewMode === "LOW") return info.level === "low";
+      if (viewMode === "OUT") return info.level === "out";
+      if (viewMode === "USED") return info.level === "used";
 
       return true;
     });
   }, [items, viewMode, activeTreeCount]);
 
+  const stats = useMemo(() => {
+    const ready = items.filter((item) => getItemStatus(item, activeTreeCount).level === "ready").length;
+    const low = items.filter((item) => getItemStatus(item, activeTreeCount).level === "low").length;
+    const out = items.filter((item) => getItemStatus(item, activeTreeCount).level === "out").length;
+    const totalQty = items.reduce((sum, item) => sum + Number(item.remaining_qty || 0), 0);
+
+    return {
+      totalItems: items.length,
+      totalQty,
+      ready,
+      low,
+      out,
+    };
+  }, [items, activeTreeCount]);
+
+  const inventoryOperationRows = useMemo(() => {
+    return operations.filter((request) => {
+      const operation = normalize(request.operation_type);
+      return (
+        operation.includes("FERTILIZER") ||
+        operation.includes("FUNGICIDE") ||
+        operation.includes("INSECTICIDE") ||
+        operation.includes("PEST") ||
+        operation.includes("NUTRIENT") ||
+        operation.includes("BOOSTER")
+      );
+    });
+  }, [operations]);
+
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Inventory Intelligence</p>
+          <Link className="back" href="/dashboard">← Back to Dashboard</Link>
+          <p className="eyebrow">Arganwood Inventory Sync</p>
           <h1>Inventory</h1>
           <span>
-            Track supplies bought from Marketplace, check if your care supplies
-            are enough for your trees, and spot low stock before subscribing care.
+            Supplies here are the source of truth for customer stock. Marketplace adds stock.
+            Tree Operations deducts stock when inventory services are requested.
           </span>
         </div>
 
         <div className="heroCard">
           <p>Active Trees</p>
           <strong>{activeTreeCount}</strong>
-          <small>Used for care supply calculation</small>
+          <small>{profile?.email || "Customer inventory"}</small>
         </div>
       </section>
 
@@ -278,549 +327,242 @@ export default function InventoryPage() {
       ) : (
         <>
           <section className="stats">
-            <Card label="Total Items" value={String(stats.totalItems)} />
-            <Card label="Active Items" value={String(stats.active)} />
-            <Card label="Low Supply" value={String(stats.lowStock)} warning={stats.lowStock > 0} />
-            <Card label="Not Ready" value={String(stats.notReady)} danger={stats.notReady > 0} />
+            <Card label="Inventory Items" value={String(stats.totalItems)} />
+            <Card label="Total Remaining Qty" value={pesoNumber(stats.totalQty)} />
+            <Card label="Ready" value={String(stats.ready)} good />
+            <Card label="Low / Out" value={String(stats.low + stats.out)} danger={stats.low + stats.out > 0} />
           </section>
 
           <section className="filters">
-            <button className={viewMode === "ALL" ? "active" : ""} onClick={() => setViewMode("ALL")}>
-              All Supplies
-            </button>
-            <button className={viewMode === "READY" ? "active" : ""} onClick={() => setViewMode("READY")}>
-              Ready
-            </button>
-            <button className={viewMode === "LOW" ? "active" : ""} onClick={() => setViewMode("LOW")}>
-              Low Supply
-            </button>
-            <button className={viewMode === "NOT_READY" ? "active" : ""} onClick={() => setViewMode("NOT_READY")}>
-              Not Ready
-            </button>
+            <button className={viewMode === "ALL" ? "active" : ""} onClick={() => setViewMode("ALL")}>All</button>
+            <button className={viewMode === "READY" ? "active" : ""} onClick={() => setViewMode("READY")}>Ready</button>
+            <button className={viewMode === "LOW" ? "active" : ""} onClick={() => setViewMode("LOW")}>Low</button>
+            <button className={viewMode === "OUT" ? "active" : ""} onClick={() => setViewMode("OUT")}>Out</button>
+            <button className={viewMode === "USED" ? "active" : ""} onClick={() => setViewMode("USED")}>Used</button>
           </section>
 
           <section className="panel">
             <div className="panelHead">
               <div>
-                <h2>Inventory Records</h2>
-                <p>
-                  Connected to Marketplace supply purchases and My Trees care
-                  subscription checker.
-                </p>
+                <h2>Stock Records</h2>
+                <p>Current inventory after Marketplace additions and Tree Operations deductions.</p>
               </div>
               <button onClick={loadInventory}>Refresh</button>
             </div>
 
-            {items.length === 0 ? (
-              <div className="empty small">
-                No inventory records yet. Buy supplies from Marketplace first.
-              </div>
-            ) : filteredItems.length === 0 ? (
-              <div className="empty small">No supplies found for this filter.</div>
+            {filteredItems.length === 0 ? (
+              <div className="empty small">No inventory records found for this filter.</div>
             ) : (
               <div className="list">
                 {filteredItems.map((item) => {
                   const remaining = Number(item.remaining_qty || 0);
                   const starting = Number(item.starting_qty || 0);
                   const low = Number(item.low_stock_level || 0);
-                  const weeklyNeed = weeklyNeedForItem(item);
-                  const oneMonthNeed = weeklyNeed * 4;
-                  const weeks = weeksRemaining(item);
-                  const info = statusInfo(item);
-                  const progress =
-                    starting > 0 ? Math.max(0, Math.min(100, (remaining / starting) * 100)) : 0;
+                  const weeklyNeed = weeklyNeedForItem(item, activeTreeCount);
+                  const weeks = weeklyNeed > 0 ? remaining / weeklyNeed : 999;
+                  const progress = starting > 0 ? Math.max(0, Math.min(100, (remaining / starting) * 100)) : 0;
+                  const info = getItemStatus(item, activeTreeCount);
+                  const relatedOperations = inventoryOperationRows.filter((request) =>
+                    matchesInventoryOperation(request, item)
+                  );
 
                   return (
-                    <div className={`row ${info.level}`} key={item.id}>
-                      <div className="left">
-                        <div className="titleLine">
+                    <article className={`item ${info.level}`} key={item.id}>
+                      <div className="itemTop">
+                        <div>
                           <strong>{item.item_name || "Inventory Item"}</strong>
-                          <span className={`pill ${info.level}`}>{info.label}</span>
+                          <p>{item.category || "Uncategorized"} • {item.unit || "Unit"}</p>
                         </div>
-
-                        <p>
-                          {item.category || "Uncategorized"} • {item.status || "AVAILABLE"}
-                        </p>
-
-                        <div className="progressTrack">
-                          <i style={{ width: `${progress}%` }} />
-                        </div>
-
-                        <div className="metaGrid">
-                          <small>
-                            Starting: {pesoNumber(starting)} {item.unit || "unit"}
-                          </small>
-                          <small>
-                            Low Level: {pesoNumber(low)} {item.unit || "unit"}
-                          </small>
-                          <small>
-                            1 Week Need: {pesoNumber(weeklyNeed)} {item.unit || "unit"}
-                          </small>
-                          <small>
-                            1 Month Need: {pesoNumber(oneMonthNeed)} {item.unit || "unit"}
-                          </small>
-                        </div>
+                        <span>{info.label}</span>
                       </div>
 
-                      <div className="qty">
-                        <b>
-                          {pesoNumber(remaining)} {item.unit || "unit"}
-                        </b>
+                      <div className="progress"><i style={{ width: `${progress}%` }} /></div>
 
-                        <span>
-                          {weeks >= 999
-                            ? "No care formula"
-                            : `${weeks.toFixed(1)} week${weeks >= 2 ? "s" : ""} left`}
-                        </span>
+                      <div className="qtyGrid">
+                        <Mini label="Starting" value={`${pesoNumber(starting)} ${item.unit || "unit"}`} />
+                        <Mini label="Remaining" value={`${pesoNumber(remaining)} ${item.unit || "unit"}`} strong />
+                        <Mini label="Low Level" value={`${pesoNumber(low)} ${item.unit || "unit"}`} />
+                        <Mini label="Weeks Left" value={weeks >= 999 ? "No formula" : weeks.toFixed(1)} />
                       </div>
-                    </div>
+
+                      <div className="movementBox">
+                        <b>Connected Operation Usage</b>
+                        {relatedOperations.length === 0 ? (
+                          <p>No recent operation deduction matched this item yet.</p>
+                        ) : (
+                          relatedOperations.slice(0, 3).map((request) => (
+                            <p key={request.id}>
+                              {request.operation_type || "Operation"} • {request.status || "PENDING"} • {formatDate(request.created_at)}
+                            </p>
+                          ))
+                        )}
+                      </div>
+                    </article>
                   );
                 })}
               </div>
             )}
           </section>
 
-          <section className="guide">
-            <h2>Care Supply Formula</h2>
-            <p>
-              This page estimates if your supplies can support your trees. My Trees
-              will use this same inventory logic before allowing weekly or monthly
-              care subscription.
-            </p>
-
-            <div className="formulaGrid">
-              <Formula label="Fertilizer" value="1 unit / tree / week" />
-              <Formula label="Fungicide" value="0.5 unit / tree / week" />
-              <Formula label="Insecticide" value="0.25 unit / tree / week" />
-              <Formula label="Nutrients" value="0.5 unit / tree / week" />
-              <Formula label="Soil Conditioner" value="0.5 unit / tree / week" />
+          <section className="panel">
+            <div className="panelHead">
+              <div>
+                <h2>Recent Inventory-Deducting Requests</h2>
+                <p>These requests came from Tree Operations and should reduce remaining_qty when submitted.</p>
+              </div>
             </div>
+
+            {inventoryOperationRows.length === 0 ? (
+              <div className="empty small">No inventory-use operations yet.</div>
+            ) : (
+              <div className="history">
+                {inventoryOperationRows.map((request) => (
+                  <div className="historyRow" key={request.id}>
+                    <div>
+                      <strong>{request.operation_type || "Inventory Operation"}</strong>
+                      <p>{request.notes || "No note"}</p>
+                    </div>
+                    <div>
+                      <span>{request.status || "PENDING"}</span>
+                      <b>{formatDate(request.created_at)}</b>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         </>
       )}
 
       <style>{`
         * { box-sizing: border-box; }
-
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #18261d;
+          color: #17251b;
           font-family: Arial, Helvetica, sans-serif;
           background:
             radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
             radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
             linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
         }
-
+        .back {
+          display: inline-flex;
+          margin-bottom: 12px;
+          color: #244536;
+          text-decoration: none;
+          font-weight: 900;
+        }
         .hero {
           display: flex;
           justify-content: space-between;
-          align-items: stretch;
           gap: 18px;
-          margin-bottom: 22px;
+          align-items: stretch;
+          margin-bottom: 20px;
         }
-
         .eyebrow {
           margin: 0 0 8px;
           color: #8c6a3c;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
           font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 44px;
-          color: #101a14;
-          letter-spacing: -1.6px;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          max-width: 820px;
-          line-height: 1.6;
-        }
-
-        .heroCard {
-          min-width: 260px;
-          border-radius: 28px;
-          padding: 22px;
-          color: white;
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 24px 56px rgba(36,69,54,.24);
-        }
-
-        .heroCard p {
-          margin: 0;
-          color: rgba(255,255,255,.72);
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .14em;
-          font-size: 12px;
         }
-
-        .heroCard strong {
-          display: block;
-          margin-top: 10px;
-          font-size: 36px;
+        h1 { margin: 0; font-size: 44px; letter-spacing: -1.4px; color: #102018; }
+        .hero span { display: block; max-width: 850px; margin-top: 8px; color: #5f665e; line-height: 1.6; font-weight: 700; }
+        .heroCard {
+          min-width: 250px;
+          border-radius: 28px;
+          padding: 22px;
+          color: white;
+          background: linear-gradient(135deg, #244536, #10281f);
+          box-shadow: 0 24px 56px rgba(36,69,54,.24);
         }
-
-        .heroCard small {
-          color: rgba(255,255,255,.72);
-          font-weight: 900;
-        }
-
-        .message,
-        .empty,
-        .card,
-        .panel,
-        .guide,
-        .filters {
+        .heroCard p { margin: 0; color: rgba(255,255,255,.7); font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .14em; }
+        .heroCard strong { display: block; margin-top: 8px; font-size: 40px; }
+        .heroCard small { color: rgba(255,255,255,.74); font-weight: 900; }
+        .message, .empty, .panel, .filters, .card {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
           box-shadow: 0 18px 42px rgba(82,60,27,.09);
         }
-
-        .message,
-        .empty {
-          padding: 20px;
-          margin-bottom: 18px;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .card {
-          padding: 24px;
-        }
-
-        .card p {
-          margin: 0;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .card h3 {
-          margin: 10px 0 0;
-          color: #244536;
-          font-size: 32px;
-        }
-
-        .card.warning h3 {
-          color: #8c6a3c;
-        }
-
-        .card.danger h3 {
-          color: #a33c2a;
-        }
-
-        .filters {
-          padding: 12px;
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 10px;
-          margin-bottom: 18px;
-        }
-
-        .filters button {
+        .message, .empty { padding: 18px; margin-bottom: 18px; color: #31553d; font-weight: 900; }
+        .small { box-shadow: none; border-radius: 18px; background: #f3ead8; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+        .card { padding: 22px; }
+        .card p { margin: 0; color: #6b6b62; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .12em; }
+        .card h3 { margin: 9px 0 0; color: #244536; font-size: 30px; }
+        .card.good h3 { color: #276941; }
+        .card.danger h3 { color: #9a3c2a; }
+        .filters { padding: 12px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
+        .filters button, .panelHead button {
           border: 0;
           border-radius: 999px;
-          padding: 13px 14px;
+          padding: 12px 14px;
           background: #f3ead8;
           color: #244536;
           font-weight: 900;
           cursor: pointer;
         }
-
-        .filters button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .panel {
-          padding: 24px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-        }
-
-        .panelHead button {
-          border: 0;
-          border-radius: 999px;
-          padding: 12px 18px;
-          background: #244536;
-          color: white;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .list {
-          display: grid;
-          gap: 12px;
-        }
-
-        .row {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 16px;
-          align-items: center;
-          border-radius: 22px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
+        .filters button.active, .panelHead button { background: linear-gradient(135deg, #244536, #10281f); color: white; }
+        .panel { padding: 24px; margin-bottom: 18px; }
+        .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+        .panelHead h2 { margin: 0; color: #244536; font-size: 24px; }
+        .panelHead p { margin: 5px 0 0; color: #6b6b62; font-weight: 700; }
+        .list { display: grid; gap: 14px; }
+        .item {
+          border-radius: 24px;
           padding: 18px;
+          background: #fffaf0;
+          border: 1px solid rgba(92,70,35,.10);
         }
-
-        .row.good {
-          border-color: rgba(49,85,61,.14);
-        }
-
-        .row.warning {
-          border-color: rgba(214,178,94,.42);
-        }
-
-        .row.danger {
-          border-color: rgba(163,60,42,.28);
-        }
-
-        .titleLine {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-
-        .row strong {
-          color: #101a14;
-          font-size: 17px;
-        }
-
-        .row p {
-          margin: 7px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .pill {
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 11px;
-          font-weight: 900;
-        }
-
-        .pill.good {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .pill.warning {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-        }
-
-        .pill.danger {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        .progressTrack {
-          height: 10px;
-          border-radius: 999px;
-          background: rgba(92,70,35,.10);
-          overflow: hidden;
-          margin-top: 13px;
-        }
-
-        .progressTrack i {
-          display: block;
-          height: 100%;
-          border-radius: 999px;
-          background: linear-gradient(135deg, #244536, #d6b25e);
-        }
-
-        .metaGrid {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 8px;
-          margin-top: 12px;
-        }
-
-        .metaGrid small {
-          color: #8c6a3c;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .qty {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-          min-width: 190px;
-        }
-
-        .qty b {
-          color: #244536;
-          font-size: 20px;
-          text-align: right;
-        }
-
-        .qty span {
-          border-radius: 999px;
-          padding: 8px 10px;
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-          font-size: 11px;
-          font-weight: 900;
-          text-align: right;
-        }
-
-        .guide {
-          padding: 24px;
-        }
-
-        .guide h2 {
-          margin: 0;
-          color: #101a14;
-        }
-
-        .guide p {
-          color: #6b6b62;
-          line-height: 1.6;
-          font-weight: 800;
-        }
-
-        .formulaGrid {
-          display: grid;
-          grid-template-columns: repeat(5, 1fr);
-          gap: 12px;
-          margin-top: 16px;
-        }
-
-        .formula {
-          border-radius: 18px;
-          background: #f3ead8;
-          padding: 15px;
-        }
-
-        .formula span {
-          display: block;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .1em;
-        }
-
-        .formula strong {
-          display: block;
-          margin-top: 8px;
-          color: #101a14;
-        }
-
-        @media (max-width: 1000px) {
-          .hero,
-          .stats,
-          .filters,
-          .row,
-          .metaGrid,
-          .formulaGrid {
-            grid-template-columns: 1fr;
-          }
-
-          .hero {
-            display: grid;
-          }
-
-          .heroCard {
-            min-width: 0;
-          }
-
-          .qty {
-            justify-items: start;
-          }
-
-          .qty b,
-          .qty span {
-            text-align: left;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          .hero h1 {
-            font-size: 36px;
-          }
+        .item.ready { border-left: 8px solid #276941; }
+        .item.low { border-left: 8px solid #b78326; }
+        .item.out, .item.used { border-left: 8px solid #9a3c2a; }
+        .itemTop { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+        .itemTop strong { color: #102018; font-size: 18px; }
+        .itemTop p { margin: 6px 0 0; color: #6b6b62; font-weight: 800; }
+        .itemTop span { padding: 8px 12px; border-radius: 999px; background: #244536; color: white; font-size: 12px; font-weight: 900; }
+        .progress { height: 10px; margin: 16px 0; overflow: hidden; border-radius: 999px; background: #eadcc3; }
+        .progress i { display: block; height: 100%; border-radius: inherit; background: #244536; }
+        .qtyGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .mini { border-radius: 18px; padding: 12px; background: #f3ead8; }
+        .mini small { display: block; color: #6b6b62; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+        .mini b { display: block; margin-top: 5px; color: #244536; }
+        .movementBox { margin-top: 14px; border-radius: 18px; background: rgba(36,69,54,.07); padding: 14px; }
+        .movementBox b { color: #244536; }
+        .movementBox p { margin: 6px 0 0; color: #5f665e; font-weight: 700; }
+        .history { display: grid; gap: 10px; }
+        .historyRow { display: flex; justify-content: space-between; gap: 14px; padding: 15px; border-radius: 18px; background: #fffaf0; }
+        .historyRow strong { color: #244536; }
+        .historyRow p { margin: 5px 0 0; color: #6b6b62; }
+        .historyRow div:last-child { text-align: right; }
+        .historyRow span { display: inline-block; margin-bottom: 6px; padding: 6px 10px; border-radius: 999px; background: #244536; color: white; font-size: 11px; font-weight: 900; }
+        .historyRow b { display: block; color: #6b6b62; font-size: 12px; }
+        @media (max-width: 980px) {
+          .hero, .panelHead { flex-direction: column; }
+          .stats, .filters, .qtyGrid { grid-template-columns: 1fr; }
         }
       `}</style>
     </main>
   );
 }
 
-function Card({
-  label,
-  value,
-  warning,
-  danger,
-}: {
-  label: string;
-  value: string;
-  warning?: boolean;
-  danger?: boolean;
-}) {
+function Card({ label, value, good, danger }: { label: string; value: string; good?: boolean; danger?: boolean }) {
   return (
-    <div className={`card ${warning ? "warning" : ""} ${danger ? "danger" : ""}`}>
+    <div className={`card ${good ? "good" : ""} ${danger ? "danger" : ""}`}>
       <p>{label}</p>
       <h3>{value}</h3>
     </div>
   );
 }
 
-function Formula({ label, value }: { label: string; value: string }) {
+function Mini({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
-    <div className="formula">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="mini">
+      <small>{label}</small>
+      <b style={{ fontSize: strong ? 17 : 14 }}>{value}</b>
     </div>
   );
 }
