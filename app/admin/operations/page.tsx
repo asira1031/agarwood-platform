@@ -46,7 +46,7 @@ export default function AdminOperationsPage() {
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from("caretaker_assignments")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("started_at", { ascending: false });
 
     if (assignmentError) {
       setMessage(assignmentError.message);
@@ -69,28 +69,18 @@ export default function AdminOperationsPage() {
       (item) => String(item.status || "PENDING").toUpperCase() === "PENDING"
     ).length;
 
-    const approvedToday = requests.filter((item) => {
-      const status = String(item.status || "").toUpperCase();
-      const created = item.created_at ? new Date(item.created_at) : null;
-      const today = new Date();
-
-      return (
-        ["APPROVED", "COMPLETED"].includes(status) &&
-        created &&
-        created.toDateString() === today.toDateString()
-      );
-    }).length;
-
-    const inventoryRequests = requests.filter((item) =>
-      String(item.operation_type || "").toLowerCase().includes("apply")
+    const assigned = assignments.filter(
+      (item) => String(item.status || "").toUpperCase() === "ASSIGNED"
     ).length;
 
-    const careProgramTasks = requests.filter(
-      (item) => item.care_program_name || String(item.operation_type || "").toLowerCase().includes("program")
+    const completed = assignments.filter(
+      (item) => String(item.status || "").toUpperCase() === "COMPLETED"
     ).length;
 
-    return { pending, approvedToday, inventoryRequests, careProgramTasks };
-  }, [requests]);
+    const activeCaretakers = caretakers.length;
+
+    return { pending, assigned, completed, activeCaretakers };
+  }, [requests, assignments, caretakers]);
 
   function getAssignmentForRequest(requestId: string) {
     return assignments.find((item) => item.operation_request_id === requestId);
@@ -102,39 +92,62 @@ export default function AdminOperationsPage() {
     const caretakerId = selectedCaretaker[request.id];
 
     if (!caretakerId) {
-      setMessage("Please select a caretaker first.");
+      setMessage("Please select a gardener first.");
       return;
     }
 
     const existing = getAssignmentForRequest(request.id);
 
     if (existing) {
-      setMessage("This operation request already has a caretaker assignment.");
+      setMessage("This operation request already has a gardener assignment.");
       return;
     }
 
     setProcessingId(request.id);
 
-    const payload = {
+    const taskType =
+      request.care_program_name ||
+      request.operation_type ||
+      "Tree Operation";
+
+    const assignmentPayload = {
       caretaker_id: caretakerId,
       customer_profile_id: request.profile_id || null,
       tree_id: request.tree_id || null,
       operation_request_id: request.id,
-      assignment_type:
-        request.care_program_name ||
-        request.operation_type ||
-        "Tree Operation",
+      assignment_type: taskType,
       status: "ASSIGNED",
       started_at: new Date().toISOString(),
       notes: request.notes || null,
     };
 
-    const { error: assignmentError } = await supabase
+    const { data: createdAssignment, error: assignmentError } = await supabase
       .from("caretaker_assignments")
-      .insert(payload);
+      .insert(assignmentPayload)
+      .select("id")
+      .single();
 
-    if (assignmentError) {
-      setMessage(assignmentError.message);
+    if (assignmentError || !createdAssignment) {
+      setMessage(assignmentError?.message || "Assignment creation failed.");
+      setProcessingId("");
+      return;
+    }
+
+    const { error: taskLogError } = await supabase
+      .from("caretaker_task_logs")
+      .insert({
+        assignment_id: createdAssignment.id,
+        caretaker_id: caretakerId,
+        customer_profile_id: request.profile_id || null,
+        tree_id: request.tree_id || null,
+        operation_request_id: request.id,
+        task_type: taskType,
+        notes: "Assigned from Admin Operations Center.",
+        status: "ASSIGNED",
+      });
+
+    if (taskLogError) {
+      setMessage(taskLogError.message);
       setProcessingId("");
       return;
     }
@@ -144,28 +157,8 @@ export default function AdminOperationsPage() {
       .update({ status: "ASSIGNED" })
       .eq("id", request.id);
 
-    const { error: logError } = await supabase
-      .from("caretaker_task_logs")
-      .insert({
-        assignment_id: null,
-        caretaker_id: caretakerId,
-        customer_profile_id: request.profile_id || null,
-        tree_id: request.tree_id || null,
-        operation_request_id: request.id,
-        task_type:
-          request.care_program_name ||
-          request.operation_type ||
-          "Tree Operation",
-        notes: "Assigned from Admin Operations Center.",
-        status: "ASSIGNED",
-      });
-
-    if (logError) {
-      console.warn(logError.message);
-    }
-
     setProcessingId("");
-    setMessage("Caretaker assigned successfully.");
+    setMessage("Gardener assigned successfully. This job will now appear in the Gardener Portal.");
     await loadData();
   }
 
@@ -182,7 +175,7 @@ export default function AdminOperationsPage() {
           </h1>
 
           <p className="mt-2 text-white/70">
-            Review tree operation requests and assign active gardeners/caretakers.
+            Assign customer tree operation requests to active gardeners.
           </p>
         </div>
 
@@ -193,15 +186,15 @@ export default function AdminOperationsPage() {
         )}
 
         <div className="grid gap-4 md:grid-cols-4">
-          <Stat label="Pending Operations" value={stats.pending} />
-          <Stat label="Approved Today" value={stats.approvedToday} />
-          <Stat label="Inventory Requests" value={stats.inventoryRequests} />
-          <Stat label="Care Program Tasks" value={stats.careProgramTasks} />
+          <Stat label="Pending Requests" value={stats.pending} />
+          <Stat label="Assigned Jobs" value={stats.assigned} />
+          <Stat label="Completed Jobs" value={stats.completed} />
+          <Stat label="Active Gardeners" value={stats.activeCaretakers} />
         </div>
 
         <div className="rounded-2xl border border-white/10 bg-white/10 p-8">
           <h2 className="text-2xl font-bold text-[#d9b45f]">
-            Operations Queue
+            Customer Operation Requests
           </h2>
 
           {loading ? (
@@ -243,6 +236,10 @@ export default function AdminOperationsPage() {
                           Customer: {request.profile_id || "—"}
                         </p>
 
+                        <p className="mt-1 text-sm text-white/60">
+                          Request Status: {request.status || "PENDING"}
+                        </p>
+
                         {request.notes && (
                           <p className="mt-3 text-sm text-white/70">
                             Notes: {request.notes}
@@ -252,11 +249,11 @@ export default function AdminOperationsPage() {
 
                       <div className="min-w-[280px] space-y-3">
                         <div className="rounded-xl bg-white/10 p-3">
-                          <p className="text-xs text-white/50">Status</p>
+                          <p className="text-xs text-white/50">Gardener Assignment</p>
                           <p className="font-bold text-[#d9b45f]">
                             {assignment
-                              ? `ASSIGNED to ${assignedCaretaker?.full_name || "Caretaker"}`
-                              : request.status || "PENDING"}
+                              ? `ASSIGNED to ${assignedCaretaker?.full_name || assignedCaretaker?.email || "Gardener"}`
+                              : "Not assigned"}
                           </p>
                         </div>
 
@@ -272,7 +269,7 @@ export default function AdminOperationsPage() {
                                 }))
                               }
                             >
-                              <option value="">Select caretaker</option>
+                              <option value="">Select gardener</option>
                               {caretakers.map((caretaker) => (
                                 <option key={caretaker.id} value={caretaker.id}>
                                   {caretaker.full_name || caretaker.email}
@@ -282,18 +279,23 @@ export default function AdminOperationsPage() {
 
                             <button
                               onClick={() => assignCaretaker(request)}
-                              disabled={processingId === request.id}
+                              disabled={processingId === request.id || caretakers.length === 0}
                               className="w-full rounded-xl bg-[#d9b45f] px-4 py-3 font-bold text-[#071f16] disabled:opacity-50"
                             >
                               {processingId === request.id
                                 ? "Assigning..."
-                                : "Assign Caretaker"}
+                                : "Assign Gardener"}
                             </button>
+
+                            {caretakers.length === 0 && (
+                              <p className="text-xs text-red-200">
+                                No active gardeners found. Add one in Admin Customers first.
+                              </p>
+                            )}
                           </>
                         ) : (
                           <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-sm text-emerald-100">
-                            Assignment created. This job will appear in the
-                            gardener dashboard.
+                            Assignment connected to Gardener Portal.
                           </div>
                         )}
                       </div>
