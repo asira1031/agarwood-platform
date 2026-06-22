@@ -312,12 +312,20 @@ export default function DashboardPage() {
           </div>
 
           <div className="headerActions">
-            <button>
+            <Link
+              href="/dashboard/transactions"
+              className="headerIconButton"
+              title="Open transactions and notifications"
+            >
               🔔<i>{recentActivity.length}</i>
-            </button>
-            <button>
+            </Link>
+            <Link
+              href="/dashboard/tree-operations"
+              className="headerIconButton"
+              title="Open tree operations messages"
+            >
               ✉️<i>{operationRequests.length}</i>
-            </button>
+            </Link>
             <div className="topAvatar">{initials}</div>
           </div>
         </header>
@@ -573,11 +581,12 @@ export default function DashboardPage() {
 
         .loadingBox, .errorBox, .emptyState {
           border-radius: 16px;
-          background: rgba(255, 253, 246, .88);
-          border: 1px solid rgba(92, 70, 35, .10);
+          background: rgba(7, 31, 22, .82);
+          border: 1px solid rgba(255, 255, 255, .18);
           padding: 16px;
-          color: #6b6255;
+          color: rgba(255, 255, 255, .88);
           font-weight: 800;
+          backdrop-filter: blur(10px);
         }
 
         .loadingBox {
@@ -589,8 +598,8 @@ export default function DashboardPage() {
 
         .errorBox {
           margin-top: 12px;
-          color: #a33c2a;
-          background: rgba(255, 235, 230, .82);
+          color: #ffd7cc;
+          background: rgba(90, 24, 12, .78);
         }
 
         .header {
@@ -600,8 +609,8 @@ export default function DashboardPage() {
           margin-bottom: 20px;
           padding: 20px;
           border-radius: 24px;
-          background: rgba(255, 253, 246, .82);
-          border: 1px solid rgba(255,255,255,.30);
+          background: rgba(7, 31, 22, .82);
+          border: 1px solid rgba(255,255,255,.18);
           box-shadow: 0 18px 42px rgba(0,0,0,.16);
           backdrop-filter: blur(8px);
         }
@@ -609,7 +618,7 @@ export default function DashboardPage() {
         .eyebrow {
           margin: 0;
           font-weight: 900;
-          color: #6e552d;
+          color: #d9b45f;
           letter-spacing: .3px;
         }
 
@@ -618,11 +627,11 @@ export default function DashboardPage() {
           font-size: 34px;
           line-height: 1;
           letter-spacing: -1px;
-          color: #101a14;
+          color: #ffffff;
         }
 
         .header small {
-          color: #5f665e;
+          color: rgba(255,255,255,.78);
           font-size: 15px;
         }
 
@@ -632,14 +641,18 @@ export default function DashboardPage() {
           gap: 14px;
         }
 
-        .headerActions button {
+        .headerActions .headerIconButton {
           position: relative;
+          display: grid;
+          place-items: center;
+          text-decoration: none;
+          color: white;
           width: 52px;
           height: 52px;
-          border: 1px solid rgba(92, 70, 35, .08);
+          border: 1px solid rgba(255, 255, 255, .18);
           border-radius: 16px;
-          background: rgba(255, 253, 246, .72);
-          box-shadow: 0 14px 32px rgba(82, 60, 27, .08);
+          background: rgba(255, 255, 255, .12);
+          box-shadow: 0 14px 32px rgba(0, 0, 0, .18);
           cursor: pointer;
           font-size: 20px;
         }
@@ -682,8 +695,8 @@ export default function DashboardPage() {
         .stat {
           min-height: 138px;
           border-radius: 20px;
-          background: rgba(255, 253, 246, .88);
-          border: 1px solid rgba(255,255,255,.30);
+          background: rgba(7, 31, 22, .80);
+          border: 1px solid rgba(255,255,255,.18);
           display: flex;
           align-items: center;
           gap: 19px;
@@ -710,7 +723,7 @@ export default function DashboardPage() {
         .stat p {
           margin: 0 0 8px;
           font-size: 13px;
-          color: #5f665e;
+          color: rgba(255,255,255,.72);
           font-weight: 800;
         }
 
@@ -718,11 +731,11 @@ export default function DashboardPage() {
           margin: 0 0 8px;
           font-size: 29px;
           letter-spacing: -1px;
-          color: #101a14;
+          color: #ffffff;
         }
 
         .stat small {
-          color: #6e552d;
+          color: #d9b45f;
           font-weight: 900;
         }
 
@@ -739,7 +752,7 @@ export default function DashboardPage() {
         }
 
         .journey {
-          background: rgba(255, 253, 246, .88);
+          background: rgba(7, 31, 22, .82);
           padding: 20px;
           min-height: 520px;
           backdrop-filter: blur(8px);
@@ -750,12 +763,12 @@ export default function DashboardPage() {
         }
 
         .journey h3 {
-          color: #17271d;
+          color: #ffffff;
         }
 
         .journey h4 {
           margin-top: 12px;
-          color: #8c6a3c;
+          color: #d9b45f;
           font-size: 14px;
         }
 
@@ -782,8 +795,8 @@ export default function DashboardPage() {
         .step:first-of-type:before { display: none; }
 
         .step.current {
-          background: linear-gradient(90deg, #f2e4c6, #e0cfaa);
-          box-shadow: inset 0 0 0 1px rgba(140, 106, 60, .12);
+          background: rgba(255,255,255,.12);
+          box-shadow: inset 0 0 0 1px rgba(217,180,95,.25);
         }
 
         .step span {
@@ -801,20 +814,20 @@ export default function DashboardPage() {
 
         .step div strong {
           font-size: 14px;
-          color: #17271d;
+          color: #ffffff;
         }
 
         .step div p {
           margin: 5px 0 0;
           font-size: 13px;
-          color: #6c675b;
+          color: rgba(255,255,255,.72);
         }
 
         .step div small {
           display: block;
           margin-top: 3px;
           font-size: 11px;
-          color: #817866;
+          color: rgba(255,255,255,.62);
         }
 
         .step b {
@@ -1001,7 +1014,8 @@ export default function DashboardPage() {
         }
 
         .panel {
-          background: rgba(255, 253, 246, .88);
+          background: rgba(7, 31, 22, .82);
+          color: white;
           padding: 22px;
           min-height: 255px;
           backdrop-filter: blur(8px);
@@ -1040,7 +1054,7 @@ export default function DashboardPage() {
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #efe3cc;
+          background: rgba(255,255,255,.16);
         }
 
         .inventoryRow strong {
@@ -1050,11 +1064,11 @@ export default function DashboardPage() {
         .inventoryRow p {
           margin: 3px 0 0;
           font-size: 11px;
-          color: #666;
+          color: rgba(255,255,255,.68);
         }
 
         .inventoryRow.warn b {
-          color: #a66c22;
+          color: #ffd36b;
         }
 
         .inventory small {
@@ -1067,7 +1081,7 @@ export default function DashboardPage() {
 
         .taskIntro {
           margin: 12px 0 0;
-          color: #5c6259;
+          color: rgba(255,255,255,.72);
           font-size: 13px;
           line-height: 1.5;
         }
@@ -1085,7 +1099,7 @@ export default function DashboardPage() {
           gap: 10px;
           padding: 11px;
           border-radius: 14px;
-          background: #f3ead8;
+          background: rgba(255,255,255,.12);
           border: 1px solid rgba(92, 70, 35, .06);
         }
 
@@ -1093,7 +1107,7 @@ export default function DashboardPage() {
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: #efe3cc;
+          background: rgba(255,255,255,.16);
           display: grid;
           place-items: center;
         }
@@ -1106,17 +1120,17 @@ export default function DashboardPage() {
         .taskOrder p {
           margin: 3px 0 0;
           font-size: 12px;
-          color: #6b6b62;
+          color: rgba(255,255,255,.68);
         }
 
         .taskOrder b {
           font-size: 11px;
-          color: #6b6b62;
+          color: rgba(255,255,255,.68);
           text-align: right;
         }
 
         .taskOrder.covered b {
-          color: #31553d;
+          color: #d9b45f;
         }
 
         .taskCode {
@@ -1124,7 +1138,7 @@ export default function DashboardPage() {
           margin-bottom: 3px;
           font-size: 10px;
           font-weight: 900;
-          color: #8c6a3c;
+          color: #d9b45f;
           letter-spacing: .6px;
         }
 
@@ -1171,7 +1185,7 @@ export default function DashboardPage() {
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #efe3cc;
+          background: rgba(255,255,255,.16);
         }
 
         .activityRow strong {
@@ -1181,21 +1195,21 @@ export default function DashboardPage() {
         .activityRow p {
           margin: 4px 0 0;
           font-size: 12px;
-          color: #6b6b62;
+          color: rgba(255,255,255,.68);
         }
 
         .activityRow b {
-          color: #31553d;
+          color: #d9b45f;
           font-size: 13px;
           text-align: right;
         }
 
         .activityRow.danger b {
-          color: #a33c2a;
+          color: #ff9b8e;
         }
 
         .activityRow.warning b {
-          color: #a66c22;
+          color: #ffd36b;
         }
 
         footer {

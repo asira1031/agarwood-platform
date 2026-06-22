@@ -1,5 +1,9 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { supabase } from "@/lib/supabase";
 
 const sidebarItems = [
   { label: "Dashboard", href: "/dashboard" },
@@ -24,6 +28,59 @@ export default function DashboardLayout({
 }: {
   children: ReactNode;
 }) {
+  const [allowed, setAllowed] = useState(false);
+
+  useEffect(() => {
+    async function checkAccess() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const userEmail = user.email?.trim().toLowerCase() || "";
+
+      const { data: adminRow } = await supabase
+        .from("admins")
+        .select("id")
+        .eq("email", userEmail)
+        .eq("status", "ACTIVE")
+        .maybeSingle();
+
+      if (adminRow) {
+        window.location.href = "/admin/dashboard";
+        return;
+      }
+
+      const { data: caretakerRow } = await supabase
+        .from("caretakers")
+        .select("id")
+        .eq("email", userEmail)
+        .eq("status", "ACTIVE")
+        .maybeSingle();
+
+      if (caretakerRow) {
+        window.location.href = "/gardener/dashboard";
+        return;
+      }
+
+      setAllowed(true);
+    }
+
+    checkAccess();
+  }, []);
+
+  if (!allowed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#071f16] text-white">
+        Loading...
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#f7f3e8] text-[#1f3b2c]">
       <div className="flex min-h-screen">
@@ -31,7 +88,7 @@ export default function DashboardLayout({
           <div className="p-6">
             <div className="rounded-3xl border border-white/10 bg-white/10 p-5 shadow-lg">
               <p className="text-xs uppercase tracking-[0.3em] text-amber-200">
-                Agarwood
+                ARGANWOOD
               </p>
               <h1 className="mt-2 text-2xl font-bold">Customer Portal</h1>
               <p className="mt-2 text-sm text-white/70">
