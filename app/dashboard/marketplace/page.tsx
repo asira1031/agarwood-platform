@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type ProductType = "TREE" | "TREE_PACKAGE" | "CARE_PACKAGE" | "SUPPLY";
+type ProductType = "TREE" | "PACKAGE" | "TREE_PACKAGE" | "CARE_PACKAGE" | "SUPPLY";
 
 type SupplyCategory =
   | "All Supplies"
