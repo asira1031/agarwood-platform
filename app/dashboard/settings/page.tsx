@@ -10,32 +10,25 @@ type Profile = {
   email: string | null;
   phone: string | null;
   membership_status: string | null;
-  membership_expiry: string | null;
-  auto_renew: boolean | null;
-  email_alerts: boolean | null;
-  sms_alerts: boolean | null;
-  task_alerts: boolean | null;
-  gps_alerts: boolean | null;
 };
+
+type TreeRow = Record<string, any>;
+type SubscriptionRow = Record<string, any>;
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRow[]>([]);
 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
 
-  const [emailAlerts, setEmailAlerts] = useState(true);
-  const [smsAlerts, setSmsAlerts] = useState(false);
-  const [taskAlerts, setTaskAlerts] = useState(true);
-  const [gpsAlerts, setGpsAlerts] = useState(true);
-
-  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
-  const [savingAlerts, setSavingAlerts] = useState(false);
+  const [savingAutoRenew, setSavingAutoRenew] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -61,21 +54,29 @@ export default function SettingsPage() {
 
     const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: profileById } = await supabase
+    const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
-      .select(
-        "id, full_name, email, phone, membership_status, membership_expiry, auto_renew, email_alerts, sms_alerts, task_alerts, gps_alerts"
-      )
+      .select("id, full_name, email, phone, membership_status")
       .eq("id", user.id)
       .maybeSingle();
 
-    const { data: profileByEmail } = await supabase
+    if (profileByIdError) {
+      setNotice(profileByIdError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profileByEmail, error: profileByEmailError } = await supabase
       .from("profiles")
-      .select(
-        "id, full_name, email, phone, membership_status, membership_expiry, auto_renew, email_alerts, sms_alerts, task_alerts, gps_alerts"
-      )
-      .eq("email", email)
+      .select("id, full_name, email, phone, membership_status")
+      .ilike("email", email)
       .maybeSingle();
+
+    if (profileByEmailError) {
+      setNotice(profileByEmailError.message);
+      setLoading(false);
+      return;
+    }
 
     const currentProfile = profileById || profileByEmail;
 
@@ -88,10 +89,33 @@ export default function SettingsPage() {
     setProfile(currentProfile);
     setFullName(currentProfile.full_name || "");
     setPhone(currentProfile.phone || "");
-    setEmailAlerts(currentProfile.email_alerts ?? true);
-    setSmsAlerts(currentProfile.sms_alerts ?? false);
-    setTaskAlerts(currentProfile.task_alerts ?? true);
-    setGpsAlerts(currentProfile.gps_alerts ?? true);
+
+    const { data: treeData, error: treeError } = await supabase
+      .from("trees")
+      .select("*")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false });
+
+    if (treeError) {
+      setNotice(treeError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: subscriptionData, error: subscriptionError } = await supabase
+      .from("care_program_subscriptions")
+      .select("*")
+      .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false });
+
+    if (subscriptionError) {
+      setNotice(subscriptionError.message);
+      setLoading(false);
+      return;
+    }
+
+    setTrees(treeData || []);
+    setSubscriptions(subscriptionData || []);
     setLoading(false);
   }
 
@@ -99,17 +123,20 @@ export default function SettingsPage() {
     loadSettings();
   }, []);
 
-  const autoRenewEnabled = Boolean(profile?.auto_renew);
+  const autoRenewOn = useMemo(() => {
+    return (
+      trees.some((tree) => Boolean(tree.auto_renew_enabled)) ||
+      subscriptions.some((item) => Boolean(item.auto_renew_enabled))
+    );
+  }, [trees, subscriptions]);
 
-  const membershipExpiryLabel = useMemo(() => {
-    if (!profile?.membership_expiry) return "Not set";
+  const treeAutoRenewCount = useMemo(() => {
+    return trees.filter((tree) => Boolean(tree.auto_renew_enabled)).length;
+  }, [trees]);
 
-    return new Date(profile.membership_expiry).toLocaleDateString("en-PH", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  }, [profile]);
+  const subscriptionAutoRenewCount = useMemo(() => {
+    return subscriptions.filter((item) => Boolean(item.auto_renew_enabled)).length;
+  }, [subscriptions]);
 
   async function saveAccount() {
     if (!profile || savingProfile) return;
@@ -131,36 +158,46 @@ export default function SettingsPage() {
       return;
     }
 
-    setNotice("Account details saved successfully.");
+    setNotice("Account details saved.");
     await loadSettings();
     setSavingProfile(false);
   }
 
-  async function saveNotifications() {
-    if (!profile || savingAlerts) return;
+  async function updateAutoRenew(value: boolean) {
+    if (!profile || savingAutoRenew) return;
 
-    setSavingAlerts(true);
+    setSavingAutoRenew(true);
     setNotice("");
 
-    const { error } = await supabase
-      .from("profiles")
+    const { error: treeError } = await supabase
+      .from("trees")
       .update({
-        email_alerts: emailAlerts,
-        sms_alerts: smsAlerts,
-        task_alerts: taskAlerts,
-        gps_alerts: gpsAlerts,
+        auto_renew_enabled: value,
       })
-      .eq("id", profile.id);
+      .eq("profile_id", profile.id);
 
-    if (error) {
-      setNotice(error.message);
-      setSavingAlerts(false);
+    if (treeError) {
+      setNotice(treeError.message);
+      setSavingAutoRenew(false);
       return;
     }
 
-    setNotice("Notification preferences saved.");
+    const { error: subscriptionError } = await supabase
+      .from("care_program_subscriptions")
+      .update({
+        auto_renew_enabled: value,
+      })
+      .eq("profile_id", profile.id);
+
+    if (subscriptionError) {
+      setNotice(subscriptionError.message);
+      setSavingAutoRenew(false);
+      return;
+    }
+
+    setNotice(value ? "Auto Renew turned ON for all tree operations." : "Auto Renew turned OFF for all tree operations.");
     await loadSettings();
-    setSavingAlerts(false);
+    setSavingAutoRenew(false);
   }
 
   async function changePassword() {
@@ -169,7 +206,7 @@ export default function SettingsPage() {
     setNotice("");
 
     if (!newPassword || !confirmPassword) {
-      setNotice("Enter your new password and confirmation.");
+      setNotice("Enter new password and confirmation.");
       return;
     }
 
@@ -179,7 +216,7 @@ export default function SettingsPage() {
     }
 
     if (newPassword !== confirmPassword) {
-      setNotice("New password and confirm password do not match.");
+      setNotice("Passwords do not match.");
       return;
     }
 
@@ -195,10 +232,9 @@ export default function SettingsPage() {
       return;
     }
 
-    setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
-    setNotice("Password updated successfully.");
+    setNotice("Password updated.");
     setChangingPassword(false);
   }
 
@@ -209,15 +245,15 @@ export default function SettingsPage() {
           <p className="eyebrow">Customer Settings</p>
           <h1>Settings</h1>
           <span>
-            Manage your account, view actual auto renew status, and review which customer modules
-            already read the same Supabase setting. Display only. No billing or renewal processing here.
+            Manage account details and control Tree Operations Auto Renew. Turning OFF disables
+            auto renew for all trees and care program subscriptions.
           </span>
         </div>
 
         <div className="heroActions">
           <button onClick={loadSettings}>Refresh</button>
-          <Link href="/dashboard/marketplace">Marketplace</Link>
-          <Link href="/dashboard">Dashboard</Link>
+          <Link href="/dashboard/tree-operations">Tree Operations</Link>
+          <Link href="/dashboard/investments">Investments</Link>
         </div>
       </section>
 
@@ -227,7 +263,7 @@ export default function SettingsPage() {
         <div className="empty">Loading settings...</div>
       ) : (
         <section className="settingsGrid">
-          <div className="panel accountPanel">
+          <div className="panel">
             <div className="panelHead">
               <div>
                 <p className="sectionLabel">Account</p>
@@ -256,51 +292,59 @@ export default function SettingsPage() {
             </button>
           </div>
 
-          <div className="panel autoRenewPanel">
+          <div className="panel">
             <div className="panelHead">
               <div>
-                <p className="sectionLabel">Auto Renew</p>
-                <h2>Auto Renew Status</h2>
+                <p className="sectionLabel">Auto Renew Master Switch</p>
+                <h2>Tree Operations Auto Renew</h2>
               </div>
-              <span>{autoRenewEnabled ? "ON" : "OFF"}</span>
+              <span>{autoRenewOn ? "ON" : "OFF"}</span>
             </div>
 
-            <div className={`statusCard ${autoRenewEnabled ? "on" : "off"}`}>
-              <p>Actual Supabase Setting</p>
-              <h3>{autoRenewEnabled ? "ON" : "OFF"}</h3>
-              <small>Read from profiles.auto_renew</small>
+            <div className={`statusCard ${autoRenewOn ? "on" : "off"}`}>
+              <p>Current Auto Renew Status</p>
+              <h3>{autoRenewOn ? "ON" : "OFF"}</h3>
+              <small>Connected to trees and care program subscriptions.</small>
+            </div>
+
+            <div className="autoButtons">
+              <button onClick={() => updateAutoRenew(true)} disabled={savingAutoRenew}>
+                Turn ON All
+              </button>
+              <button onClick={() => updateAutoRenew(false)} disabled={savingAutoRenew}>
+                Turn OFF All
+              </button>
             </div>
 
             <div className="infoRows">
               <div>
-                <span>Membership Status</span>
-                <strong>{profile?.membership_status || "UNKNOWN"}</strong>
+                <span>Trees Auto Renew ON</span>
+                <strong>{treeAutoRenewCount}</strong>
               </div>
               <div>
-                <span>Membership Expiry</span>
-                <strong>{membershipExpiryLabel}</strong>
+                <span>Subscriptions Auto Renew ON</span>
+                <strong>{subscriptionAutoRenewCount}</strong>
+              </div>
+              <div>
+                <span>Total Trees</span>
+                <strong>{trees.length}</strong>
+              </div>
+              <div>
+                <span>Total Subscriptions</span>
+                <strong>{subscriptions.length}</strong>
               </div>
             </div>
 
             <div className="syncBox">
-              <div>
-                <strong>Display Sync Coverage</strong>
-                <p>
-                  These customer modules should show the same auto renew status. This page only
-                  displays the value and does not trigger payment, renewal, or background jobs.
-                </p>
-              </div>
-
-              <div className="syncList">
-                <SyncRow title="Marketplace" active={autoRenewEnabled} />
-                <SyncRow title="Tree Operations" active={autoRenewEnabled} />
-                <SyncRow title="My Trees" active={autoRenewEnabled} />
-                <SyncRow title="Investments" active={autoRenewEnabled} />
-              </div>
+              <strong>Connection Rule</strong>
+              <p>
+                Settings controls the master switch. Tree Operations must only renew records where
+                auto_renew_enabled is ON.
+              </p>
             </div>
           </div>
 
-          <div className="panel securityPanel">
+          <div className="panel">
             <div className="panelHead">
               <div>
                 <p className="sectionLabel">Security</p>
@@ -308,16 +352,6 @@ export default function SettingsPage() {
               </div>
               <span>Protected</span>
             </div>
-
-            <label>
-              Current Password
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-                placeholder="Optional for Supabase session update"
-              />
-            </label>
 
             <label>
               New Password
@@ -342,46 +376,40 @@ export default function SettingsPage() {
             </button>
           </div>
 
-          <div className="panel notificationsPanel">
+          <div className="panel">
             <div className="panelHead">
               <div>
-                <p className="sectionLabel">Notifications</p>
-                <h2>Alert Preferences</h2>
+                <p className="sectionLabel">Live Records</p>
+                <h2>Auto Renew Coverage</h2>
               </div>
-              <span>Customer</span>
+              <span>Supabase</span>
             </div>
 
-            <SwitchRow
-              title="Email Alerts"
-              note="Membership, wallet, tree, and support email updates."
-              value={emailAlerts}
-              onChange={setEmailAlerts}
-            />
+            <div className="recordList">
+              {trees.length === 0 && subscriptions.length === 0 ? (
+                <div className="emptyMini">No tree or subscription records found.</div>
+              ) : (
+                <>
+                  {trees.slice(0, 6).map((tree) => (
+                    <RecordRow
+                      key={tree.id}
+                      title={tree.tree_code || tree.display_name || "Tree"}
+                      subtitle={tree.care_plan || tree.current_stage || "Tree record"}
+                      active={Boolean(tree.auto_renew_enabled)}
+                    />
+                  ))}
 
-            <SwitchRow
-              title="SMS Alerts"
-              note="Important wallet and account updates by SMS."
-              value={smsAlerts}
-              onChange={setSmsAlerts}
-            />
-
-            <SwitchRow
-              title="Task Alerts"
-              note="Task order status and farm operation updates."
-              value={taskAlerts}
-              onChange={setTaskAlerts}
-            />
-
-            <SwitchRow
-              title="GPS Alerts"
-              note="GPS verification and tree location status updates."
-              value={gpsAlerts}
-              onChange={setGpsAlerts}
-            />
-
-            <button className="primaryButton" onClick={saveNotifications} disabled={savingAlerts}>
-              {savingAlerts ? "Saving..." : "Save Notification Settings"}
-            </button>
+                  {subscriptions.slice(0, 6).map((item) => (
+                    <RecordRow
+                      key={item.id}
+                      title={item.care_program_name || item.plan_name || "Care Program"}
+                      subtitle={item.tree_id || item.tree_code || "Subscription record"}
+                      active={Boolean(item.auto_renew_enabled)}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
           </div>
         </section>
       )}
@@ -527,7 +555,8 @@ export default function SettingsPage() {
           cursor: not-allowed;
         }
 
-        .primaryButton {
+        .primaryButton,
+        .autoButtons button {
           width: 100%;
           border: 1px solid rgba(223, 171, 61, .24);
           border-radius: 17px;
@@ -540,6 +569,7 @@ export default function SettingsPage() {
         }
 
         .primaryButton:hover,
+        .autoButtons button:hover,
         .heroActions button:hover,
         .heroActions a:hover {
           background: rgba(217, 165, 46, .18);
@@ -580,6 +610,7 @@ export default function SettingsPage() {
           font-weight: 900;
         }
 
+        .autoButtons,
         .infoRows {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -589,7 +620,8 @@ export default function SettingsPage() {
 
         .infoRows div,
         .syncBox,
-        .switchRow {
+        .recordRow,
+        .emptyMini {
           border-radius: 17px;
           padding: 14px;
           background: rgba(255,255,255,.055);
@@ -606,12 +638,13 @@ export default function SettingsPage() {
 
         .infoRows strong,
         .syncBox strong,
-        .switchRow strong {
+        .recordRow strong {
           color: #fff5c3;
         }
 
         .syncBox p,
-        .switchRow p {
+        .recordRow p,
+        .emptyMini {
           margin: 7px 0 0;
           color: rgba(255, 248, 221, .62);
           line-height: 1.5;
@@ -619,28 +652,19 @@ export default function SettingsPage() {
           font-weight: 800;
         }
 
-        .syncList {
+        .recordList {
           display: grid;
           gap: 10px;
-          margin-top: 16px;
         }
 
-        .syncRow {
+        .recordRow {
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          border-radius: 16px;
-          padding: 13px 14px;
-          background: rgba(255,255,255,.055);
-          border: 1px solid rgba(223, 171, 61, .12);
         }
 
-        .syncRow strong {
-          color: #fff5c3;
-        }
-
-        .syncRow span {
+        .recordRow span {
           border-radius: 999px;
           padding: 8px 11px;
           background: rgba(255,255,255,.08);
@@ -649,76 +673,21 @@ export default function SettingsPage() {
           font-weight: 1000;
         }
 
-        .syncRow span.on {
+        .recordRow span.on {
           background: rgba(217, 165, 46, .18);
           color: #ffe49a;
         }
 
-        .switchRow {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 16px;
-          margin-bottom: 12px;
-        }
-
-        .toggle {
-          flex: 0 0 auto;
-          position: relative;
-          width: 64px;
-          height: 36px;
-          border: 1px solid rgba(223, 171, 61, .24);
-          border-radius: 999px;
-          background: rgba(255,255,255,.08);
-          cursor: pointer;
-          padding: 3px;
-        }
-
-        .toggle span {
-          display: block;
-          width: 28px;
-          height: 28px;
-          border-radius: 50%;
-          background: rgba(255, 248, 221, .78);
-          transition: .18s ease;
-        }
-
-        .toggle.on {
-          background: linear-gradient(135deg, #e5ad34, #c58b25);
-        }
-
-        .toggle.on span {
-          transform: translateX(27px);
-          background: #06170f;
-        }
-
-        @media (max-width: 1000px) {
-          .settingsGrid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 720px) {
-          .page {
-            padding: 18px;
-          }
-
+        @media (max-width: 950px) {
           .hero {
             flex-direction: column;
-            align-items: flex-start;
+            align-items: stretch;
           }
 
-          .hero h1 {
-            font-size: 34px;
-          }
-
+          .settingsGrid,
+          .autoButtons,
           .infoRows {
             grid-template-columns: 1fr;
-          }
-
-          .switchRow {
-            align-items: flex-start;
-            flex-direction: column;
           }
         }
       `}</style>
@@ -726,36 +695,22 @@ export default function SettingsPage() {
   );
 }
 
-function SyncRow({ title, active }: { title: string; active: boolean }) {
-  return (
-    <div className="syncRow">
-      <strong>{title}</strong>
-      <span className={active ? "on" : ""}>{active ? "SYNCED ON" : "SYNCED OFF"}</span>
-    </div>
-  );
-}
-
-function SwitchRow({
+function RecordRow({
   title,
-  note,
-  value,
-  onChange,
+  subtitle,
+  active,
 }: {
   title: string;
-  note: string;
-  value: boolean;
-  onChange: (value: boolean) => void;
+  subtitle: string;
+  active: boolean;
 }) {
   return (
-    <div className="switchRow">
+    <div className="recordRow">
       <div>
         <strong>{title}</strong>
-        <p>{note}</p>
+        <p>{subtitle}</p>
       </div>
-
-      <button className={`toggle ${value ? "on" : ""}`} onClick={() => onChange(!value)}>
-        <span />
-      </button>
+      <span className={active ? "on" : ""}>{active ? "ON" : "OFF"}</span>
     </div>
   );
 }

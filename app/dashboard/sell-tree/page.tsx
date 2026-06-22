@@ -23,79 +23,142 @@ type Tree = {
   ownership_status: string | null;
 };
 
-type SellTreeRequest = {
-  id: string;
-  tree_id: string | null;
-  tree_value: number | null;
-  platform_fee: number | null;
-  net_receive: number | null;
-  status: string | null;
-  created_at: string | null;
-};
+type SellTreeRequest = Record<string, any>;
+
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not set";
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function normalizeStatus(value: any) {
+  return String(value || "PENDING").trim().toUpperCase();
+}
+
+function statusClass(value: any) {
+  const status = normalizeStatus(value);
+  if (["APPROVED", "COMPLETED", "PAID", "SOLD"].includes(status)) return "good";
+  if (["PENDING", "PENDING ADMIN VALUATION", "PROCESSING", "WAITING"].includes(status)) return "warning";
+  if (["REJECTED", "CANCELLED", "FAILED"].includes(status)) return "bad";
+  return "neutral";
+}
+
+function getTreeKey(tree: Tree) {
+  return tree.tree_code || tree.display_name || tree.id;
+}
+
+function requestMatchesTree(request: SellTreeRequest, tree: Tree) {
+  const requestTreeId = String(request.tree_id || "");
+  return (
+    requestTreeId === tree.id ||
+    requestTreeId === tree.tree_code ||
+    requestTreeId === tree.display_name
+  );
+}
+
+function isPendingRequest(request: SellTreeRequest) {
+  const status = normalizeStatus(request.status);
+  return ["PENDING", "PENDING ADMIN VALUATION", "PROCESSING", "WAITING"].includes(status);
+}
 
 export default function SellTreePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [trees, setTrees] = useState<Tree[]>([]);
   const [requests, setRequests] = useState<SellTreeRequest[]>([]);
   const [selectedTreeId, setSelectedTreeId] = useState("");
-  const [manualValue, setManualValue] = useState("");
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
-  async function loadData() {
-    setLoading(true);
-
+  async function findProfile() {
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
+
+    if (userError) throw new Error(userError.message);
 
     if (!user) {
       window.location.href = "/login";
-      return;
+      return null;
     }
 
     const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: profileById } = await supabase
+    const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
       .select("id, full_name, email, membership_status, kyc_status")
       .eq("id", user.id)
       .maybeSingle();
 
-    const { data: profileByEmail } = await supabase
+    if (profileByIdError) throw new Error(profileByIdError.message);
+
+    const { data: profileByEmail, error: profileByEmailError } = await supabase
       .from("profiles")
       .select("id, full_name, email, membership_status, kyc_status")
-      .eq("email", email)
+      .ilike("email", email)
       .maybeSingle();
 
-    const currentProfile = profileById || profileByEmail;
+    if (profileByEmailError) throw new Error(profileByEmailError.message);
 
-    if (!currentProfile) {
-      setLoading(false);
-      return;
-    }
+    return profileById || profileByEmail;
+  }
 
-    setProfile(currentProfile);
+  async function loadData() {
+    setLoading(true);
+    setMessage("");
 
-    const { data: treeData } = await supabase
-      .from("trees")
-      .select(
-        "id, profile_id, tree_code, display_name, farm_location, block_name, estimated_value, current_stage, ownership_status"
-      )
-      .eq("profile_id", currentProfile.id)
-      .order("tree_code", { ascending: true });
+    try {
+      const currentProfile = await findProfile();
 
-    const { data: requestData } = await supabase
-      .from("sell_tree_requests")
-      .select("id, tree_id, tree_value, platform_fee, net_receive, status, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
+      if (!currentProfile) {
+        setLoading(false);
+        return;
+      }
 
-    setTrees(treeData || []);
-    setRequests(requestData || []);
+      setProfile(currentProfile);
 
-    if ((treeData || []).length > 0 && !selectedTreeId) {
-      setSelectedTreeId((treeData || [])[0].id);
+      const { data: treeData, error: treeError } = await supabase
+        .from("trees")
+        .select(
+          "id, profile_id, tree_code, display_name, farm_location, block_name, estimated_value, current_stage, ownership_status"
+        )
+        .eq("profile_id", currentProfile.id)
+        .order("tree_code", { ascending: true });
+
+      if (treeError) throw new Error(treeError.message);
+
+      const { data: requestData, error: requestError } = await supabase
+        .from("sell_tree_requests")
+        .select("*")
+        .eq("profile_id", currentProfile.id)
+        .order("created_at", { ascending: false });
+
+      if (requestError) throw new Error(requestError.message);
+
+      const activeTrees = (treeData || []).filter((tree) => {
+        const status = normalizeStatus(tree.ownership_status);
+        return !["SOLD", "EXITED", "TRANSFERRED", "CANCELLED"].includes(status);
+      });
+
+      setTrees(activeTrees);
+      setRequests(requestData || []);
+
+      if (activeTrees.length > 0 && !selectedTreeId) {
+        setSelectedTreeId(activeTrees[0].id);
+      }
+    } catch (error: any) {
+      setMessage(error.message || "Failed to load sell tree data.");
     }
 
     setLoading(false);
@@ -109,15 +172,26 @@ export default function SellTreePage() {
     return trees.find((tree) => tree.id === selectedTreeId) || null;
   }, [trees, selectedTreeId]);
 
-  const treeValue = Number(manualValue || selectedTree?.estimated_value || 0);
-  const platformFee = treeValue * 0.02;
-  const netReceive = treeValue - platformFee;
+  const pendingRequests = useMemo(() => {
+    return requests.filter(isPendingRequest);
+  }, [requests]);
 
-  const membershipActive = profile?.membership_status === "ACTIVE";
-  const kycApproved = profile?.kyc_status === "APPROVED";
-  const canSubmit = membershipActive && kycApproved;
+  const selectedTreePendingRequest = useMemo(() => {
+    if (!selectedTree) return null;
+    return pendingRequests.find((request) => requestMatchesTree(request, selectedTree)) || null;
+  }, [pendingRequests, selectedTree]);
 
-  async function submitSellRequest() {
+  const membershipActive = normalizeStatus(profile?.membership_status) === "ACTIVE";
+  const kycApproved = normalizeStatus(profile?.kyc_status) === "APPROVED";
+
+  const canSubmit =
+    membershipActive &&
+    kycApproved &&
+    Boolean(selectedTree) &&
+    !selectedTreePendingRequest &&
+    !submitting;
+
+  async function submitValuationRequest() {
     setMessage("");
 
     if (!profile) {
@@ -130,93 +204,121 @@ export default function SellTreePage() {
       return;
     }
 
-    if (!canSubmit) {
-      setMessage("Sell request locked. Membership must be ACTIVE and KYC must be APPROVED.");
+    if (!membershipActive || !kycApproved) {
+      setMessage("Sell Tree is locked. Membership must be ACTIVE and KYC must be APPROVED.");
       return;
     }
 
-    if (!treeValue || treeValue <= 0) {
-      setMessage("Tree value is required.");
+    if (selectedTreePendingRequest) {
+      setMessage("This tree already has a pending admin valuation request.");
       return;
     }
 
-    const treeCode = selectedTree.tree_code || selectedTree.display_name || selectedTree.id;
+    setSubmitting(true);
+
+    const treeCode = getTreeKey(selectedTree);
 
     const { error } = await supabase.from("sell_tree_requests").insert({
       profile_id: profile.id,
       tree_id: treeCode,
-      tree_value: treeValue,
-      platform_fee: platformFee,
-      net_receive: netReceive,
-      status: "PENDING",
+      tree_value: 0,
+      platform_fee: 0,
+      net_receive: 0,
+      status: "PENDING ADMIN VALUATION",
     });
 
     if (error) {
       setMessage(error.message);
+      setSubmitting(false);
       return;
     }
 
-    setMessage("Sell tree request submitted. Waiting for admin approval.");
-    setManualValue("");
+    setMessage("Tree valuation request submitted. Waiting for admin valuation.");
     await loadData();
+    setSubmitting(false);
   }
 
   return (
     <main className="sellPage">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Exit Request</p>
+          <p className="eyebrow">Agarwood Sell Tree</p>
           <h1>Sell Tree</h1>
           <span>
-            Submit a tree sale request for admin review. Platform fee is automatically
-            calculated at 2%.
+            Request admin valuation for your selected tree. Admin will set the offered price,
+            add notes, and approve or reject the sale.
           </span>
         </div>
 
         <div className="heroCard">
-          <p>Net Receive Preview</p>
-          <strong>{peso(netReceive > 0 ? netReceive : 0)}</strong>
-          <small>After 2% platform fee</small>
+          <p>Admin Valuation</p>
+          <strong>Pending</strong>
+          <small>Price is set by admin review</small>
         </div>
       </section>
 
       {loading ? (
-        <div className="loadingBox">Loading trees and sell requests...</div>
+        <div className="loadingBox">Loading trees and sell tree requests...</div>
       ) : (
         <>
           {message && <div className="messageBox">{message}</div>}
 
           <section className="cards">
-            <SummaryCard icon="🌳" label="Owned Trees" value={String(trees.length)} note="From trees table" />
-            <SummaryCard icon="🎖️" label="Membership" value={profile?.membership_status || "UNKNOWN"} note="Required to sell" gold />
-            <SummaryCard icon="🛡️" label="KYC Status" value={profile?.kyc_status || "UNKNOWN"} note="Required for payout" />
-            <SummaryCard icon="🏛️" label="Platform Fee" value="2%" note="Deducted from sale value" gold />
+            <SummaryCard
+              icon="🌳"
+              label="Available Trees"
+              value={String(trees.length)}
+              note="Can request valuation"
+            />
+            <SummaryCard
+              icon="⏳"
+              label="Pending Valuation"
+              value={String(pendingRequests.length)}
+              note="Waiting for admin"
+              gold
+            />
+            <SummaryCard
+              icon="🎖️"
+              label="Membership"
+              value={profile?.membership_status || "UNKNOWN"}
+              note="Required to sell"
+            />
+            <SummaryCard
+              icon="🛡️"
+              label="KYC Status"
+              value={profile?.kyc_status || "UNKNOWN"}
+              note="Required for payout"
+              gold
+            />
           </section>
 
           <section className="grid">
             <div className="panel">
               <div className="panelHead">
                 <div>
-                  <h2>Select Tree to Sell</h2>
-                  <p>Only real trees assigned to your profile will appear here.</p>
+                  <h2>Select Tree</h2>
+                  <p>
+                    Choose the tree you want admin to evaluate. Trees with pending valuation
+                    requests are locked from duplicate requests.
+                  </p>
                 </div>
               </div>
 
               {trees.length === 0 ? (
-                <div className="emptyState">
-                  No owned trees found. Add or seed records in the trees table first.
-                </div>
+                <div className="emptyState">No active owned trees found.</div>
               ) : (
-                <>
-                  <div className="treeList">
-                    {trees.map((tree) => (
+                <div className="treeList">
+                  {trees.map((tree) => {
+                    const pending = pendingRequests.find((request) =>
+                      requestMatchesTree(request, tree)
+                    );
+                    const selected = selectedTreeId === tree.id;
+
+                    return (
                       <button
                         key={tree.id}
-                        className={selectedTreeId === tree.id ? "treeCard selected" : "treeCard"}
-                        onClick={() => {
-                          setSelectedTreeId(tree.id);
-                          setManualValue("");
-                        }}
+                        className={selected ? "treeCard selected" : "treeCard"}
+                        onClick={() => setSelectedTreeId(tree.id)}
                       >
                         <div>
                           <strong>{tree.tree_code || tree.display_name || "Unnamed Tree"}</strong>
@@ -227,86 +329,51 @@ export default function SellTreePage() {
                         </div>
 
                         <div>
-                          <span>{tree.current_stage || "Unknown Stage"}</span>
-                          <b>{peso(Number(tree.estimated_value || 0))}</b>
+                          <span className={pending ? "pendingBadge" : ""}>
+                            {pending ? "Pending Admin Valuation" : tree.current_stage || "Unknown Stage"}
+                          </span>
+                          <b>{tree.ownership_status || "ACTIVE"}</b>
                         </div>
                       </button>
-                    ))}
-                  </div>
-
-                  <div className="valueBox">
-                    <label>
-                      Tree Value
-                      <input
-                        value={manualValue}
-                        onChange={(e) => setManualValue(e.target.value)}
-                        type="number"
-                        placeholder={`Default: ${peso(Number(selectedTree?.estimated_value || 0))}`}
-                      />
-                    </label>
-
-                    <div className="notice">
-                      If tree value is empty, the system uses the selected tree&apos;s
-                      estimated value from the database.
-                    </div>
-                  </div>
-                </>
+                    );
+                  })}
+                </div>
               )}
             </div>
 
             <aside className="panel">
               <div className="panelHead">
                 <div>
-                  <h2>Sale Preview</h2>
-                  <p>Review fees before submitting.</p>
+                  <h2>Valuation Request</h2>
+                  <p>Customer does not set the price. Admin will decide the tree value.</p>
                 </div>
               </div>
 
-              <div className={`rule ${membershipActive ? "ok" : "locked"}`}>
-                <span>{membershipActive ? "✓" : "!"}</span>
-                <div>
-                  <strong>Membership</strong>
-                  <p>{profile?.membership_status || "UNKNOWN"}</p>
-                </div>
-              </div>
-
-              <div className={`rule ${kycApproved ? "ok" : "locked"}`}>
-                <span>{kycApproved ? "✓" : "!"}</span>
-                <div>
-                  <strong>KYC Verification</strong>
-                  <p>{profile?.kyc_status || "UNKNOWN"}</p>
-                </div>
-              </div>
+              <Rule ok={membershipActive} title="Membership" value={profile?.membership_status || "UNKNOWN"} />
+              <Rule ok={kycApproved} title="KYC Verification" value={profile?.kyc_status || "UNKNOWN"} />
 
               <div className="previewBox">
-                <div className="previewRow">
-                  <span>Selected Tree</span>
-                  <b>{selectedTree?.tree_code || "None"}</b>
-                </div>
-
-                <div className="previewRow">
-                  <span>Tree Value</span>
-                  <b>{peso(treeValue)}</b>
-                </div>
-
-                <div className="previewRow">
-                  <span>Platform Fee 2%</span>
-                  <b>{peso(platformFee)}</b>
-                </div>
-
-                <div className="previewRow final">
-                  <span>Net Receive</span>
-                  <b>{peso(netReceive > 0 ? netReceive : 0)}</b>
-                </div>
+                <Preview
+                  label="Selected Tree"
+                  value={selectedTree?.tree_code || selectedTree?.display_name || "None"}
+                />
+                <Preview label="Admin Valuation" value="Waiting for admin review" />
+                <Preview label="Platform Fee" value="Calculated after approval" />
+                <Preview label="Net Receive" value="Available after approval" final />
               </div>
 
-              <button className="primaryButton" onClick={submitSellRequest} disabled={!canSubmit || trees.length === 0}>
-                Submit Sell Request
+              <button className="primaryButton" onClick={submitValuationRequest} disabled={!canSubmit}>
+                {submitting
+                  ? "Submitting..."
+                  : selectedTreePendingRequest
+                    ? "Already Pending Valuation"
+                    : "Request Tree Valuation"}
               </button>
 
               {!canSubmit && (
                 <small className="lockText">
-                  Selling locked. Membership must be ACTIVE and KYC must be APPROVED.
+                  Sell Tree requires ACTIVE membership, APPROVED KYC, selected tree,
+                  and no duplicate pending valuation request.
                 </small>
               )}
             </aside>
@@ -316,7 +383,7 @@ export default function SellTreePage() {
             <div className="panelHead">
               <div>
                 <h2>Sell Tree Requests</h2>
-                <p>Real records from sell_tree_requests.</p>
+                <p>Live request log from sell_tree_requests.</p>
               </div>
             </div>
 
@@ -324,23 +391,35 @@ export default function SellTreePage() {
               <div className="emptyState">No sell tree requests yet.</div>
             ) : (
               <div className="requestList">
-                {requests.map((item) => (
-                  <div className="requestCard" key={item.id}>
-                    <div>
-                      <strong>{item.tree_id || "No Tree ID"}</strong>
-                      <p>Tree Value: {peso(Number(item.tree_value || 0))}</p>
-                      <p>Platform Fee: {peso(Number(item.platform_fee || 0))}</p>
-                    </div>
+                {requests.map((item) => {
+                  const adminValue = Number(item.approved_value || item.final_value || item.tree_value || 0);
+                  const fee = Number(item.platform_fee || 0);
+                  const net = Number(item.net_receive || 0);
 
-                    <div>
-                      <span className={`status ${statusClass(item.status)}`}>
-                        {item.status || "PENDING"}
-                      </span>
-                      <b>Net: {peso(Number(item.net_receive || 0))}</b>
-                      <small>{formatDate(item.created_at)}</small>
+                  return (
+                    <div className="requestCard" key={item.id}>
+                      <div>
+                        <strong>{item.tree_id || "No Tree ID"}</strong>
+                        <p>
+                          Admin Valuation:{" "}
+                          {adminValue > 0 ? peso(adminValue) : "Waiting for admin review"}
+                        </p>
+                        <p>
+                          Platform Fee: {fee > 0 ? peso(fee) : "Pending approval"}
+                        </p>
+                        <small>{item.admin_notes || "Admin Notes: Waiting for review"}</small>
+                      </div>
+
+                      <div>
+                        <span className={`status ${statusClass(item.status)}`}>
+                          {item.status || "PENDING ADMIN VALUATION"}
+                        </span>
+                        <b>{net > 0 ? `Net Receive: ${peso(net)}` : "Net Receive: Pending"}</b>
+                        <small>{formatDate(item.created_at)}</small>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -391,6 +470,7 @@ export default function SellTreePage() {
           color: #5f665e;
           font-size: 15px;
           max-width: 760px;
+          line-height: 1.5;
         }
 
         .heroCard {
@@ -517,6 +597,7 @@ export default function SellTreePage() {
           margin: 6px 0 0;
           color: #6b6b62;
           font-size: 14px;
+          line-height: 1.45;
         }
 
         .treeList {
@@ -576,43 +657,14 @@ export default function SellTreePage() {
           font-weight: 900;
         }
 
+        .treeCard span.pendingBadge {
+          background: rgba(214,178,94,.25);
+          color: #8c6a3c;
+        }
+
         .treeCard b {
           color: #101a14;
-          font-size: 18px;
-        }
-
-        .valueBox {
-          margin-top: 16px;
-          border-radius: 20px;
-          padding: 16px;
-          background: rgba(255,253,246,.72);
-          border: 1px solid rgba(92,70,35,.10);
-        }
-
-        label {
-          display: grid;
-          gap: 8px;
-          color: #5f665e;
-          font-weight: 900;
-          font-size: 13px;
-        }
-
-        input {
-          width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
-          padding: 13px 14px;
-          background: rgba(255,253,246,.92);
-          color: #101a14;
-          outline: none;
-          font-weight: 800;
-        }
-
-        .notice {
-          margin-top: 12px;
-          color: #8c6a3c;
-          font-size: 13px;
-          font-weight: 900;
+          font-size: 14px;
         }
 
         .rule {
@@ -690,7 +742,7 @@ export default function SellTreePage() {
 
         .previewRow.final b {
           color: #31553d;
-          font-size: 20px;
+          font-size: 18px;
         }
 
         .primaryButton {
@@ -755,6 +807,14 @@ export default function SellTreePage() {
           margin: 5px 0 0;
           color: #6b6b62;
           font-size: 13px;
+          font-weight: 800;
+        }
+
+        .requestCard small {
+          display: block;
+          margin-top: 5px;
+          color: #8c6a3c;
+          font-weight: 900;
         }
 
         .requestCard div:last-child {
@@ -767,11 +827,6 @@ export default function SellTreePage() {
           color: #31553d;
         }
 
-        .requestCard small {
-          color: #6b6b62;
-          font-weight: 800;
-        }
-
         .status {
           display: inline-flex;
           align-items: center;
@@ -779,70 +834,40 @@ export default function SellTreePage() {
           min-width: 92px;
           padding: 8px 10px;
           border-radius: 999px;
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 900;
         }
 
-        .status.completed,
-        .status.approved,
-        .status.paid {
-          background: rgba(49,85,61,.12);
+        .status.good {
+          background: rgba(49,85,61,.14);
           color: #31553d;
         }
 
-        .status.pending,
-        .status.processing {
-          background: rgba(214,178,94,.20);
+        .status.warning {
+          background: rgba(214,178,94,.25);
           color: #8c6a3c;
         }
 
-        .status.rejected,
-        .status.failed {
-          background: rgba(163,60,42,.12);
+        .status.bad {
+          background: rgba(163,60,42,.14);
           color: #a33c2a;
         }
 
-        @media (max-width: 1200px) {
-          .cards {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .grid {
-            grid-template-columns: 1fr;
-          }
+        .status.neutral {
+          background: rgba(95,102,94,.12);
+          color: #5f665e;
         }
 
-        @media (max-width: 760px) {
-          .sellPage {
-            padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .heroCard {
-            width: 100%;
-          }
-
-          .cards {
-            grid-template-columns: 1fr;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .treeCard,
+        @media (max-width: 1050px) {
+          .hero,
           .requestCard {
             flex-direction: column;
-            align-items: flex-start;
+            align-items: stretch;
           }
 
-          .treeCard div:last-child,
-          .requestCard div:last-child {
-            justify-items: start;
+          .cards,
+          .grid {
+            grid-template-columns: 1fr;
           }
         }
       `}</style>
@@ -851,16 +876,16 @@ export default function SellTreePage() {
 }
 
 function SummaryCard({
+  icon,
   label,
   value,
   note,
-  icon,
   gold,
 }: {
+  icon: string;
   label: string;
   value: string;
   note: string;
-  icon: string;
   gold?: boolean;
 }) {
   return (
@@ -875,23 +900,23 @@ function SummaryCard({
   );
 }
 
-function peso(value: number) {
-  return `₱ ${value.toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+function Rule({ ok, title, value }: { ok: boolean; title: string; value: string }) {
+  return (
+    <div className={`rule ${ok ? "ok" : "locked"}`}>
+      <span>{ok ? "✓" : "!"}</span>
+      <div>
+        <strong>{title}</strong>
+        <p>{value}</p>
+      </div>
+    </div>
+  );
 }
 
-function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase();
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+function Preview({ label, value, final }: { label: string; value: string; final?: boolean }) {
+  return (
+    <div className={`previewRow ${final ? "final" : ""}`}>
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
+  );
 }

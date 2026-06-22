@@ -10,16 +10,6 @@ type Profile = {
   referral_code: string | null;
 };
 
-type ReferralLink = {
-  id: string;
-  owner_profile_id: string | null;
-  target_type: string | null;
-  referral_code: string | null;
-  referral_url: string | null;
-  status: string | null;
-  created_at: string | null;
-};
-
 type Referral = {
   id: string;
   referred_email: string | null;
@@ -33,7 +23,7 @@ type Referral = {
 
 export default function ReferralsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [link, setLink] = useState<ReferralLink | null>(null);
+  const [referralUrl, setReferralUrl] = useState("");
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
@@ -78,65 +68,46 @@ export default function ReferralsPage() {
       currentProfile.referral_code || generateReferralCode(currentProfile.email || emailLogin);
 
     if (!currentProfile.referral_code) {
-      await supabase.from("profiles").update({ referral_code: baseCode }).eq("id", currentProfile.id);
+      await supabase
+        .from("profiles")
+        .update({ referral_code: baseCode })
+        .eq("id", currentProfile.id);
     }
 
     const finalProfile = { ...currentProfile, referral_code: baseCode };
-
     setProfile(finalProfile);
 
-    await ensureCustomerReferralLink(finalProfile.id, baseCode);
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "https://agarwood-platform.vercel.app";
 
-    const { data: linkData } = await supabase
-      .from("referral_links")
-      .select("id, owner_profile_id, target_type, referral_code, referral_url, status, created_at")
-      .eq("owner_profile_id", finalProfile.id)
-      .eq("target_type", "CUSTOMER")
-      .maybeSingle();
+    const computedUrl = `${origin}/login?mode=register&ref=${encodeURIComponent(baseCode)}`;
+    setReferralUrl(computedUrl);
+
+    await supabase.from("referral_links").upsert(
+      {
+        owner_profile_id: finalProfile.id,
+        target_type: "CUSTOMER",
+        referral_code: baseCode,
+        referral_url: computedUrl,
+        status: "ACTIVE",
+      },
+      {
+        onConflict: "owner_profile_id,target_type",
+      }
+    );
 
     const { data: referralData } = await supabase
       .from("referrals")
-      .select("id, referred_email, referral_code, target_type, qualified, reward_amount, status, created_at")
+      .select(
+        "id, referred_email, referral_code, target_type, qualified, reward_amount, status, created_at"
+      )
       .eq("referrer_profile_id", finalProfile.id)
-      .eq("target_type", "CUSTOMER")
       .order("created_at", { ascending: false });
 
-    setLink(linkData || null);
     setReferrals(referralData || []);
     setLoading(false);
-  }
-
-  async function ensureCustomerReferralLink(profileId: string, referralCode: string) {
-    const origin =
-      typeof window !== "undefined" ? window.location.origin : "https://agarwood-platform.vercel.app";
-
-    const url = `${origin}/login?mode=register&ref=${encodeURIComponent(referralCode)}`;
-
-    const { data: existing } = await supabase
-      .from("referral_links")
-      .select("id")
-      .eq("owner_profile_id", profileId)
-      .eq("target_type", "CUSTOMER")
-      .maybeSingle();
-
-    if (existing?.id) {
-      await supabase
-        .from("referral_links")
-        .update({
-          referral_code: referralCode,
-          referral_url: url,
-          status: "ACTIVE",
-        })
-        .eq("id", existing.id);
-    } else {
-      await supabase.from("referral_links").insert({
-        owner_profile_id: profileId,
-        target_type: "CUSTOMER",
-        referral_code: referralCode,
-        referral_url: url,
-        status: "ACTIVE",
-      });
-    }
   }
 
   useEffect(() => {
@@ -159,12 +130,12 @@ export default function ReferralsPage() {
   }, [referrals]);
 
   async function copyReferralLink() {
-    if (!link?.referral_url) {
+    if (!referralUrl) {
       setMessage("Referral link is still generating.");
       return;
     }
 
-    await navigator.clipboard.writeText(link.referral_url);
+    await navigator.clipboard.writeText(referralUrl);
     setMessage("Referral link copied.");
   }
 
@@ -213,6 +184,7 @@ export default function ReferralsPage() {
       referral_code: profile.referral_code,
       target_type: "CUSTOMER",
       qualified: false,
+      reward_amount: 0,
       status: "PENDING",
     });
 
@@ -222,7 +194,7 @@ export default function ReferralsPage() {
     }
 
     setEmail("");
-    setMessage("Customer referral submitted. Waiting for qualification/admin approval.");
+    setMessage("Customer referral submitted.");
     await loadData();
   }
 
@@ -234,7 +206,7 @@ export default function ReferralsPage() {
           <h1>Invite Customers</h1>
           <span>
             Share your referral link with new customers. When they register using your code,
-            their signup can be tracked under your customer referral record.
+            their signup can be tracked under your referral record.
           </span>
         </div>
 
@@ -265,16 +237,17 @@ export default function ReferralsPage() {
               <p className="eyebrow">Customer Registration Link</p>
               <h2>Send this link to new customers</h2>
               <span>
-                This link opens the register page with your referral code already attached.
+                This link opens the login/register page in create-account mode with your
+                referral code attached.
               </span>
             </div>
 
             <div className="urlBox">
               <small>Referral Link</small>
-              <p>{link?.referral_url || "Generating referral link..."}</p>
+              <p>{referralUrl || "Generating referral link..."}</p>
             </div>
 
-            <button onClick={copyReferralLink} disabled={!link?.referral_url}>
+            <button onClick={copyReferralLink} disabled={!referralUrl}>
               Copy Referral Link
             </button>
           </section>
@@ -301,7 +274,7 @@ export default function ReferralsPage() {
             <section className="panel">
               <PanelHead
                 title="How Customer Referral Works"
-                text="Referral tracking starts when a new customer registers using your link."
+                text="Customer referral tracking starts when a new customer registers using your link."
               />
 
               <div className="rule">
@@ -316,7 +289,7 @@ export default function ReferralsPage() {
                 <span>2</span>
                 <div>
                   <strong>Register With Code</strong>
-                  <p>New customer registers through /register?ref=YOURCODE.</p>
+                  <p>New customer registers through /login?mode=register&amp;ref=YOURCODE.</p>
                 </div>
               </div>
 
