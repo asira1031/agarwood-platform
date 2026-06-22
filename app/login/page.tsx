@@ -213,7 +213,10 @@ export default function LoginPage() {
         .eq("referral_code", cleanReferralCode)
         .maybeSingle();
 
-      if (referrerProfile?.id && referrerProfile.email?.toLowerCase() !== cleanEmail) {
+      if (
+        referrerProfile?.id &&
+        referrerProfile.email?.toLowerCase() !== cleanEmail
+      ) {
         const { data: existingReferral } = await supabase
           .from("referrals")
           .select("id")
@@ -249,18 +252,18 @@ export default function LoginPage() {
       className="relative min-h-screen overflow-hidden bg-[#06180f] text-white"
       style={{
         backgroundImage:
-          "linear-gradient(rgba(2,24,13,.25), rgba(2,24,13,.65)), url('/images/agarwood-real-tree.jpg')",
+          "linear-gradient(rgba(2,24,13,.18), rgba(2,24,13,.72)), url('/images/agarwood-real-tree.jpg')",
         backgroundSize: "cover",
         backgroundPosition: "center",
         backgroundRepeat: "no-repeat",
       }}
     >
-      <div className="absolute inset-0 bg-gradient-to-b from-black/5 via-[#03160b]/10 to-[#03160b]/55" />
+      <div className="absolute inset-0 bg-gradient-to-br from-black/15 via-[#042412]/20 to-black/65" />
 
       <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col px-6 py-8">
         <div className="grid flex-1 items-center gap-8 lg:grid-cols-[1fr_0.98fr]">
-          <section className="rounded-[1.75rem] border border-[#9bd346]/70 bg-[#062414]/70 p-6 shadow-[0_30px_80px_rgba(0,0,0,.35)] backdrop-blur-md sm:p-10 lg:p-12">
-            <div className="mx-auto flex w-fit items-center gap-3 rounded-full border border-[#9bd346]/70 bg-[#061e11]/60 px-8 py-4 text-sm font-black tracking-wide text-white shadow-inner">
+          <section className="rounded-[1.75rem] border border-[#9bd346]/55 bg-[#062414]/60 p-6 shadow-[0_30px_80px_rgba(0,0,0,.35)] backdrop-blur-md sm:p-10 lg:p-12">
+            <div className="mx-auto flex w-fit items-center gap-3 rounded-full border border-[#9bd346]/60 bg-[#061e11]/60 px-8 py-4 text-sm font-black tracking-wide text-white shadow-inner">
               <span className="text-[#a8e063]">🌿</span>
               ARGANWOOD PLATFORM
             </div>
@@ -289,18 +292,18 @@ export default function LoginPage() {
               <Feature icon="🔒" title="Built on Trust" text="Transparent secure platform" />
             </div>
 
-            <div className="mt-8 rounded-3xl border border-[#9bd346]/55 bg-[#061e11]/45 p-7 backdrop-blur">
+            <div className="mt-8 rounded-3xl border border-[#9bd346]/45 bg-[#061e11]/40 p-7 backdrop-blur">
               <h3 className="font-serif text-3xl font-black text-[#a8e063]">
                 🌿 Our Mission
               </h3>
               <p className="mt-5 max-w-xl text-lg leading-relaxed text-white/90">
-                To empower tree owners with digital tools that ensure transparency,
-                growth, and lasting value for generations to come.
+                To empower tree owners with digital tools that ensure
+                transparency, growth, and lasting value for generations to come.
               </p>
             </div>
           </section>
 
-          <section className="rounded-[2rem] border border-black/10 bg-white/95 p-7 text-[#0f2c1b] shadow-[0_30px_90px_rgba(0,0,0,.40)] backdrop-blur-md sm:p-10 lg:p-12">
+          <section className="rounded-[2rem] border border-white/40 bg-white/95 p-7 text-[#0f2c1b] shadow-[0_30px_90px_rgba(0,0,0,.40)] backdrop-blur-md sm:p-10 lg:p-12">
             <div className="text-center">
               <p className="text-sm font-black uppercase tracking-[0.18em] text-[#3f7d2a]">
                 🔒 Secure Access
@@ -432,24 +435,14 @@ export default function LoginPage() {
                 disabled={loading}
                 className="w-full rounded-xl bg-gradient-to-r from-[#4b9f20] to-[#005726] py-5 text-lg font-black text-white shadow-xl transition hover:scale-[1.01] disabled:opacity-50"
               >
-                🌿 {loading ? "Please wait..." : mode === "login" ? "Login" : "Create account"}
+                🌿{" "}
+                {loading
+                  ? "Please wait..."
+                  : mode === "login"
+                    ? "Login"
+                    : "Create account"}
               </button>
             </div>
-
-            <div className="my-9 flex items-center gap-6 text-sm font-bold text-[#7b8790]">
-              <div className="h-px flex-1 bg-[#d9dfdc]" />
-              <span>OR</span>
-              <div className="h-px flex-1 bg-[#d9dfdc]" />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setMessage("Google login is not enabled yet. Please use email and password.")}
-              className="flex w-full items-center justify-center gap-4 rounded-xl border border-[#d1d7d5] bg-white py-4 text-lg font-black text-[#0f2c1b] shadow-sm transition hover:bg-[#f7faf6]"
-            >
-              <span className="text-2xl">G</span>
-              Continue with Google
-            </button>
 
             <div className="mt-9 flex gap-5 rounded-2xl border border-[#d9dfdc] bg-[#f8faf6] p-6">
               <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#4b9f20] text-2xl">
@@ -460,14 +453,16 @@ export default function LoginPage() {
                   Trust First
                 </h3>
                 <p className="mt-3 leading-relaxed text-[#53645d]">
-                  Ownership access requires verified identity and active membership
-                  before portfolio actions are enabled.
+                  Ownership access requires verified identity and active
+                  membership before portfolio actions are enabled.
                 </p>
               </div>
             </div>
 
             <p className="mt-9 text-center text-[#53645d]">
-              {mode === "login" ? "Don’t have an account?" : "Already have an account?"}{" "}
+              {mode === "login"
+                ? "Don’t have an account?"
+                : "Already have an account?"}{" "}
               <button
                 type="button"
                 onClick={() => switchMode(mode === "login" ? "register" : "login")}
@@ -497,7 +492,7 @@ function Feature({
   text: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[#9bd346]/55 bg-[#061e11]/40 p-5 text-center backdrop-blur">
+    <div className="rounded-2xl border border-[#9bd346]/45 bg-[#061e11]/35 p-5 text-center backdrop-blur">
       <div className="mx-auto flex h-20 w-20 items-center justify-center text-5xl text-[#a8e063]">
         {icon}
       </div>
