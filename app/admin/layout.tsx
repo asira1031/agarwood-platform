@@ -11,12 +11,12 @@ const adminLinks = [
   { label: "KYC Review", href: "/admin/kyc", icon: "🪪" },
   { label: "Membership", href: "/admin/membership", icon: "💳" },
   { label: "Wallet", href: "/admin/wallet", icon: "💰" },
+  { label: "Treasury", href: "/admin/treasury", icon: "🏦" },
   { label: "Cash-In Approval", href: "/admin/cash-in", icon: "⬇️" },
-  { label: "Withdrawal Approval", href: "/admin/withdrawals", icon: "⬆️" },
+  { label: "Payout Queue", href: "/admin/withdrawals", icon: "💸" },
   { label: "Referrals", href: "/admin/referral-links", icon: "🔗" },
   { label: "Tree Purchases", href: "/admin/tree-purchases", icon: "🌳" },
   { label: "Sell Tree", href: "/admin/sell-tree", icon: "🤝" },
-  { label: "Tree Valuation", href: "/admin/tree-valuation", icon: "📈" },
   { label: "Operations Queue", href: "/admin/operations", icon: "🧾" },
   { label: "Inventory", href: "/admin/inventory", icon: "📦" },
   { label: "Support Tickets", href: "/admin/support", icon: "🎧" },
@@ -77,7 +77,7 @@ export default function AdminLayout({
 
   if (checking || !allowed) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#071f16] text-white">
+      <div className="flex min-h-screen items-center justify-center bg-[#071f16] text-white">
         Checking admin access...
       </div>
     );
@@ -93,7 +93,7 @@ export default function AdminLayout({
         backgroundAttachment: "fixed",
       }}
     >
-      <aside className="fixed left-0 top-0 hidden h-screen w-72 border-r border-white/10 bg-[#08291d]/85 backdrop-blur-md lg:block">
+      <aside className="fixed left-0 top-0 hidden h-screen w-72 border-r border-white/10 bg-[#08291d]/90 backdrop-blur-md lg:block">
         <div className="flex h-full flex-col p-5">
           <div className="mb-6 shrink-0">
             <div className="text-2xl font-bold text-[#f7d774]">
@@ -113,7 +113,7 @@ export default function AdminLayout({
                   href={item.href}
                   className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
                     active
-                      ? "bg-[#f7d774] text-[#08291d] font-semibold"
+                      ? "bg-[#f7d774] font-semibold text-[#08291d]"
                       : "text-white/75 hover:bg-white/10 hover:text-white"
                   }`}
                 >
