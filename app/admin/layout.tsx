@@ -13,8 +13,8 @@ const adminLinks = [
   { label: "Wallet", href: "/admin/wallet", icon: "💰" },
   { label: "Cash-In Approval", href: "/admin/cash-in", icon: "⬇️" },
   { label: "Withdrawal Approval", href: "/admin/withdrawals", icon: "⬆️" },
- { label: "Referrals", href: "/admin/referral-links", icon: "🔗" },
-{ label: "Tree Purchases", href: "/admin/tree-purchases", icon: "🌳" },
+  { label: "Referrals", href: "/admin/referral-links", icon: "🔗" },
+  { label: "Tree Purchases", href: "/admin/tree-purchases", icon: "🌳" },
   { label: "Sell Tree", href: "/admin/sell-tree", icon: "🤝" },
   { label: "Tree Valuation", href: "/admin/tree-valuation", icon: "📈" },
   { label: "Operations Queue", href: "/admin/operations", icon: "🧾" },
@@ -68,7 +68,7 @@ export default function AdminLayout({
       const { data: profileByEmail } = await supabase
         .from("profiles")
         .select("id, role, email")
-        .eq("email", userEmail)
+        .ilike("email", userEmail)
         .maybeSingle();
 
       const profile = profileById || profileByEmail;
@@ -98,53 +98,56 @@ export default function AdminLayout({
     );
   }
 
-
-   return (
-  <div
-    className="min-h-screen text-white"
-    style={{
-      backgroundImage: "url('/images/admin-bg.jpg')",
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundAttachment: "fixed",
-    }}
-  >
-      <aside className="fixed left-0 top-0 hidden h-screen w-72 border-r border-white/10 bg-[#08291d] 85 backdrop-blur-md p-5 lg:block">
-        <div className="mb-8">
-          <div className="text-2xl font-bold text-[#f7d774]">
-            Agarwood Admin
+  return (
+    <div
+      className="min-h-screen text-white"
+      style={{
+        backgroundImage: "url('/images/admin-bg.jpg')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundAttachment: "fixed",
+      }}
+    >
+      <aside className="fixed left-0 top-0 hidden h-screen w-72 border-r border-white/10 bg-[#08291d]/85 backdrop-blur-md lg:block">
+        <div className="flex h-full flex-col p-5">
+          <div className="mb-6 shrink-0">
+            <div className="text-2xl font-bold text-[#f7d774]">
+              Agarwood Admin
+            </div>
+            <div className="mt-1 text-xs text-white/50">{adminEmail}</div>
           </div>
-          <div className="mt-1 text-xs text-white/50">{adminEmail}</div>
+
+          <nav className="flex-1 space-y-1 overflow-y-auto pr-2 pb-8">
+            {adminLinks.map((item) => {
+              const active =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
+                    active
+                      ? "bg-[#f7d774] text-[#08291d] font-semibold"
+                      : "text-white/75 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  <span className="w-6 text-center">{item.icon}</span>
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="shrink-0 pt-4">
+            <button
+              onClick={handleLogout}
+              className="w-full rounded-xl border border-white/10 px-4 py-3 text-sm text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              Logout
+            </button>
+          </div>
         </div>
-
-        <nav className="space-y-1">
-          {adminLinks.map((item) => {
-            const active =
-              pathname === item.href || pathname.startsWith(item.href + "/");
-
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
-                  active
-                    ? "bg-[#f7d774] text-[#08291d] font-semibold"
-                    : "text-white/75 hover:bg-white/10 hover:text-white"
-                }`}
-              >
-                <span>{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <button
-          onClick={handleLogout}
-          className="absolute bottom-5 left-5 right-5 rounded-xl border border-white/10 px-4 py-3 text-sm text-white/70 hover:bg-white/10 hover:text-white"
-        >
-          Logout
-        </button>
       </aside>
 
       <div className="lg:pl-72">
@@ -173,6 +176,13 @@ export default function AdminLayout({
               );
             })}
           </div>
+
+          <button
+            onClick={handleLogout}
+            className="mt-3 rounded-full border border-white/10 px-4 py-2 text-xs text-white/70"
+          >
+            Logout
+          </button>
         </header>
 
         <main className="min-h-screen p-4 lg:p-8">{children}</main>
