@@ -559,8 +559,9 @@ export default function MarketplacePage() {
 
     const { data: walletRows } = await supabase
       .from("wallets")
-      .select("id, profile_id, balance")
+      .select("id, profile_id, balance, created_at")
       .eq("profile_id", currentProfile.id)
+      .order("created_at", { ascending: false })
       .limit(1);
 
     const { data: productRows, error: productError } = await supabase
@@ -670,7 +671,8 @@ export default function MarketplacePage() {
     const { error } = await supabase
       .from("wallets")
       .update({ balance: newBalance })
-      .eq("id", wallet.id);
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
 
     if (error) throw error;
 
@@ -682,41 +684,36 @@ export default function MarketplacePage() {
   async function restoreWallet(previousBalance: number) {
     if (!wallet) return;
 
-    await supabase.from("wallets").update({ balance: previousBalance }).eq("id", wallet.id);
+    await supabase
+      .from("wallets")
+      .update({ balance: previousBalance })
+      .eq("id", wallet.id)
+      .eq("profile_id", wallet.profile_id);
+
     setWallet({ ...wallet, balance: previousBalance });
   }
 
   async function createMarketplaceWalletTransaction(product: MarketplaceProduct, amount: number, productType: ProductType) {
     if (!profile) throw new Error("Profile not found.");
 
+    const referenceNo = `MKT-${productType}-${Date.now()}`;
     const description = `Marketplace purchase: ${product.name || "Product"}`;
 
-    const basePayload = {
+    const payload = {
       profile_id: profile.id,
-      wallet_id: wallet?.id ?? null,
+      transaction_type: `MARKETPLACE_${productType}`,
       amount: -Math.abs(amount),
-      type: "DEBIT",
-      transaction_type: "DEBIT",
+      reference_no: referenceNo,
       description,
       status: "COMPLETED",
-      reference_id: product.id,
+      created_at: new Date().toISOString(),
     };
 
-    const attempts: Array<typeof basePayload & { category?: string }> = [
-      { ...basePayload, category: `MARKETPLACE_${productType}` },
-      { ...basePayload },
-      { ...basePayload, amount: Math.abs(amount) },
-    ];
+    const { error } = await supabase.from("wallet_transactions").insert(payload);
 
-    let lastError = "Marketplace wallet transaction failed.";
-
-    for (const payload of attempts) {
-      const { error } = await supabase.from("wallet_transactions").insert(payload);
-      if (!error) return;
-      lastError = error.message;
+    if (error) {
+      throw new Error(`Marketplace wallet transaction failed: ${error.message}`);
     }
-
-    throw new Error(lastError);
   }
 
   async function addInventoryStock(product: MarketplaceProduct, quantity: number) {
