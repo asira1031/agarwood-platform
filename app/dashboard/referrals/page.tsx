@@ -110,7 +110,7 @@ export default function ReferralsPage() {
     const origin =
       typeof window !== "undefined" ? window.location.origin : "https://agarwood-platform.vercel.app";
 
-    const url = `${origin}/register?ref=${encodeURIComponent(referralCode)}`;
+    const url = `${origin}/login?mode=register&ref=${encodeURIComponent(referralCode)}`;
 
     const { data: existing } = await supabase
       .from("referral_links")

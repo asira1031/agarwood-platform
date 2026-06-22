@@ -1,22 +1,57 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("admin@test.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [referralCode, setReferralCode] = useState("");
+  const [adminInviteCode, setAdminInviteCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlMode = params.get("mode");
+    const ref = params.get("ref");
+    const adminInvite = params.get("admin_invite");
+
+    if (urlMode === "register" || ref || adminInvite) {
+      setMode("register");
+    }
+
+    if (ref) {
+      setReferralCode(ref.trim());
+    }
+
+    if (adminInvite) {
+      setAdminInviteCode(adminInvite.trim());
+    }
+  }, []);
+
+  const inviteLabel = useMemo(() => {
+    if (referralCode) return "Customer Referral Code";
+    if (adminInviteCode) return "Admin Invite Code";
+    return "";
+  }, [referralCode, adminInviteCode]);
+
+  const inviteValue = useMemo(() => {
+    if (referralCode) return referralCode;
+    if (adminInviteCode) return adminInviteCode;
+    return "";
+  }, [referralCode, adminInviteCode]);
 
   async function handleLogin() {
     setLoading(true);
     setMessage("");
 
+    const cleanEmail = email.trim().toLowerCase();
+
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       password,
     });
 
@@ -27,7 +62,7 @@ export default function LoginPage() {
     }
 
     const user = data.user;
-    const userEmail = user.email?.trim().toLowerCase() || "";
+    const userEmail = user.email?.trim().toLowerCase() || cleanEmail;
 
     const { data: profileById } = await supabase
       .from("profiles")
@@ -57,6 +92,20 @@ export default function LoginPage() {
     setMessage("");
 
     const cleanEmail = email.trim().toLowerCase();
+    const cleanName = fullName.trim() || "Agarwood Investor";
+    const cleanReferralCode = referralCode.trim();
+
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      setMessage("Please enter a valid email address.");
+      setLoading(false);
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      setMessage("Password must be at least 6 characters.");
+      setLoading(false);
+      return;
+    }
 
     const { data, error } = await supabase.auth.signUp({
       email: cleanEmail,
@@ -71,16 +120,73 @@ export default function LoginPage() {
 
     const userId = data.user?.id;
 
-    if (userId) {
-      await supabase.from("profiles").insert({
+    if (!userId) {
+      setMessage("Account created. Please check your email before logging in.");
+      setMode("login");
+      setLoading(false);
+      return;
+    }
+
+    const { data: existingProfileById } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle();
+
+    const { data: existingProfileByEmail } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", cleanEmail)
+      .maybeSingle();
+
+    const existingProfile = existingProfileById || existingProfileByEmail;
+
+    const newUserReferralCode = generateReferralCode(cleanEmail);
+
+    if (!existingProfile) {
+      const { error: profileError } = await supabase.from("profiles").insert({
         id: userId,
-        full_name: fullName || "Agarwood Investor",
+        full_name: cleanName,
         email: cleanEmail,
+        referral_code: newUserReferralCode,
         role: "CUSTOMER",
         account_status: "ACTIVE",
-        kyc_status: "PENDING",
-        membership_status: "INACTIVE",
+        verification_status: "PENDING",
       });
+
+      if (profileError) {
+        setMessage(profileError.message);
+        setLoading(false);
+        return;
+      }
+    }
+
+    if (cleanReferralCode) {
+      const { data: referrerProfile } = await supabase
+        .from("profiles")
+        .select("id, email")
+        .eq("referral_code", cleanReferralCode)
+        .maybeSingle();
+
+      if (referrerProfile?.id && referrerProfile.email?.toLowerCase() !== cleanEmail) {
+        const { data: existingReferral } = await supabase
+          .from("referrals")
+          .select("id")
+          .eq("referral_code", cleanReferralCode)
+          .eq("referred_email", cleanEmail)
+          .maybeSingle();
+
+        if (!existingReferral) {
+          await supabase.from("referrals").insert({
+            referrer_profile_id: referrerProfile.id,
+            referred_email: cleanEmail,
+            referral_code: cleanReferralCode,
+            qualified: false,
+            reward_amount: 0,
+            status: "PENDING",
+          });
+        }
+      }
     }
 
     setMessage("Account created. Please login.");
@@ -142,10 +248,21 @@ export default function LoginPage() {
             <p className="mt-4 text-[#667366]">
               {mode === "login"
                 ? "Login to enter your agarwood ownership portal."
-                : "Create your agarwood investor account."}
+                : "Create your agarwood customer account."}
             </p>
 
             <div className="mt-10 space-y-5">
+              {mode === "register" && inviteValue && (
+                <div className="rounded-2xl border border-[#d7c69a] bg-[#fff7df] p-4">
+                  <p className="text-xs font-black uppercase tracking-[0.25em] text-[#8a6a24]">
+                    {inviteLabel}
+                  </p>
+                  <p className="mt-2 break-all text-lg font-black text-[#12351f]">
+                    {inviteValue}
+                  </p>
+                </div>
+              )}
+
               {mode === "register" && (
                 <label className="block">
                   <span className="font-bold">Full name</span>
@@ -195,7 +312,12 @@ export default function LoginPage() {
             </div>
 
             <div className="mt-8 flex items-center justify-between font-bold text-[#315f32]">
-              <button onClick={() => setMode(mode === "login" ? "register" : "login")}>
+              <button
+                onClick={() => {
+                  setMessage("");
+                  setMode(mode === "login" ? "register" : "login");
+                }}
+              >
                 {mode === "login" ? "Create account" : "Back to login"}
               </button>
 
@@ -236,4 +358,10 @@ function Feature({
       <p className="mt-2 text-sm text-white/75">{text}</p>
     </div>
   );
+}
+
+function generateReferralCode(email: string) {
+  const clean = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${clean.slice(0, 6)}-${suffix}`;
 }

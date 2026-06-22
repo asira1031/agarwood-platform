@@ -85,7 +85,8 @@ export default function AdminReferralLinksPage() {
         : "https://agarwood-platform.vercel.app";
 
     const code = `ADMIN-${target.type}-${Date.now().toString().slice(-6)}`;
-    const inviteUrl = `${origin}${target.route}?ref=${encodeURIComponent(code)}&source=admin`;
+    const inviteUrl =
+  `${origin}/login?mode=register&admin_invite=${encodeURIComponent(code)}&type=${target.type}`;
 
     const { error } = await supabase.from("admin_invite_links").insert({
       target_type: target.type,
