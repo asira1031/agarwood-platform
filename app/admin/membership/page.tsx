@@ -7,10 +7,14 @@ type MembershipOrder = {
   id: string;
   profile_id: string | null;
   plan_name: string | null;
+  annual_fee: number | null;
   amount: number | null;
   status: string | null;
   payment_status: string | null;
+  submitted_at: string | null;
+  approved_at: string | null;
   created_at: string | null;
+  plan_id: string | null;
 };
 
 type ProfileRow = {
@@ -38,12 +42,15 @@ export default function AdminMembershipPage() {
 
     const { data: orderRows, error: orderError } = await supabase
       .from("membership_orders")
-      .select("id, profile_id, plan_name, amount, status, payment_status, created_at")
+      .select(
+        "id, profile_id, plan_name, annual_fee, amount, status, payment_status, submitted_at, approved_at, created_at, plan_id"
+      )
       .order("created_at", { ascending: false });
 
     if (orderError) {
       setErrorText(orderError.message);
       setOrders([]);
+      setProfiles([]);
       setLoading(false);
       return;
     }
@@ -93,7 +100,7 @@ export default function AdminMembershipPage() {
   ).length;
 
   const totalAmount = orders.reduce(
-    (sum, order) => sum + Number(order.amount || 0),
+    (sum, order) => sum + Number(order.amount || order.annual_fee || 0),
     0
   );
 
@@ -129,7 +136,7 @@ export default function AdminMembershipPage() {
   function formatDate(dateValue: string | null) {
     if (!dateValue) return "—";
 
-    return new Date(dateValue).toLocaleDateString("en-US", {
+    return new Date(dateValue).toLocaleDateString("en-PH", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -153,6 +160,7 @@ export default function AdminMembershipPage() {
       .update({
         status: "APPROVED",
         payment_status: "PAID",
+        approved_at: new Date().toISOString(),
       })
       .eq("id", order.id);
 
@@ -180,7 +188,7 @@ export default function AdminMembershipPage() {
   }
 
   async function rejectOrder(order: MembershipOrder) {
-    if (!order.id || !order.profile_id) return;
+    if (!order.id) return;
 
     const confirmed = window.confirm("Reject this membership order?");
     if (!confirmed) return;
@@ -202,19 +210,6 @@ export default function AdminMembershipPage() {
       return;
     }
 
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
-        membership_status: "INACTIVE",
-      })
-      .eq("id", order.profile_id);
-
-    if (profileError) {
-      setErrorText(profileError.message);
-      setActionLoading("");
-      return;
-    }
-
     await loadData();
     setActionLoading("");
   }
@@ -231,7 +226,7 @@ export default function AdminMembershipPage() {
               Membership Approval
             </h1>
             <p className="mt-2 text-white/70">
-              Review wallet-paid membership orders and activate investor access.
+              Review membership orders and activate customer membership after approval.
             </p>
           </div>
 
@@ -284,12 +279,10 @@ export default function AdminMembershipPage() {
           {loading ? (
             <div className="p-8 text-white/70">Loading membership orders...</div>
           ) : filteredOrders.length === 0 ? (
-            <div className="p-8 text-white/70">
-              No membership orders found.
-            </div>
+            <div className="p-8 text-white/70">No membership orders found.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px] text-left text-sm">
+              <table className="w-full min-w-[1100px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
@@ -297,7 +290,8 @@ export default function AdminMembershipPage() {
                     <th className="px-5 py-4">Amount</th>
                     <th className="px-5 py-4">Order Status</th>
                     <th className="px-5 py-4">Payment</th>
-                    <th className="px-5 py-4">Created</th>
+                    <th className="px-5 py-4">Submitted</th>
+                    <th className="px-5 py-4">Approved</th>
                     <th className="px-5 py-4">Action</th>
                   </tr>
                 </thead>
@@ -318,16 +312,23 @@ export default function AdminMembershipPage() {
                             {profile?.full_name || "Unknown Customer"}
                           </div>
                           <div className="mt-1 text-xs text-white/50">
-                            {profile?.email || order.profile_id || "No profile"}
+                            {profile?.email || "No email"}
+                          </div>
+                          <div className="mt-1 text-xs text-emerald-200/70">
+                            Membership:{" "}
+                            {profile?.membership_status || "INACTIVE"}
                           </div>
                         </td>
 
                         <td className="px-5 py-4">
-                          {order.plan_name || "Annual Membership"}
+                          <div>{order.plan_name || "Annual Membership"}</div>
+                          <div className="mt-1 text-xs text-white/40">
+                            Plan ID: {order.plan_id || "—"}
+                          </div>
                         </td>
 
                         <td className="px-5 py-4 font-semibold text-[#f7d774]">
-                          {formatMoney(order.amount)}
+                          {formatMoney(order.amount || order.annual_fee)}
                         </td>
 
                         <td className="px-5 py-4">
@@ -351,7 +352,11 @@ export default function AdminMembershipPage() {
                         </td>
 
                         <td className="px-5 py-4 text-white/70">
-                          {formatDate(order.created_at)}
+                          {formatDate(order.submitted_at || order.created_at)}
+                        </td>
+
+                        <td className="px-5 py-4 text-white/70">
+                          {formatDate(order.approved_at)}
                         </td>
 
                         <td className="px-5 py-4">

@@ -3,436 +3,270 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type InviteLink = {
+type ProfileRow = {
   id: string;
-  target_type: string | null;
+  full_name: string | null;
+  email: string | null;
   referral_code: string | null;
-  invite_url: string | null;
-  status: string | null;
-  created_by: string | null;
+  referred_by_code: string | null;
+  membership_status: string | null;
   created_at: string | null;
 };
 
-const TARGETS = [
-  {
-    type: "CUSTOMER",
-    title: "Customer Registration Link",
-    route: "/register",
-    description: "Send this to investors/customers who will buy trees.",
-  },
-  {
-    type: "PARTNER",
-    title: "Partner Registration Link",
-    route: "/partner/register",
-    description: "Send this to partners or affiliates.",
-  },
-  {
-    type: "GARDENER",
-    title: "Gardener / Caretaker Registration Link",
-    route: "/gardener/register",
-    description: "Send this to gardeners or caretakers.",
-  },
-];
-
 export default function AdminReferralLinksPage() {
-  const [links, setLinks] = useState<InviteLink[]>([]);
+  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
+  const [errorText, setErrorText] = useState("");
+  const [search, setSearch] = useState("");
 
-  async function loadLinks() {
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
     setLoading(true);
-    setMessage("");
+    setErrorText("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    const email = user?.email?.trim().toLowerCase() || "admin";
-    setAdminEmail(email);
-
-    const { data } = await supabase
-      .from("admin_invite_links")
-      .select("id, target_type, referral_code, invite_url, status, created_by, created_at")
+    const { data, error } = await supabase
+      .from("profiles")
+      .select(
+        "id, full_name, email, referral_code, referred_by_code, membership_status, created_at"
+      )
       .order("created_at", { ascending: false });
 
-    setLinks(data || []);
+    if (error) {
+      setErrorText(error.message);
+      setProfiles([]);
+      setLoading(false);
+      return;
+    }
+
+    setProfiles((data || []) as ProfileRow[]);
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadLinks();
-  }, []);
+  function formatDate(value: string | null) {
+    if (!value) return "—";
 
-  const activeLinks = useMemo(() => {
-    return TARGETS.map((target) => {
-      const found = links.find(
-        (item) =>
-          (item.target_type || "").toUpperCase() === target.type &&
-          (item.status || "ACTIVE").toUpperCase() === "ACTIVE"
+    return new Date(value).toLocaleDateString("en-PH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  function badgeClass(value: string | null) {
+    const status = String(value || "INACTIVE").toUpperCase();
+
+    if (status === "ACTIVE") {
+      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
+    }
+
+    if (status === "PENDING") {
+      return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
+    }
+
+    if (status === "INACTIVE" || status === "REJECTED") {
+      return "border-red-400/30 bg-red-500/20 text-red-200";
+    }
+
+    return "border-white/10 bg-white/10 text-white/60";
+  }
+
+  const filteredProfiles = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return profiles.filter((profile) => {
+      return (
+        !query ||
+        String(profile.full_name || "").toLowerCase().includes(query) ||
+        String(profile.email || "").toLowerCase().includes(query) ||
+        String(profile.referral_code || "").toLowerCase().includes(query) ||
+        String(profile.referred_by_code || "").toLowerCase().includes(query)
       );
-
-      return { ...target, link: found || null };
     });
-  }, [links]);
+  }, [profiles, search]);
 
-  async function generateLink(target: (typeof TARGETS)[number]) {
-    setMessage("");
+  const totalCodes = profiles.filter((profile) => profile.referral_code).length;
 
-    const origin =
-      typeof window !== "undefined"
-        ? window.location.origin
-        : "https://agarwood-platform.vercel.app";
+  const referredUsers = profiles.filter(
+    (profile) => profile.referred_by_code
+  ).length;
 
-    const code = `ADMIN-${target.type}-${Date.now().toString().slice(-6)}`;
-    const inviteUrl =
-  `${origin}/login?mode=register&admin_invite=${encodeURIComponent(code)}&type=${target.type}`;
+  const activeMembers = profiles.filter(
+    (profile) =>
+      String(profile.membership_status || "").toUpperCase() === "ACTIVE"
+  ).length;
 
-    const { error } = await supabase.from("admin_invite_links").insert({
-      target_type: target.type,
-      referral_code: code,
-      invite_url: inviteUrl,
-      status: "ACTIVE",
-      created_by: adminEmail,
-    });
+  async function copyLink(code: string | null) {
+    if (!code) return;
 
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
+    const referralLink = `${window.location.origin}/login?mode=register&ref=${code}`;
 
-    setMessage(`${target.type} invite link generated.`);
-    await loadLinks();
-  }
+    await navigator.clipboard.writeText(referralLink);
 
-  async function deactivateLink(id: string) {
-    setMessage("");
-
-    const { error } = await supabase
-      .from("admin_invite_links")
-      .update({ status: "INACTIVE" })
-      .eq("id", id);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    setMessage("Invite link deactivated.");
-    await loadLinks();
-  }
-
-  async function copyLink(url: string | null) {
-    if (!url) return;
-    await navigator.clipboard.writeText(url);
-    setMessage("Invite link copied.");
+    alert("Referral link copied.");
   }
 
   return (
-    <main className="page">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Admin Invite Center</p>
-          <h1>Referral & Registration Links</h1>
-          <span>
-            Generate official registration links for customers, partners, and gardeners.
-            Every generated link includes a trackable referral code.
-          </span>
+    <main className="min-h-screen p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
+              Admin Referral Center
+            </p>
+
+            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
+              Referral Links
+            </h1>
+
+            <p className="mt-2 text-white/70">
+              Monitor customer referral codes and copy the same registration
+              route used by Customer Referrals.
+            </p>
+          </div>
+
+          <button
+            onClick={loadData}
+            disabled={loading}
+            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
         </div>
-      </section>
 
-      {message && <div className="message">{message}</div>}
+        {errorText && (
+          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">
+            {errorText}
+          </div>
+        )}
 
-      {loading ? (
-        <div className="empty">Loading invite links...</div>
-      ) : (
-        <>
-          <section className="cards">
-            {activeLinks.map((item) => (
-              <div className="card" key={item.type}>
-                <span>{item.type}</span>
-                <h2>{item.title}</h2>
-                <p>{item.description}</p>
+        <section className="grid gap-4 md:grid-cols-3">
+          <StatCard
+            label="Profiles With Referral Code"
+            value={String(totalCodes)}
+          />
 
-                {item.link ? (
-                  <>
-                    <div className="box">
-                      <small>Referral Code</small>
-                      <strong>{item.link.referral_code}</strong>
-                    </div>
+          <StatCard
+            label="Referred Registrations"
+            value={String(referredUsers)}
+          />
 
-                    <div className="urlBox">
-                      <small>Invite URL</small>
-                      <p>{item.link.invite_url}</p>
-                    </div>
+          <StatCard label="Active Members" value={String(activeMembers)} />
+        </section>
 
-                    <button onClick={() => copyLink(item.link?.invite_url || "")}>
-                      Copy Link
-                    </button>
+        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search name, email, referral code, referred by..."
+            className="w-full rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none placeholder:text-white/35"
+          />
+        </section>
 
-                    <button className="danger" onClick={() => deactivateLink(item.link!.id)}>
-                      Deactivate
-                    </button>
-                  </>
-                ) : (
-                  <button onClick={() => generateLink(item)}>
-                    Generate {item.type} Link
-                  </button>
-                )}
-              </div>
-            ))}
-          </section>
+        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
+          {loading ? (
+            <div className="p-8 text-white/70">Loading referral records...</div>
+          ) : filteredProfiles.length === 0 ? (
+            <div className="p-8 text-white/70">No referral records found.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1200px] text-left text-sm">
+                <thead className="bg-[#071f16]/80 text-white/70">
+                  <tr>
+                    <th className="px-5 py-4">Customer</th>
+                    <th className="px-5 py-4">Referral Code</th>
+                    <th className="px-5 py-4">Referral Link</th>
+                    <th className="px-5 py-4">Referred By</th>
+                    <th className="px-5 py-4">Membership</th>
+                    <th className="px-5 py-4">Created</th>
+                    <th className="px-5 py-4">Action</th>
+                  </tr>
+                </thead>
 
-          <section className="panel">
-            <h2>All Generated Links</h2>
+                <tbody>
+                  {filteredProfiles.map((profile) => {
+                    const referralLink = profile.referral_code
+                      ? `${
+                          typeof window !== "undefined"
+                            ? window.location.origin
+                            : ""
+                        }/login?mode=register&ref=${profile.referral_code}`
+                      : "—";
 
-            {links.length === 0 ? (
-              <div className="empty small">No links generated yet.</div>
-            ) : (
-              <div className="table">
-                {links.map((link) => (
-                  <div className="row" key={link.id}>
-                    <div>
-                      <strong>{link.target_type}</strong>
-                      <p>{link.referral_code}</p>
-                      <small>{link.invite_url}</small>
-                    </div>
+                    return (
+                      <tr
+                        key={profile.id}
+                        className="border-t border-white/10 hover:bg-white/5"
+                      >
+                        <td className="px-5 py-4">
+                          <div className="font-semibold text-white">
+                            {profile.full_name || "Unknown Customer"}
+                          </div>
 
-                    <div className="right">
-                      <span className={`status ${(link.status || "ACTIVE").toLowerCase()}`}>
-                        {link.status || "ACTIVE"}
-                      </span>
-                      <button onClick={() => copyLink(link.invite_url)}>Copy</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </>
-      )}
+                          <div className="mt-1 text-xs text-white/50">
+                            {profile.email || "No email"}
+                          </div>
+                        </td>
 
-      <style>{`
-        * { box-sizing: border-box; }
+                        <td className="px-5 py-4 font-bold text-[#f7d774]">
+                          {profile.referral_code || "—"}
+                        </td>
 
-        .page {
-          min-height: 100vh;
-          padding: 30px;
-          color: #18261d;
-          font-family: Arial, Helvetica, sans-serif;
-          background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
-        }
+                        <td className="px-5 py-4 text-white/70">
+                          <div className="max-w-[360px] truncate">
+                            {referralLink}
+                          </div>
+                        </td>
 
-        .hero {
-          margin-bottom: 22px;
-        }
+                        <td className="px-5 py-4 text-white/70">
+                          {profile.referred_by_code || "—"}
+                        </td>
 
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          text-transform: uppercase;
-          font-size: 12px;
-          letter-spacing: .12em;
-        }
+                        <td className="px-5 py-4">
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-black ${badgeClass(
+                              profile.membership_status
+                            )}`}
+                          >
+                            {String(
+                              profile.membership_status || "INACTIVE"
+                            ).toUpperCase()}
+                          </span>
+                        </td>
 
-        h1 {
-          margin: 0;
-          font-size: 42px;
-          color: #101a14;
-        }
+                        <td className="px-5 py-4 text-white/70">
+                          {formatDate(profile.created_at)}
+                        </td>
 
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          max-width: 850px;
-          line-height: 1.6;
-          font-weight: 800;
-        }
-
-        .message,
-        .empty,
-        .card,
-        .panel {
-          border-radius: 26px;
-          background: rgba(255,253,246,.9);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .message,
-        .empty {
-          padding: 18px;
-          margin-bottom: 18px;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .small {
-          box-shadow: none;
-          border-radius: 16px;
-          background: #f3ead8;
-        }
-
-        .cards {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .card,
-        .panel {
-          padding: 22px;
-        }
-
-        .card > span {
-          display: inline-flex;
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-          font-size: 11px;
-          font-weight: 900;
-          letter-spacing: .12em;
-        }
-
-        .card h2,
-        .panel h2 {
-          margin: 16px 0 0;
-          color: #101a14;
-          font-size: 23px;
-        }
-
-        .card p {
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .box,
-        .urlBox {
-          margin-top: 14px;
-          border-radius: 18px;
-          padding: 14px;
-          background: #f3ead8;
-        }
-
-        small {
-          display: block;
-          color: #6b6b62;
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .box strong {
-          display: block;
-          margin-top: 7px;
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .urlBox p {
-          margin: 7px 0 0;
-          color: #244536;
-          font-weight: 800;
-          word-break: break-all;
-        }
-
-        button {
-          width: 100%;
-          margin-top: 12px;
-          border: 0;
-          border-radius: 16px;
-          padding: 14px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        button.danger {
-          background: linear-gradient(135deg, #8c3f2b, #5b2117);
-        }
-
-        .table {
-          display: grid;
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .row {
-          display: grid;
-          grid-template-columns: 1fr 180px;
-          gap: 14px;
-          align-items: center;
-          border-radius: 18px;
-          padding: 16px;
-          background: #f3ead8;
-        }
-
-        .row strong {
-          color: #101a14;
-        }
-
-        .row p,
-        .row small {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-weight: 800;
-          word-break: break-all;
-        }
-
-        .right {
-          display: grid;
-          gap: 8px;
-        }
-
-        .status {
-          display: inline-flex;
-          justify-content: center;
-          border-radius: 999px;
-          padding: 8px 10px;
-          font-size: 11px;
-          font-weight: 900;
-        }
-
-        .status.active {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .status.inactive {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        @media (max-width: 1100px) {
-          .cards {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          h1 {
-            font-size: 32px;
-          }
-
-          .row {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
+                        <td className="px-5 py-4">
+                          <button
+                            onClick={() => copyLink(profile.referral_code)}
+                            disabled={!profile.referral_code}
+                            className="rounded-xl bg-[#d9b45f]/20 px-4 py-2 text-xs font-bold text-[#f7d774] hover:bg-[#d9b45f]/30 disabled:opacity-40"
+                          >
+                            Copy Link
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
     </main>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
+      <p className="text-sm text-white/70">{label}</p>
+      <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
+    </div>
   );
 }

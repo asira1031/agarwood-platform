@@ -22,12 +22,12 @@ type InventoryItem = {
   low_stock_level: number | null;
   status: string | null;
   created_at: string | null;
-  updated_at?: string | null;
 };
 
 type OperationRequest = {
   id: string;
   profile_id: string | null;
+  customer_profile_id?: string | null;
   tree_id: string | null;
   operation_type: string | null;
   total_amount: number | null;
@@ -39,7 +39,10 @@ type OperationRequest = {
 type TreeRow = {
   id: string;
   profile_id: string | null;
-  tree_code?: string | null;
+  customer_profile_id?: string | null;
+  tree_code: string | null;
+  display_name?: string | null;
+  custom_name?: string | null;
   ownership_status?: string | null;
   availability_status?: string | null;
   status?: string | null;
@@ -55,22 +58,17 @@ const CARE_REQUIREMENTS_PER_TREE_PER_WEEK: Record<string, number> = {
   INSECTICIDE: 0.25,
   "PEST CONTROL": 0.25,
   NUTRIENTS: 0.5,
-  "NUTRIENTS & BOOSTERS": 0.5,
   BOOSTER: 0.5,
-  "SOIL PRODUCTS": 0.5,
   "SOIL CONDITIONER": 0.5,
   "TREE HEALTH": 0.25,
   "DISEASE PREVENTION": 0.25,
 };
 
 function normalize(value: any) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toUpperCase();
+  return String(value || "").trim().replace(/\s+/g, " ").toUpperCase();
 }
 
-function pesoNumber(value: number) {
+function qty(value: number) {
   return Number(value || 0).toLocaleString("en-PH", {
     maximumFractionDigits: 2,
   });
@@ -78,13 +76,22 @@ function pesoNumber(value: number) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "Not recorded";
-  return new Date(value).toLocaleString("en-PH", {
+  return new Date(value).toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   });
+}
+
+function weeklyNeedForItem(item: InventoryItem, activeTreeCount: number) {
+  const text = normalize(`${item.category || ""} ${item.item_name || ""}`);
+  const matchedKey = Object.keys(CARE_REQUIREMENTS_PER_TREE_PER_WEEK).find((key) =>
+    text.includes(key)
+  );
+
+  if (!matchedKey) return 0;
+
+  return CARE_REQUIREMENTS_PER_TREE_PER_WEEK[matchedKey] * Math.max(activeTreeCount, 1);
 }
 
 function getItemStatus(item: InventoryItem, activeTreeCount: number) {
@@ -94,34 +101,12 @@ function getItemStatus(item: InventoryItem, activeTreeCount: number) {
   const weeklyNeed = weeklyNeedForItem(item, activeTreeCount);
   const weeks = weeklyNeed > 0 ? remaining / weeklyNeed : 999;
 
-  if (status === "USED" || status === "CONSUMED") {
-    return { label: "Used", level: "used" };
-  }
-
-  if (remaining <= 0) {
-    return { label: "Out of Stock", level: "out" };
-  }
-
-  if (low > 0 && remaining <= low) {
-    return { label: "Low Stock", level: "low" };
-  }
-
-  if (weeklyNeed > 0 && weeks < 1) {
-    return { label: "Not Enough", level: "low" };
-  }
+  if (status === "USED" || status === "CONSUMED") return { label: "Used", level: "used" };
+  if (remaining <= 0) return { label: "Out of Stock", level: "out" };
+  if (low > 0 && remaining <= low) return { label: "Low Stock", level: "low" };
+  if (weeklyNeed > 0 && weeks < 1) return { label: "Not Enough", level: "low" };
 
   return { label: "Ready", level: "ready" };
-}
-
-function weeklyNeedForItem(item: InventoryItem, activeTreeCount: number) {
-  const category = normalize(item.category || item.item_name || "");
-  const matchedKey = Object.keys(CARE_REQUIREMENTS_PER_TREE_PER_WEEK).find((key) =>
-    category.includes(key)
-  );
-
-  if (!matchedKey) return 0;
-
-  return CARE_REQUIREMENTS_PER_TREE_PER_WEEK[matchedKey] * Math.max(activeTreeCount, 1);
 }
 
 function matchesInventoryOperation(request: OperationRequest, item: InventoryItem) {
@@ -159,6 +144,37 @@ export default function InventoryPage() {
   const [message, setMessage] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("ALL");
 
+  async function findProfile(userId: string, email: string) {
+    const cleanEmail = email.trim();
+    const lowerEmail = cleanEmail.toLowerCase();
+
+    const { data: profileById, error: byIdError } = await supabase
+      .from("profiles")
+      .select("id, email, full_name")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (byIdError) throw byIdError;
+
+    const { data: profileByEmail, error: byEmailError } = await supabase
+      .from("profiles")
+      .select("id, email, full_name")
+      .eq("email", lowerEmail)
+      .maybeSingle();
+
+    if (byEmailError) throw byEmailError;
+
+    const { data: profileByEmailFallback, error: fallbackError } = await supabase
+      .from("profiles")
+      .select("id, email, full_name")
+      .ilike("email", cleanEmail)
+      .maybeSingle();
+
+    if (fallbackError) throw fallbackError;
+
+    return (profileById || profileByEmail || profileByEmailFallback) as Profile | null;
+  }
+
   async function loadInventory() {
     setLoading(true);
     setMessage("");
@@ -179,68 +195,58 @@ export default function InventoryPage() {
       return;
     }
 
-    const email = user.email?.trim() || "";
-    const lowerEmail = email.toLowerCase();
+    try {
+      const currentProfile = await findProfile(user.id, user.email || "");
 
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, email, full_name")
-      .eq("id", user.id)
-      .maybeSingle();
+      if (!currentProfile) {
+        setMessage(`Profile not found for ${user.email || user.id}.`);
+        setLoading(false);
+        return;
+      }
 
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, email, full_name")
-      .eq("email", lowerEmail)
-      .maybeSingle();
+      setProfile(currentProfile);
 
-    const { data: profileByEmailFallback } = await supabase
-      .from("profiles")
-      .select("id, email, full_name")
-      .ilike("email", email)
-      .maybeSingle();
+      const { data: inventoryRows, error: inventoryError } = await supabase
+        .from("inventory")
+        .select(
+          "id, profile_id, tree_id, item_name, category, unit, starting_qty, remaining_qty, low_stock_level, status, created_at"
+        )
+        .eq("profile_id", currentProfile.id)
+        .order("created_at", { ascending: false });
 
-    const currentProfile = profileById || profileByEmail || profileByEmailFallback;
+      if (inventoryError) throw inventoryError;
 
-    if (!currentProfile) {
-      setMessage(`Profile not found for ${email || user.id}.`);
-      setLoading(false);
-      return;
-    }
+      const { data: treeRows, error: treeError } = await supabase
+        .from("trees")
+        .select(
+          "id, profile_id, customer_profile_id, tree_code, display_name, custom_name, ownership_status, availability_status, status"
+        )
+        .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
+        .order("created_at", { ascending: false });
 
-    setProfile(currentProfile as Profile);
+      if (treeError) throw treeError;
 
-    const { data: inventoryRows, error: inventoryError } = await supabase
-      .from("inventory")
-      .select("*")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
+      const { data: operationRows, error: operationError } = await supabase
+        .from("tree_operation_requests")
+        .select(
+          "id, profile_id, customer_profile_id, tree_id, operation_type, total_amount, status, notes, created_at"
+        )
+        .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
+        .order("created_at", { ascending: false })
+        .limit(50);
 
-    if (inventoryError) {
+      if (operationError) throw operationError;
+
+      setItems((inventoryRows || []) as InventoryItem[]);
+      setTrees((treeRows || []) as TreeRow[]);
+      setOperations((operationRows || []) as OperationRequest[]);
+    } catch (error: any) {
+      setMessage(error?.message || "Forest supplies failed to load.");
       setItems([]);
       setTrees([]);
       setOperations([]);
-      setMessage(`Inventory load failed: ${inventoryError.message}`);
-      setLoading(false);
-      return;
     }
 
-    const { data: treeRows } = await supabase
-      .from("trees")
-      .select("*")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
-
-    const { data: operationRows } = await supabase
-      .from("tree_operation_requests")
-      .select("id, profile_id, tree_id, operation_type, total_amount, status, notes, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    setItems((inventoryRows || []) as InventoryItem[]);
-    setTrees((treeRows || []) as TreeRow[]);
-    setOperations((operationRows || []) as OperationRequest[]);
     setLoading(false);
   }
 
@@ -253,9 +259,24 @@ export default function InventoryPage() {
       const ownership = normalize(tree.ownership_status || "OWNED");
       const availability = normalize(tree.availability_status || "OWNED");
       const status = normalize(tree.status || "ACTIVE");
+
       return ownership !== "SOLD" && availability !== "SOLD" && status !== "SOLD";
     }).length;
   }, [trees]);
+
+  const inventoryOperationRows = useMemo(() => {
+    return operations.filter((request) => {
+      const operation = normalize(request.operation_type);
+      return (
+        operation.includes("FERTILIZER") ||
+        operation.includes("FUNGICIDE") ||
+        operation.includes("INSECTICIDE") ||
+        operation.includes("PEST") ||
+        operation.includes("NUTRIENT") ||
+        operation.includes("BOOSTER")
+      );
+    });
+  }, [operations]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -286,72 +307,72 @@ export default function InventoryPage() {
     };
   }, [items, activeTreeCount]);
 
-  const inventoryOperationRows = useMemo(() => {
-    return operations.filter((request) => {
-      const operation = normalize(request.operation_type);
-      return (
-        operation.includes("FERTILIZER") ||
-        operation.includes("FUNGICIDE") ||
-        operation.includes("INSECTICIDE") ||
-        operation.includes("PEST") ||
-        operation.includes("NUTRIENT") ||
-        operation.includes("BOOSTER")
-      );
-    });
-  }, [operations]);
-
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <Link className="back" href="/dashboard">← Back to Dashboard</Link>
-          <p className="eyebrow">Arganwood Inventory Sync</p>
-          <h1>Inventory</h1>
+          <Link className="back" href="/dashboard">
+            ← Back to Dashboard
+          </Link>
+          <p className="eyebrow">Customer Supplies</p>
+          <h1>Forest Supplies</h1>
           <span>
-            Supplies here are the source of truth for customer stock. Marketplace adds stock.
-            Tree Operations deducts stock when inventory services are requested.
+            Track your supplies, treatments, and protection materials from real inventory records.
           </span>
         </div>
 
         <div className="heroCard">
           <p>Active Trees</p>
           <strong>{activeTreeCount}</strong>
-          <small>{profile?.email || "Customer inventory"}</small>
+          <small>{profile?.full_name || profile?.email || "Customer supplies"}</small>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       {loading ? (
-        <div className="empty">Loading inventory...</div>
+        <div className="empty">Loading Forest Supplies...</div>
       ) : (
         <>
           <section className="stats">
-            <Card label="Inventory Items" value={String(stats.totalItems)} />
-            <Card label="Total Remaining Qty" value={pesoNumber(stats.totalQty)} />
-            <Card label="Ready" value={String(stats.ready)} good />
-            <Card label="Low / Out" value={String(stats.low + stats.out)} danger={stats.low + stats.out > 0} />
+            <Card label="Supply Records" value={String(stats.totalItems)} />
+            <Card label="Remaining Qty" value={qty(stats.totalQty)} />
+            <Card label="Ready" value={String(stats.ready)} />
+            <Card label="Low / Out" value={String(stats.low + stats.out)} />
           </section>
 
           <section className="filters">
-            <button className={viewMode === "ALL" ? "active" : ""} onClick={() => setViewMode("ALL")}>All</button>
-            <button className={viewMode === "READY" ? "active" : ""} onClick={() => setViewMode("READY")}>Ready</button>
-            <button className={viewMode === "LOW" ? "active" : ""} onClick={() => setViewMode("LOW")}>Low</button>
-            <button className={viewMode === "OUT" ? "active" : ""} onClick={() => setViewMode("OUT")}>Out</button>
-            <button className={viewMode === "USED" ? "active" : ""} onClick={() => setViewMode("USED")}>Used</button>
+            {(["ALL", "READY", "LOW", "OUT", "USED"] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                className={viewMode === mode ? "active" : ""}
+                onClick={() => setViewMode(mode)}
+              >
+                {mode === "ALL"
+                  ? "All"
+                  : mode === "READY"
+                  ? "Supplies"
+                  : mode === "LOW"
+                  ? "Low"
+                  : mode === "OUT"
+                  ? "Out"
+                  : "Used"}
+              </button>
+            ))}
           </section>
 
           <section className="panel">
             <div className="panelHead">
               <div>
-                <h2>Stock Records</h2>
-                <p>Current inventory after Marketplace additions and Tree Operations deductions.</p>
+                <p className="eyebrow">Supplies</p>
+                <h2>Supplies, Treatments & Protection Materials</h2>
+                <span>Real current stock from the inventory table.</span>
               </div>
               <button onClick={loadInventory}>Refresh</button>
             </div>
 
             {filteredItems.length === 0 ? (
-              <div className="empty small">No inventory records found for this filter.</div>
+              <div className="empty small">No forest supplies found for this filter.</div>
             ) : (
               <div className="list">
                 {filteredItems.map((item) => {
@@ -360,7 +381,8 @@ export default function InventoryPage() {
                   const low = Number(item.low_stock_level || 0);
                   const weeklyNeed = weeklyNeedForItem(item, activeTreeCount);
                   const weeks = weeklyNeed > 0 ? remaining / weeklyNeed : 999;
-                  const progress = starting > 0 ? Math.max(0, Math.min(100, (remaining / starting) * 100)) : 0;
+                  const progress =
+                    starting > 0 ? Math.max(0, Math.min(100, (remaining / starting) * 100)) : 0;
                   const info = getItemStatus(item, activeTreeCount);
                   const relatedOperations = inventoryOperationRows.filter((request) =>
                     matchesInventoryOperation(request, item)
@@ -370,18 +392,20 @@ export default function InventoryPage() {
                     <article className={`item ${info.level}`} key={item.id}>
                       <div className="itemTop">
                         <div>
-                          <strong>{item.item_name || "Inventory Item"}</strong>
-                          <p>{item.category || "Uncategorized"} • {item.unit || "Unit"}</p>
+                          <strong>{item.item_name || "Forest Supply"}</strong>
+                          <p>{item.category || "Protection Material"} • {item.unit || "unit"}</p>
                         </div>
                         <span>{info.label}</span>
                       </div>
 
-                      <div className="progress"><i style={{ width: `${progress}%` }} /></div>
+                      <div className="progress">
+                        <i style={{ width: `${progress}%` }} />
+                      </div>
 
                       <div className="qtyGrid">
-                        <Mini label="Starting" value={`${pesoNumber(starting)} ${item.unit || "unit"}`} />
-                        <Mini label="Remaining" value={`${pesoNumber(remaining)} ${item.unit || "unit"}`} strong />
-                        <Mini label="Low Level" value={`${pesoNumber(low)} ${item.unit || "unit"}`} />
+                        <Mini label="Starting" value={`${qty(starting)} ${item.unit || "unit"}`} />
+                        <Mini label="Remaining" value={`${qty(remaining)} ${item.unit || "unit"}`} />
+                        <Mini label="Low Level" value={`${qty(low)} ${item.unit || "unit"}`} />
                         <Mini label="Weeks Left" value={weeks >= 999 ? "No formula" : weeks.toFixed(1)} />
                       </div>
 
@@ -392,7 +416,8 @@ export default function InventoryPage() {
                         ) : (
                           relatedOperations.slice(0, 3).map((request) => (
                             <p key={request.id}>
-                              {request.operation_type || "Operation"} • {request.status || "PENDING"} • {formatDate(request.created_at)}
+                              {request.operation_type || "Operation"} • {request.status || "PENDING"} •{" "}
+                              {formatDate(request.created_at)}
                             </p>
                           ))
                         )}
@@ -407,8 +432,9 @@ export default function InventoryPage() {
           <section className="panel">
             <div className="panelHead">
               <div>
+                <p className="eyebrow">Treatments</p>
                 <h2>Recent Inventory-Deducting Requests</h2>
-                <p>These requests came from Tree Operations and should reduce remaining_qty when submitted.</p>
+                <span>Tree Operations that may use supplies from your inventory.</span>
               </div>
             </div>
 
@@ -436,23 +462,26 @@ export default function InventoryPage() {
 
       <style>{`
         * { box-sizing: border-box; }
+
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #17251b;
+          color: #f8f1d8;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 15% 5%, rgba(214,178,94,.24), transparent 28%),
+            radial-gradient(circle at 90% 10%, rgba(65,120,82,.22), transparent 30%),
+            linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
         }
+
         .back {
           display: inline-flex;
           margin-bottom: 12px;
-          color: #244536;
+          color: #d6b25e;
           text-decoration: none;
           font-weight: 900;
         }
+
         .hero {
           display: flex;
           justify-content: space-between;
@@ -460,109 +489,330 @@ export default function InventoryPage() {
           align-items: stretch;
           margin-bottom: 20px;
         }
+
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
+          color: #d6b25e;
           font-size: 12px;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .14em;
         }
-        h1 { margin: 0; font-size: 44px; letter-spacing: -1.4px; color: #102018; }
-        .hero span { display: block; max-width: 850px; margin-top: 8px; color: #5f665e; line-height: 1.6; font-weight: 700; }
+
+        h1 {
+          margin: 0;
+          font-size: 46px;
+          letter-spacing: -1.4px;
+          color: #fff8dc;
+        }
+
+        h2 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: 26px;
+        }
+
+        .hero span,
+        .panelHead span {
+          display: block;
+          max-width: 850px;
+          margin-top: 8px;
+          color: rgba(248,241,216,.68);
+          line-height: 1.6;
+        }
+
+        .heroCard,
+        .card,
+        .panel,
+        .message,
+        .empty,
+        .filters {
+          border: 1px solid rgba(214,178,94,.22);
+          background: rgba(255,255,255,.07);
+          backdrop-filter: blur(18px);
+          box-shadow: 0 24px 60px rgba(0,0,0,.28);
+        }
+
         .heroCard {
-          min-width: 250px;
+          min-width: 260px;
           border-radius: 28px;
           padding: 22px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 24px 56px rgba(36,69,54,.24);
         }
-        .heroCard p { margin: 0; color: rgba(255,255,255,.7); font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .14em; }
-        .heroCard strong { display: block; margin-top: 8px; font-size: 40px; }
-        .heroCard small { color: rgba(255,255,255,.74); font-weight: 900; }
-        .message, .empty, .panel, .filters, .card {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
+
+        .heroCard p,
+        .heroCard small {
+          margin: 0;
+          color: rgba(248,241,216,.68);
+          font-weight: 900;
         }
-        .message, .empty { padding: 18px; margin-bottom: 18px; color: #31553d; font-weight: 900; }
-        .small { box-shadow: none; border-radius: 18px; background: #f3ead8; }
-        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
-        .card { padding: 22px; }
-        .card p { margin: 0; color: #6b6b62; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .12em; }
-        .card h3 { margin: 9px 0 0; color: #244536; font-size: 30px; }
-        .card.good h3 { color: #276941; }
-        .card.danger h3 { color: #9a3c2a; }
-        .filters { padding: 12px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
-        .filters button, .panelHead button {
+
+        .heroCard strong {
+          display: block;
+          margin: 10px 0;
+          color: #d6b25e;
+          font-size: 42px;
+        }
+
+        .message,
+        .empty {
+          padding: 18px;
+          border-radius: 22px;
+          margin-bottom: 18px;
+          color: #fff8dc;
+          font-weight: 900;
+        }
+
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .card {
+          border-radius: 24px;
+          padding: 20px;
+        }
+
+        .card p {
+          margin: 0;
+          color: rgba(248,241,216,.62);
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        .card h3 {
+          margin: 10px 0 0;
+          color: #fff8dc;
+          font-size: 28px;
+        }
+
+        .filters {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          border-radius: 24px;
+          padding: 12px;
+          margin-bottom: 18px;
+        }
+
+        button {
           border: 0;
           border-radius: 999px;
-          padding: 12px 14px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
+          padding: 12px 16px;
+          background: rgba(255,255,255,.09);
+          color: #f8f1d8;
+          font-weight: 950;
           cursor: pointer;
         }
-        .filters button.active, .panelHead button { background: linear-gradient(135deg, #244536, #10281f); color: white; }
-        .panel { padding: 24px; margin-bottom: 18px; }
-        .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
-        .panelHead h2 { margin: 0; color: #244536; font-size: 24px; }
-        .panelHead p { margin: 5px 0 0; color: #6b6b62; font-weight: 700; }
-        .list { display: grid; gap: 14px; }
-        .item {
-          border-radius: 24px;
-          padding: 18px;
-          background: #fffaf0;
-          border: 1px solid rgba(92,70,35,.10);
+
+        button.active,
+        .panelHead button {
+          background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+          color: #07140f;
         }
-        .item.ready { border-left: 8px solid #276941; }
-        .item.low { border-left: 8px solid #b78326; }
-        .item.out, .item.used { border-left: 8px solid #9a3c2a; }
-        .itemTop { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-        .itemTop strong { color: #102018; font-size: 18px; }
-        .itemTop p { margin: 6px 0 0; color: #6b6b62; font-weight: 800; }
-        .itemTop span { padding: 8px 12px; border-radius: 999px; background: #244536; color: white; font-size: 12px; font-weight: 900; }
-        .progress { height: 10px; margin: 16px 0; overflow: hidden; border-radius: 999px; background: #eadcc3; }
-        .progress i { display: block; height: 100%; border-radius: inherit; background: #244536; }
-        .qtyGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-        .mini { border-radius: 18px; padding: 12px; background: #f3ead8; }
-        .mini small { display: block; color: #6b6b62; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
-        .mini b { display: block; margin-top: 5px; color: #244536; }
-        .movementBox { margin-top: 14px; border-radius: 18px; background: rgba(36,69,54,.07); padding: 14px; }
-        .movementBox b { color: #244536; }
-        .movementBox p { margin: 6px 0 0; color: #5f665e; font-weight: 700; }
-        .history { display: grid; gap: 10px; }
-        .historyRow { display: flex; justify-content: space-between; gap: 14px; padding: 15px; border-radius: 18px; background: #fffaf0; }
-        .historyRow strong { color: #244536; }
-        .historyRow p { margin: 5px 0 0; color: #6b6b62; }
-        .historyRow div:last-child { text-align: right; }
-        .historyRow span { display: inline-block; margin-bottom: 6px; padding: 6px 10px; border-radius: 999px; background: #244536; color: white; font-size: 11px; font-weight: 900; }
-        .historyRow b { display: block; color: #6b6b62; font-size: 12px; }
-        @media (max-width: 980px) {
-          .hero, .panelHead { flex-direction: column; }
-          .stats, .filters, .qtyGrid { grid-template-columns: 1fr; }
+
+        .panel {
+          border-radius: 28px;
+          padding: 22px;
+          margin-bottom: 18px;
+        }
+
+        .panelHead {
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          align-items: start;
+          margin-bottom: 18px;
+        }
+
+        .list {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 16px;
+        }
+
+        .item {
+          border-radius: 22px;
+          padding: 18px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.14);
+        }
+
+        .item.ready { border-color: rgba(131,230,162,.26); }
+        .item.low { border-color: rgba(214,178,94,.46); }
+        .item.out { border-color: rgba(255,141,141,.34); }
+        .item.used { opacity: .72; }
+
+        .itemTop {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+
+        .itemTop strong {
+          color: #fff8dc;
+          font-size: 20px;
+        }
+
+        .itemTop p {
+          margin: 5px 0 0;
+          color: rgba(248,241,216,.58);
+        }
+
+        .itemTop span {
+          color: #d6b25e;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .progress {
+          height: 10px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.1);
+          overflow: hidden;
+          margin-bottom: 14px;
+        }
+
+        .progress i {
+          display: block;
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #d6b25e, #83e6a2);
+        }
+
+        .qtyGrid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 10px;
+        }
+
+        .mini {
+          border-radius: 16px;
+          padding: 12px;
+          background: rgba(255,255,255,.06);
+          border: 1px solid rgba(214,178,94,.1);
+        }
+
+        .mini p {
+          margin: 0;
+          color: rgba(248,241,216,.52);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .1em;
+        }
+
+        .mini strong {
+          display: block;
+          margin-top: 6px;
+          color: #fff8dc;
+          font-size: 13px;
+        }
+
+        .movementBox {
+          margin-top: 14px;
+          border-radius: 16px;
+          padding: 12px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.1);
+        }
+
+        .movementBox b {
+          color: #d6b25e;
+        }
+
+        .movementBox p {
+          margin: 7px 0 0;
+          color: rgba(248,241,216,.62);
+          line-height: 1.5;
+        }
+
+        .history {
+          display: grid;
+          gap: 12px;
+        }
+
+        .historyRow {
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 14px;
+          border-radius: 18px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
+        }
+
+        .historyRow strong {
+          color: #fff8dc;
+        }
+
+        .historyRow p {
+          margin: 5px 0 0;
+          color: rgba(248,241,216,.6);
+        }
+
+        .historyRow span {
+          color: #d6b25e;
+          font-weight: 900;
+        }
+
+        .historyRow b {
+          display: block;
+          margin-top: 5px;
+          color: rgba(248,241,216,.62);
+        }
+
+        .small {
+          box-shadow: none;
+          margin: 0;
+          background: rgba(0,0,0,.22);
+        }
+
+        @media (max-width: 1100px) {
+          .list,
+          .stats {
+            grid-template-columns: 1fr;
+          }
+
+          .qtyGrid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+        }
+
+        @media (max-width: 800px) {
+          .hero,
+          .panelHead,
+          .historyRow {
+            display: grid;
+          }
+
+          .heroCard {
+            min-width: 0;
+          }
         }
       `}</style>
     </main>
   );
 }
 
-function Card({ label, value, good, danger }: { label: string; value: string; good?: boolean; danger?: boolean }) {
+function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`card ${good ? "good" : ""} ${danger ? "danger" : ""}`}>
+    <article className="card">
       <p>{label}</p>
       <h3>{value}</h3>
-    </div>
+    </article>
   );
 }
 
-function Mini({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Mini({ label, value }: { label: string; value: string }) {
   return (
     <div className="mini">
-      <small>{label}</small>
-      <b style={{ fontSize: strong ? 17 : 14 }}>{value}</b>
+      <p>{label}</p>
+      <strong>{value}</strong>
     </div>
   );
 }

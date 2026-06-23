@@ -14,12 +14,39 @@ type Referral = {
   id: string;
   referred_email: string | null;
   referral_code: string | null;
-  target_type: string | null;
   qualified: boolean | null;
   reward_amount: number | null;
   status: string | null;
   created_at: string | null;
 };
+
+function peso(value: number) {
+  return `₱${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function generateReferralCode(email: string) {
+  const base = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  return `ARGAN-${base || "CUSTOMER"}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+}
+
+function statusClass(value: string | null | undefined) {
+  const status = String(value || "").toUpperCase();
+  if (["APPROVED", "PAID", "COMPLETED"].includes(status)) return "good";
+  if (status === "REJECTED") return "bad";
+  return "pending";
+}
 
 export default function ReferralsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -29,84 +56,113 @@ export default function ReferralsPage() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
 
+  async function findProfile(userId: string, email: string) {
+    const cleanEmail = email.trim();
+    const lowerEmail = cleanEmail.toLowerCase();
+
+    const { data: profileById, error: byIdError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, referral_code")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (byIdError) throw byIdError;
+
+    const { data: profileByEmail, error: byEmailError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, referral_code")
+      .eq("email", lowerEmail)
+      .maybeSingle();
+
+    if (byEmailError) throw byEmailError;
+
+    const { data: profileByEmailFallback, error: fallbackError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, referral_code")
+      .ilike("email", cleanEmail)
+      .maybeSingle();
+
+    if (fallbackError) throw fallbackError;
+
+    return (profileById || profileByEmail || profileByEmailFallback) as Profile | null;
+  }
+
   async function loadData() {
     setLoading(true);
     setMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       window.location.href = "/login";
       return;
     }
 
-    const emailLogin = user.email?.trim().toLowerCase() || "";
+    try {
+      const currentProfile = await findProfile(user.id, user.email || "");
 
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, referral_code")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, referral_code")
-      .eq("email", emailLogin)
-      .maybeSingle();
-
-    const currentProfile = profileById || profileByEmail;
-
-    if (!currentProfile) {
-      setMessage("Profile not found.");
-      setLoading(false);
-      return;
-    }
-
-    const baseCode =
-      currentProfile.referral_code || generateReferralCode(currentProfile.email || emailLogin);
-
-    if (!currentProfile.referral_code) {
-      await supabase
-        .from("profiles")
-        .update({ referral_code: baseCode })
-        .eq("id", currentProfile.id);
-    }
-
-    const finalProfile = { ...currentProfile, referral_code: baseCode };
-    setProfile(finalProfile);
-
-    const origin =
-      typeof window !== "undefined"
-        ? window.location.origin
-        : "https://agarwood-platform.vercel.app";
-
-    const computedUrl = `${origin}/login?mode=register&ref=${encodeURIComponent(baseCode)}`;
-    setReferralUrl(computedUrl);
-
-    await supabase.from("referral_links").upsert(
-      {
-        owner_profile_id: finalProfile.id,
-        target_type: "CUSTOMER",
-        referral_code: baseCode,
-        referral_url: computedUrl,
-        status: "ACTIVE",
-      },
-      {
-        onConflict: "owner_profile_id,target_type",
+      if (!currentProfile) {
+        setMessage("Profile not found.");
+        setLoading(false);
+        return;
       }
-    );
 
-    const { data: referralData } = await supabase
-      .from("referrals")
-      .select(
-        "id, referred_email, referral_code, target_type, qualified, reward_amount, status, created_at"
-      )
-      .eq("referrer_profile_id", finalProfile.id)
-      .order("created_at", { ascending: false });
+      const baseCode =
+        currentProfile.referral_code ||
+        generateReferralCode(currentProfile.email || user.email || "");
 
-    setReferrals(referralData || []);
+      if (!currentProfile.referral_code) {
+        const { error: updateError } = await supabase
+          .from("profiles")
+          .update({
+            referral_code: baseCode,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", currentProfile.id);
+
+        if (updateError) throw updateError;
+      }
+
+      const finalProfile = { ...currentProfile, referral_code: baseCode };
+      setProfile(finalProfile);
+
+      const origin =
+        typeof window !== "undefined"
+          ? window.location.origin
+          : "https://agarwood-platform.vercel.app";
+
+      const computedUrl = `${origin}/login?mode=register&ref=${encodeURIComponent(baseCode)}`;
+      setReferralUrl(computedUrl);
+
+      const { error: linkError } = await supabase.from("referral_links").upsert(
+        {
+          owner_profile_id: finalProfile.id,
+          target_type: "CUSTOMER",
+          referral_code: baseCode,
+          referral_url: computedUrl,
+          status: "ACTIVE",
+        },
+        { onConflict: "owner_profile_id,target_type" }
+      );
+
+      if (linkError) throw linkError;
+
+      const { data: referralData, error: referralError } = await supabase
+        .from("referrals")
+        .select("id, referred_email, referral_code, qualified, reward_amount, status, created_at")
+        .eq("referrer_profile_id", finalProfile.id)
+        .order("created_at", { ascending: false });
+
+      if (referralError) throw referralError;
+
+      setReferrals((referralData || []) as Referral[]);
+    } catch (error: any) {
+      setMessage(error?.message || "Referral data failed to load.");
+    }
+
     setLoading(false);
   }
 
@@ -118,44 +174,27 @@ export default function ReferralsPage() {
     const total = referrals.length;
     const qualified = referrals.filter((item) => item.qualified).length;
     const pending = referrals.filter(
-      (item) => (item.status || "PENDING").toUpperCase() === "PENDING"
+      (item) => String(item.status || "PENDING").toUpperCase() === "PENDING"
     ).length;
     const rewards = referrals
       .filter((item) =>
-        ["APPROVED", "PAID", "COMPLETED"].includes((item.status || "").toUpperCase())
+        ["APPROVED", "PAID", "COMPLETED"].includes(String(item.status || "").toUpperCase())
       )
       .reduce((sum, item) => sum + Number(item.reward_amount || 0), 0);
 
     return { total, qualified, pending, rewards };
   }, [referrals]);
 
-  async function copyReferralLink() {
-    if (!referralUrl) {
-      setMessage("Referral link is still generating.");
-      return;
-    }
-
-    await navigator.clipboard.writeText(referralUrl);
-    setMessage("Referral link copied.");
-  }
-
-  async function copyReferralCode() {
-    if (!profile?.referral_code) {
-      setMessage("Referral code is still generating.");
-      return;
-    }
-
-    await navigator.clipboard.writeText(profile.referral_code);
-    setMessage("Referral code copied.");
+  async function copyText(text: string, success: string) {
+    if (!text) return setMessage("Still generating.");
+    await navigator.clipboard.writeText(text);
+    setMessage(success);
   }
 
   async function submitReferral() {
     setMessage("");
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
+    if (!profile) return setMessage("Profile not found.");
 
     const cleanEmail = email.trim().toLowerCase();
 
@@ -164,17 +203,17 @@ export default function ReferralsPage() {
       return;
     }
 
-    if (cleanEmail === (profile.email || "").toLowerCase()) {
+    if (cleanEmail === String(profile.email || "").toLowerCase()) {
       setMessage("You cannot refer your own email.");
       return;
     }
 
-    const alreadyExists = referrals.some(
-      (item) => (item.referred_email || "").toLowerCase() === cleanEmail
+    const exists = referrals.some(
+      (item) => String(item.referred_email || "").toLowerCase() === cleanEmail
     );
 
-    if (alreadyExists) {
-      setMessage("This customer already exists in your referral list.");
+    if (exists) {
+      setMessage("This customer already exists in your referral history.");
       return;
     }
 
@@ -182,16 +221,13 @@ export default function ReferralsPage() {
       referrer_profile_id: profile.id,
       referred_email: cleanEmail,
       referral_code: profile.referral_code,
-      target_type: "CUSTOMER",
       qualified: false,
       reward_amount: 0,
       status: "PENDING",
+      created_at: new Date().toISOString(),
     });
 
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
+    if (error) return setMessage(error.message);
 
     setEmail("");
     setMessage("Customer referral submitted.");
@@ -202,25 +238,27 @@ export default function ReferralsPage() {
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Customer Referral</p>
-          <h1>Invite Customers</h1>
+          <p className="eyebrow">Customer Growth</p>
+          <h1>Forest Referral Center</h1>
           <span>
-            Share your referral link with new customers. When they register using your code,
-            their signup can be tracked under your referral record.
+            Share your Forest Referral Link with new customers and track real referral records.
           </span>
         </div>
 
         <div className="codeCard">
           <p>Your Referral Code</p>
           <strong>{profile?.referral_code || "LOADING"}</strong>
-          <button onClick={copyReferralCode} disabled={!profile?.referral_code}>
+          <button
+            onClick={() => copyText(profile?.referral_code || "", "Referral code copied.")}
+            disabled={!profile?.referral_code}
+          >
             Copy Code
           </button>
         </div>
       </section>
 
       {loading ? (
-        <div className="empty">Loading customer referral data...</div>
+        <div className="empty">Loading Forest Referral Center...</div>
       ) : (
         <>
           {message && <div className="message">{message}</div>}
@@ -229,35 +267,33 @@ export default function ReferralsPage() {
             <Stat label="Total Referrals" value={String(stats.total)} />
             <Stat label="Qualified" value={String(stats.qualified)} />
             <Stat label="Pending" value={String(stats.pending)} />
-            <Stat label="Rewards Recorded" value={peso(stats.rewards)} good />
+            <Stat label="Referral Rewards" value={peso(stats.rewards)} />
           </section>
 
-          <section className="referralCard">
+          <section className="shareCard">
             <div>
-              <p className="eyebrow">Customer Registration Link</p>
-              <h2>Send this link to new customers</h2>
+              <p className="eyebrow">Referral Link</p>
+              <h2>Premium Sharing Experience</h2>
               <span>
-                This link opens the login/register page in create-account mode with your
-                referral code attached.
+                This link opens registration mode with your referral code attached.
               </span>
             </div>
 
             <div className="urlBox">
-              <small>Referral Link</small>
-              <p>{referralUrl || "Generating referral link..."}</p>
+              <small>Your Link</small>
+              <p>{referralUrl || "Generating..."}</p>
             </div>
 
-            <button onClick={copyReferralLink} disabled={!referralUrl}>
+            <button onClick={() => copyText(referralUrl, "Referral link copied.")}>
               Copy Referral Link
             </button>
           </section>
 
           <section className="grid">
             <section className="panel">
-              <PanelHead
-                title="Submit Customer Referral"
-                text="Use this only when you already know the referred customer's email."
-              />
+              <p className="eyebrow">Manual Referral</p>
+              <h2>Submit Customer Email</h2>
+              <span>Use this when you already know the referred customer email.</span>
 
               <label>
                 Referred Customer Email
@@ -268,46 +304,45 @@ export default function ReferralsPage() {
                 />
               </label>
 
-              <button onClick={submitReferral}>Submit Customer Referral</button>
+              <button onClick={submitReferral}>Submit Referral</button>
             </section>
 
             <section className="panel">
-              <PanelHead
-                title="How Customer Referral Works"
-                text="Customer referral tracking starts when a new customer registers using your link."
-              />
+              <p className="eyebrow">How It Works</p>
+              <h2>Referral Flow</h2>
 
               <div className="rule">
-                <span>1</span>
+                <b>1</b>
                 <div>
                   <strong>Share Link</strong>
-                  <p>Customer sends the registration link to another customer.</p>
+                  <p>Send your referral link to a new customer.</p>
                 </div>
               </div>
 
               <div className="rule">
-                <span>2</span>
+                <b>2</b>
                 <div>
-                  <strong>Register With Code</strong>
-                  <p>New customer registers through /login?mode=register&amp;ref=YOURCODE.</p>
+                  <strong>Customer Registers</strong>
+                  <p>New customer opens register mode with your code.</p>
                 </div>
               </div>
 
               <div className="rule">
-                <span>3</span>
+                <b>3</b>
                 <div>
-                  <strong>Qualification</strong>
-                  <p>Referral becomes qualified only after valid customer activity is verified.</p>
+                  <strong>Reward Review</strong>
+                  <p>Admin validates and updates qualification/reward status.</p>
                 </div>
               </div>
             </section>
           </section>
 
-          <section className="panel history">
-            <PanelHead title="Customer Referral History" text="Real records from referrals table." />
+          <section className="panel">
+            <p className="eyebrow">Referral History</p>
+            <h2>Real Referral Records</h2>
 
             {referrals.length === 0 ? (
-              <div className="empty small">No customer referrals submitted yet.</div>
+              <div className="empty small">No referrals yet.</div>
             ) : (
               <div className="list">
                 {referrals.map((item) => (
@@ -319,7 +354,7 @@ export default function ReferralsPage() {
                     </div>
 
                     <div className="right">
-                      <span className={`status ${statusClass(item.status)}`}>
+                      <span className={statusClass(item.status)}>
                         {item.status || "PENDING"}
                       </span>
                       <b>{item.qualified ? "Qualified" : "Not Qualified Yet"}</b>
@@ -339,98 +374,91 @@ export default function ReferralsPage() {
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #18261d;
+          color: #f8f1d8;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 15% 5%, rgba(214,178,94,.24), transparent 28%),
+            radial-gradient(circle at 90% 10%, rgba(65,120,82,.22), transparent 30%),
+            linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
         }
 
         .hero {
           display: flex;
           justify-content: space-between;
-          align-items: stretch;
           gap: 18px;
           margin-bottom: 22px;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          letter-spacing: .5px;
-          text-transform: uppercase;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 44px;
-          letter-spacing: -1.6px;
-          color: #101a14;
-        }
-
-        .hero span,
-        .referralCard span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 850px;
-          line-height: 1.6;
-        }
-
-        .codeCard {
-          min-width: 320px;
-          border-radius: 28px;
-          padding: 22px;
-          color: white;
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 24px 56px rgba(36,69,54,.24);
-        }
-
-        .codeCard p {
-          margin: 0;
-          color: rgba(255,255,255,.72);
+          color: #d6b25e;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .14em;
           font-size: 12px;
         }
 
+        h1 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: 46px;
+          letter-spacing: -1.6px;
+        }
+
+        h2 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: 26px;
+        }
+
+        .hero span,
+        .shareCard span,
+        .panel span {
+          display: block;
+          margin-top: 8px;
+          color: rgba(248,241,216,.68);
+          line-height: 1.6;
+        }
+
+        .codeCard,
+        .stat,
+        .shareCard,
+        .panel,
+        .message,
+        .empty {
+          border: 1px solid rgba(214,178,94,.22);
+          background: rgba(255,255,255,.07);
+          backdrop-filter: blur(18px);
+          box-shadow: 0 24px 60px rgba(0,0,0,.28);
+        }
+
+        .codeCard {
+          min-width: 320px;
+          border-radius: 28px;
+          padding: 24px;
+        }
+
+        .codeCard p {
+          margin: 0;
+          color: rgba(248,241,216,.68);
+          font-weight: 900;
+        }
+
         .codeCard strong {
           display: block;
-          margin-top: 10px;
+          margin: 10px 0 14px;
+          color: #d6b25e;
           font-size: 30px;
           word-break: break-word;
         }
 
         .message,
-        .empty,
-        .stat,
-        .panel,
-        .referralCard {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .message,
         .empty {
-          padding: 20px;
-          color: #31553d;
-          font-weight: 900;
+          padding: 18px;
+          border-radius: 22px;
           margin-bottom: 18px;
-        }
-
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
+          color: #fff8dc;
+          font-weight: 900;
         }
 
         .stats {
@@ -441,12 +469,13 @@ export default function ReferralsPage() {
         }
 
         .stat {
-          padding: 22px;
+          border-radius: 24px;
+          padding: 20px;
         }
 
         .stat p {
           margin: 0;
-          color: #6b6b62;
+          color: rgba(248,241,216,.62);
           font-size: 12px;
           font-weight: 900;
           text-transform: uppercase;
@@ -455,51 +484,28 @@ export default function ReferralsPage() {
 
         .stat h3 {
           margin: 10px 0 0;
-          color: #244536;
-          font-size: 28px;
+          color: #fff8dc;
+          font-size: 26px;
         }
 
-        .stat.good h3 {
-          color: #176b3a;
-        }
-
-        .referralCard,
+        .shareCard,
         .panel {
+          border-radius: 28px;
           padding: 22px;
-        }
-
-        .referralCard {
           margin-bottom: 18px;
-        }
-
-        .referralCard h2,
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-          font-size: 24px;
-        }
-
-        .panelHead p {
-          margin: 8px 0 0;
-          color: #6b6b62;
-          line-height: 1.5;
-          font-size: 14px;
-          font-weight: 800;
         }
 
         .urlBox,
         .rule {
           margin-top: 16px;
           border-radius: 18px;
-          background: #f3ead8;
+          background: rgba(0,0,0,.22);
           padding: 14px;
-          border: 1px solid rgba(92,70,35,.08);
+          border: 1px solid rgba(214,178,94,.12);
         }
 
         .urlBox small {
-          display: block;
-          color: #6b6b62;
-          font-size: 11px;
+          color: rgba(248,241,216,.56);
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .12em;
@@ -507,23 +513,22 @@ export default function ReferralsPage() {
 
         .urlBox p {
           margin: 8px 0 0;
-          word-break: break-all;
-          color: #244536;
+          color: #d6b25e;
           font-weight: 900;
+          word-break: break-all;
         }
 
         .grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 16px;
-          margin-bottom: 18px;
+          gap: 18px;
         }
 
         label {
           display: grid;
           gap: 8px;
-          margin-top: 18px;
-          color: #6b6b62;
+          margin: 18px 0;
+          color: rgba(248,241,216,.64);
           font-size: 12px;
           font-weight: 900;
           text-transform: uppercase;
@@ -532,165 +537,123 @@ export default function ReferralsPage() {
 
         input {
           width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
+          border: 1px solid rgba(214,178,94,.22);
+          border-radius: 16px;
           padding: 13px 14px;
-          background: rgba(255,253,246,.94);
-          color: #101a14;
+          background: rgba(0,0,0,.25);
+          color: #fff8dc;
           outline: none;
-          font-weight: 800;
         }
 
         button {
-          width: 100%;
-          margin-top: 16px;
           border: 0;
-          border-radius: 16px;
-          padding: 15px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          font-weight: 900;
+          border-radius: 999px;
+          padding: 12px 18px;
+          background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+          color: #07140f;
+          font-weight: 950;
           cursor: pointer;
         }
 
         button:disabled {
-          opacity: .55;
           cursor: not-allowed;
+          opacity: .55;
         }
 
         .rule {
-          display: grid;
-          grid-template-columns: 42px 1fr;
-          gap: 12px;
+          display: flex;
+          gap: 14px;
+          align-items: start;
         }
 
-        .rule span {
-          width: 36px;
-          height: 36px;
+        .rule b {
+          width: 34px;
+          height: 34px;
           border-radius: 50%;
           display: grid;
           place-items: center;
-          background: #244536;
-          color: white;
-          font-weight: 900;
+          color: #07140f;
+          background: #d6b25e;
         }
 
         .rule strong {
-          color: #101a14;
+          color: #fff8dc;
         }
 
         .rule p {
           margin: 5px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .history {
-          margin-top: 18px;
+          color: rgba(248,241,216,.62);
         }
 
         .list {
           display: grid;
           gap: 12px;
-          margin-top: 18px;
+          margin-top: 16px;
         }
 
         .row {
-          display: grid;
-          grid-template-columns: 1fr auto;
+          display: flex;
+          justify-content: space-between;
           gap: 14px;
-          align-items: center;
-          padding: 16px;
+          padding: 14px;
           border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
         }
 
         .row strong {
-          color: #101a14;
-          font-size: 16px;
+          color: #fff8dc;
         }
 
         .row p,
         .row small {
           display: block;
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
+          margin: 5px 0 0;
+          color: rgba(248,241,216,.6);
         }
 
         .right {
+          text-align: right;
           display: grid;
-          justify-items: end;
-          gap: 8px;
+          gap: 5px;
         }
 
+        .right span,
         .right b {
-          color: #244536;
-        }
-
-        .status {
-          display: inline-flex;
-          justify-content: center;
-          min-width: 92px;
-          border-radius: 999px;
-          padding: 8px 10px;
-          font-size: 11px;
           font-weight: 900;
         }
 
-        .status.pending {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
+        .good { color: #83e6a2; }
+        .bad { color: #ff8d8d; }
+        .pending { color: #d6b25e; }
+
+        .small {
+          box-shadow: none;
+          margin-top: 16px;
+          background: rgba(0,0,0,.22);
         }
 
-        .status.approved,
-        .status.completed,
-        .status.paid {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .status.rejected,
-        .status.failed {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        @media (max-width: 1100px) {
+        @media (max-width: 980px) {
           .hero,
           .grid {
+            display: grid;
             grid-template-columns: 1fr;
-            flex-direction: column;
           }
 
           .stats {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .codeCard {
-            min-width: 100%;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .stats,
-          .row {
             grid-template-columns: 1fr;
           }
 
+          .codeCard {
+            min-width: 0;
+          }
+
+          .row {
+            display: grid;
+          }
+
           .right {
-            justify-items: start;
+            text-align: left;
           }
         }
       `}</style>
@@ -698,47 +661,11 @@ export default function ReferralsPage() {
   );
 }
 
-function PanelHead({ title, text }: { title: string; text: string }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="panelHead">
-      <h2>{title}</h2>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function Stat({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div className={`stat ${good ? "good" : ""}`}>
+    <article className="stat">
       <p>{label}</p>
       <h3>{value}</h3>
-    </div>
+    </article>
   );
-}
-
-function generateReferralCode(email: string) {
-  const clean = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `${clean.slice(0, 6)}-${suffix}`;
-}
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function statusClass(value: string | null) {
-  return (value || "pending").toLowerCase().replaceAll(" ", "_");
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }

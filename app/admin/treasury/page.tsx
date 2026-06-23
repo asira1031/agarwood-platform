@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type TreasuryRow = Record<string, any>;
+type TreasuryRow = {
+  id: string;
+  profile_id: string | null;
+  source: string | null;
+  amount: number | null;
+  reference_no: string | null;
+  description: string | null;
+  status: string | null;
+  created_at: string | null;
+};
 
 type TabKey =
   | "ALL"
@@ -30,7 +39,9 @@ export default function AdminTreasuryPage() {
 
     const { data, error } = await supabase
       .from("platform_treasury")
-      .select("*")
+      .select(
+        "id, profile_id, source, amount, reference_no, description, status, created_at"
+      )
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -40,16 +51,16 @@ export default function AdminTreasuryPage() {
       return;
     }
 
-    setRows(data || []);
+    setRows((data || []) as TreasuryRow[]);
     setLoading(false);
   }
 
   function getSource(row: TreasuryRow) {
-    return String(row.source || row.transaction_type || row.type || "OTHER").toUpperCase();
+    return String(row.source || "OTHER").toUpperCase();
   }
 
   function getAmount(row: TreasuryRow) {
-    return Number(row.amount || row.total_amount || row.net_amount || 0);
+    return Number(row.amount || 0);
   }
 
   function matchesTab(row: TreasuryRow) {
@@ -82,7 +93,7 @@ export default function AdminTreasuryPage() {
     });
   }
 
-  function formatDate(value: string | null | undefined) {
+  function formatDate(value: string | null) {
     if (!value) return "—";
 
     return new Date(value).toLocaleString("en-PH", {
@@ -94,7 +105,7 @@ export default function AdminTreasuryPage() {
     });
   }
 
-  function badgeClass(statusValue: any) {
+  function badgeClass(statusValue: string | null) {
     const status = String(statusValue || "RECEIVED").toUpperCase();
 
     if (status === "RECEIVED" || status === "PAID" || status === "COMPLETED") {
@@ -126,7 +137,7 @@ export default function AdminTreasuryPage() {
             </h1>
 
             <p className="mt-2 text-white/70">
-              Track platform revenue, fees, purchase income, care program income, and operation income.
+              Track platform revenue using the approved V6 treasury schema.
             </p>
           </div>
 
@@ -151,8 +162,14 @@ export default function AdminTreasuryPage() {
           <StatCard label="Records" value={String(rows.length)} />
           <StatCard label="Visible Records" value={String(filteredRows.length)} />
           <StatCard label="Membership" value={peso(sourceTotal("MEMBERSHIP"))} />
-          <StatCard label="Tree Purchase" value={peso(sourceTotal("TREE_PURCHASE"))} />
-          <StatCard label="Care Program" value={peso(sourceTotal("CARE_PROGRAM"))} />
+          <StatCard
+            label="Tree Purchase"
+            value={peso(sourceTotal("TREE_PURCHASE"))}
+          />
+          <StatCard
+            label="Care Program"
+            value={peso(sourceTotal("CARE_PROGRAM"))}
+          />
           <StatCard label="Operations" value={peso(sourceTotal("OPERATION"))} />
         </section>
 
@@ -189,14 +206,14 @@ export default function AdminTreasuryPage() {
             <div className="p-8 text-white/70">No treasury records found.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] text-left text-sm">
+              <table className="w-full min-w-[1000px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Source</th>
                     <th className="px-5 py-4">Amount</th>
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4">Profile</th>
-                    <th className="px-5 py-4">Reference</th>
+                    <th className="px-5 py-4">Reference No.</th>
                     <th className="px-5 py-4">Description</th>
                     <th className="px-5 py-4">Created</th>
                   </tr>
@@ -231,11 +248,11 @@ export default function AdminTreasuryPage() {
                       </td>
 
                       <td className="px-5 py-4 text-white/70">
-                        {row.reference_id || row.reference_no || row.request_id || "—"}
+                        {row.reference_no || "—"}
                       </td>
 
                       <td className="px-5 py-4 text-white/70">
-                        {row.description || row.notes || "—"}
+                        {row.description || "—"}
                       </td>
 
                       <td className="px-5 py-4 text-white/70">

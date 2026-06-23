@@ -14,7 +14,7 @@ type Profile = {
 
 type KycRecord = {
   id: string;
-  profile_id: string;
+  profile_id: string | null;
   id_type: string | null;
   id_number: string | null;
   id_front_url: string | null;
@@ -29,6 +29,37 @@ type KycRecord = {
   submitted_at: string | null;
   reviewed_at: string | null;
 };
+
+function normalize(value: any) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function statusLabel(value: string | null | undefined) {
+  const status = normalize(value);
+  if (status === "APPROVED") return "APPROVED";
+  if (status === "ACTIVE") return "ACTIVE";
+  if (status === "PENDING") return "PENDING";
+  if (status === "REJECTED") return "REJECTED";
+  if (status === "INACTIVE") return "INACTIVE";
+  return "NOT SUBMITTED";
+}
+
+function statusClass(value: string | null | undefined) {
+  const status = normalize(value);
+  if (status === "APPROVED" || status === "ACTIVE") return "approved";
+  if (status === "PENDING") return "pending";
+  if (status === "REJECTED") return "rejected";
+  return "notSubmitted";
+}
 
 export default function ProfilePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -58,56 +89,81 @@ export default function ProfilePage() {
     proof: null as File | null,
   });
 
+  async function findProfile(userId: string, email: string) {
+    const cleanEmail = email.trim();
+    const lowerEmail = cleanEmail.toLowerCase();
+
+    const { data: profileById, error: byIdError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, phone, membership_status, kyc_status")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (byIdError) throw byIdError;
+
+    const { data: profileByEmail, error: byEmailError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, phone, membership_status, kyc_status")
+      .eq("email", lowerEmail)
+      .maybeSingle();
+
+    if (byEmailError) throw byEmailError;
+
+    const { data: profileByEmailFallback, error: fallbackError } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, phone, membership_status, kyc_status")
+      .ilike("email", cleanEmail)
+      .maybeSingle();
+
+    if (fallbackError) throw fallbackError;
+
+    return (profileById || profileByEmail || profileByEmailFallback) as Profile | null;
+  }
+
   async function loadProfile() {
     setLoading(true);
     setMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (userError || !user) {
       window.location.href = "/login";
       return;
     }
 
-    const email = user.email?.trim().toLowerCase() || "";
+    try {
+      const currentProfile = await findProfile(user.id, user.email || "");
 
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, phone, membership_status, kyc_status")
-      .eq("id", user.id)
-      .maybeSingle();
+      if (!currentProfile) {
+        setMessage("Profile not found. Please login again.");
+        setLoading(false);
+        return;
+      }
 
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, phone, membership_status, kyc_status")
-      .eq("email", email)
-      .maybeSingle();
+      setProfile(currentProfile);
+      setProfileForm({
+        full_name: currentProfile.full_name || "",
+        phone: currentProfile.phone || "",
+      });
 
-    const currentProfile = profileById || profileByEmail;
+      const { data: kycData, error: kycError } = await supabase
+        .from("kyc_records")
+        .select(
+          "id, profile_id, id_type, id_number, id_front_url, id_back_url, selfie_url, proof_of_address_url, source_of_funds, investment_experience, risk_acknowledged, status, review_notes, submitted_at, reviewed_at"
+        )
+        .eq("profile_id", currentProfile.id)
+        .order("submitted_at", { ascending: false });
 
-    if (!currentProfile) {
-      setLoading(false);
-      setMessage("Profile not found. Please login again.");
-      return;
+      if (kycError) throw kycError;
+
+      setKycRecords((kycData || []) as KycRecord[]);
+    } catch (error: any) {
+      setMessage(error?.message || "Profile failed to load.");
     }
 
-    setProfile(currentProfile);
-    setProfileForm({
-      full_name: currentProfile.full_name || "",
-      phone: currentProfile.phone || "",
-    });
-
-    const { data: kycData } = await supabase
-      .from("kyc_records")
-      .select(
-        "id, profile_id, id_type, id_number, id_front_url, id_back_url, selfie_url, proof_of_address_url, source_of_funds, investment_experience, risk_acknowledged, status, review_notes, submitted_at, reviewed_at"
-      )
-      .eq("profile_id", currentProfile.id)
-      .order("submitted_at", { ascending: false });
-
-    setKycRecords(kycData || []);
     setLoading(false);
   }
 
@@ -120,24 +176,19 @@ export default function ProfilePage() {
   }, [kycRecords]);
 
   const kycStatus = profile?.kyc_status || latestKyc?.status || "NOT_SUBMITTED";
-  const membershipStatus = profile?.membership_status || "UNKNOWN";
-  const isVerified = kycStatus === "APPROVED";
-  const isPending = kycStatus === "PENDING";
-  const isRejected = kycStatus === "REJECTED";
+  const membershipStatus = profile?.membership_status || "INACTIVE";
+
+  const normalizedKyc = normalize(kycStatus);
+  const isVerified = normalizedKyc === "APPROVED";
+  const isPending = normalizedKyc === "PENDING";
+  const isRejected = normalizedKyc === "REJECTED";
   const canSubmitKyc = !isVerified && !isPending;
 
   async function saveProfile() {
     setMessage("");
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
-
-    if (!profileForm.full_name.trim()) {
-      setMessage("Full name is required.");
-      return;
-    }
+    if (!profile) return setMessage("Profile not found.");
+    if (!profileForm.full_name.trim()) return setMessage("Full name is required.");
 
     setSavingProfile(true);
 
@@ -146,6 +197,7 @@ export default function ProfilePage() {
       .update({
         full_name: profileForm.full_name.trim(),
         phone: profileForm.phone.trim() || null,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", profile.id);
 
@@ -155,7 +207,7 @@ export default function ProfilePage() {
       return;
     }
 
-    setMessage("Profile updated successfully.");
+    setMessage("Forest identity updated successfully.");
     setSavingProfile(false);
     await loadProfile();
   }
@@ -180,13 +232,10 @@ export default function ProfilePage() {
   async function submitKyc() {
     setMessage("");
 
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
+    if (!profile) return setMessage("Profile not found.");
 
     if (!canSubmitKyc) {
-      setMessage("KYC cannot be submitted while it is pending or already approved.");
+      setMessage("KYC cannot be submitted while pending or already approved.");
       return;
     }
 
@@ -237,7 +286,10 @@ export default function ProfilePage() {
 
       const { error: profileError } = await supabase
         .from("profiles")
-        .update({ kyc_status: "PENDING" })
+        .update({
+          kyc_status: "PENDING",
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", profile.id);
 
       if (profileError) throw profileError;
@@ -257,53 +309,53 @@ export default function ProfilePage() {
         proof: null,
       });
 
-      setMessage("KYC submitted successfully. Status: PENDING admin review.");
+      setMessage("KYC submitted successfully. Waiting for admin review.");
       await loadProfile();
     } catch (error: any) {
-      setMessage(error.message || "KYC submission failed.");
+      setMessage(error?.message || "KYC submission failed.");
     } finally {
       setSubmittingKyc(false);
     }
   }
 
   return (
-    <main className="profilePage">
+    <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Trust Profile</p>
-          <h1>Profile & KYC</h1>
+          <p className="eyebrow">Customer Account</p>
+          <h1>Forest Identity Center</h1>
           <span>
-            Manage your customer profile and submit identity documents for admin
-            review. Verified KYC unlocks withdrawal and sell tree requests.
+            Manage your customer identity, membership standing, and KYC verification for Arganwood services.
           </span>
         </div>
 
-        <div className={`heroBadge ${statusClass(kycStatus)}`}>
-          <p>KYC Status</p>
-          <strong>{statusLabel(kycStatus)}</strong>
-          <small>{isVerified ? "Verified customer" : "Admin review required"}</small>
+        <div className={`identityCard ${statusClass(kycStatus)}`}>
+          <p>Forest Member ID</p>
+          <strong>{profile?.full_name || "Customer"}</strong>
+          <small>{profile?.email || "No email"}</small>
         </div>
       </section>
 
       {loading ? (
-        <div className="loadingBox">Loading profile...</div>
+        <div className="empty">Loading Forest Identity...</div>
       ) : (
         <>
-          {message && <div className="messageBox">{message}</div>}
+          {message && <div className="message">{message}</div>}
 
-          <section className="cards">
-            <SummaryCard icon="👤" label="Customer" value={profile?.full_name || "Unnamed"} note={profile?.email || "No email"} />
-            <SummaryCard icon="🎖️" label="Membership" value={membershipStatus} note="Required for system access" gold />
-            <SummaryCard icon="🛡️" label="Verification" value={statusLabel(kycStatus)} note="Required for payouts" />
-            <SummaryCard icon="📄" label="KYC Records" value={String(kycRecords.length)} note="Real records from kyc_records" gold />
+          <section className="stats">
+            <SummaryCard label="Name" value={profile?.full_name || "Unnamed"} />
+            <SummaryCard label="Email" value={profile?.email || "No email"} />
+            <SummaryCard label="Membership" value={statusLabel(membershipStatus)} />
+            <SummaryCard label="KYC" value={statusLabel(kycStatus)} />
           </section>
 
           <section className="grid">
             <div className="panel">
               <div className="panelHead">
                 <div>
-                  <h2>Profile Details</h2>
-                  <p>Basic customer information from profiles table.</p>
+                  <p className="eyebrow">Profile</p>
+                  <h2>Identity Details</h2>
+                  <span>Friendly customer information from the profiles table.</span>
                 </div>
               </div>
 
@@ -312,7 +364,9 @@ export default function ProfilePage() {
                   Full Name
                   <input
                     value={profileForm.full_name}
-                    onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
+                    onChange={(e) =>
+                      setProfileForm({ ...profileForm, full_name: e.target.value })
+                    }
                     placeholder="Full name"
                   />
                 </label>
@@ -321,7 +375,9 @@ export default function ProfilePage() {
                   Phone
                   <input
                     value={profileForm.phone}
-                    onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                    onChange={(e) =>
+                      setProfileForm({ ...profileForm, phone: e.target.value })
+                    }
                     placeholder="Phone number"
                   />
                 </label>
@@ -330,28 +386,29 @@ export default function ProfilePage() {
                   Email
                   <input value={profile?.email || ""} disabled />
                 </label>
-
-                <label>
-                  Profile ID
-                  <input value={profile?.id || ""} disabled />
-                </label>
               </div>
 
-              <button className="primaryButton" onClick={saveProfile} disabled={savingProfile}>
-                {savingProfile ? "Saving..." : "Save Profile"}
+              <button onClick={saveProfile} disabled={savingProfile}>
+                {savingProfile ? "Saving..." : "Save Forest Identity"}
               </button>
             </div>
 
-            <aside className="panel trustPanel">
-              <p className="eyebrow">Trust Status</p>
-              <h2>{trustTitle(kycStatus)}</h2>
-              <p>{trustDescription(kycStatus)}</p>
+            <aside className="panel">
+              <div className="panelHead">
+                <div>
+                  <p className="eyebrow">Trust Status</p>
+                  <h2>{isVerified ? "Verified Customer" : "Verification Needed"}</h2>
+                  <span>
+                    KYC approval unlocks withdrawal and sell tree access.
+                  </span>
+                </div>
+              </div>
 
               <div className="trustList">
-                <StatusLine label="Membership" value={membershipStatus} ok={membershipStatus === "ACTIVE"} />
-                <StatusLine label="KYC" value={statusLabel(kycStatus)} ok={isVerified} />
-                <StatusLine label="Withdraw Access" value={isVerified ? "UNLOCKED" : "LOCKED"} ok={isVerified} />
-                <StatusLine label="Sell Tree Access" value={isVerified ? "UNLOCKED" : "LOCKED"} ok={isVerified} />
+                <Info label="Membership" value={statusLabel(membershipStatus)} />
+                <Info label="KYC Status" value={statusLabel(kycStatus)} />
+                <Info label="Withdraw Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
+                <Info label="Sell Tree Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
               </div>
             </aside>
           </section>
@@ -360,21 +417,24 @@ export default function ProfilePage() {
             <div className="panel">
               <div className="panelHead">
                 <div>
-                  <h2>KYC Verification Form</h2>
-                  <p>Upload documents like GCash-style admin verification.</p>
+                  <p className="eyebrow">Verification</p>
+                  <h2>KYC Documents</h2>
+                  <span>Upload identity documents for admin verification.</span>
                 </div>
-                <span className={`statusPill ${statusClass(kycStatus)}`}>
+                <b className={`pill ${statusClass(kycStatus)}`}>
                   {statusLabel(kycStatus)}
-                </span>
+                </b>
               </div>
 
               {!canSubmitKyc ? (
                 <div className="lockedBox">
-                  <strong>{isVerified ? "KYC already approved." : "KYC is pending review."}</strong>
+                  <strong>
+                    {isVerified ? "KYC already approved." : "KYC is pending review."}
+                  </strong>
                   <p>
                     {isVerified
-                      ? "Your profile is verified. Withdraw and sell tree requests are unlocked."
-                      : "Please wait for admin review. You can submit again only if your KYC is rejected."}
+                      ? "Your account is verified. You may use payout and sell tree features."
+                      : "Please wait for admin review. You can submit again only if rejected."}
                   </p>
                 </div>
               ) : (
@@ -382,7 +442,10 @@ export default function ProfilePage() {
                   {isRejected && (
                     <div className="rejectedBox">
                       <strong>Previous KYC was rejected.</strong>
-                      <p>{latestKyc?.review_notes || "Please review your documents and submit again."}</p>
+                      <p>
+                        {latestKyc?.review_notes ||
+                          "Please review your documents and submit again."}
+                      </p>
                     </div>
                   )}
 
@@ -391,7 +454,9 @@ export default function ProfilePage() {
                       ID Type
                       <select
                         value={kycForm.id_type}
-                        onChange={(e) => setKycForm({ ...kycForm, id_type: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({ ...kycForm, id_type: e.target.value })
+                        }
                       >
                         <option value="">Select ID Type</option>
                         <option value="Passport">Passport</option>
@@ -406,7 +471,9 @@ export default function ProfilePage() {
                       ID Number
                       <input
                         value={kycForm.id_number}
-                        onChange={(e) => setKycForm({ ...kycForm, id_number: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({ ...kycForm, id_number: e.target.value })
+                        }
                         placeholder="Enter ID number"
                       />
                     </label>
@@ -415,7 +482,9 @@ export default function ProfilePage() {
                       Source of Funds
                       <select
                         value={kycForm.source_of_funds}
-                        onChange={(e) => setKycForm({ ...kycForm, source_of_funds: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({ ...kycForm, source_of_funds: e.target.value })
+                        }
                       >
                         <option value="">Select Source of Funds</option>
                         <option value="Employment">Employment</option>
@@ -431,7 +500,12 @@ export default function ProfilePage() {
                       Investment Experience
                       <select
                         value={kycForm.investment_experience}
-                        onChange={(e) => setKycForm({ ...kycForm, investment_experience: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({
+                            ...kycForm,
+                            investment_experience: e.target.value,
+                          })
+                        }
                       >
                         <option value="">Select Experience</option>
                         <option value="Beginner">Beginner</option>
@@ -443,26 +517,47 @@ export default function ProfilePage() {
                   </div>
 
                   <div className="uploadGrid">
-                    <UploadBox label="Front of ID" file={files.id_front} onChange={(file) => setFiles({ ...files, id_front: file })} />
-                    <UploadBox label="Back of ID" file={files.id_back} onChange={(file) => setFiles({ ...files, id_back: file })} />
-                    <UploadBox label="Selfie Holding ID" file={files.selfie} onChange={(file) => setFiles({ ...files, selfie: file })} />
-                    <UploadBox label="Proof of Address" file={files.proof} onChange={(file) => setFiles({ ...files, proof: file })} />
+                    <UploadBox
+                      label="Front of ID"
+                      file={files.id_front}
+                      onChange={(file) => setFiles({ ...files, id_front: file })}
+                    />
+                    <UploadBox
+                      label="Back of ID"
+                      file={files.id_back}
+                      onChange={(file) => setFiles({ ...files, id_back: file })}
+                    />
+                    <UploadBox
+                      label="Selfie Holding ID"
+                      file={files.selfie}
+                      onChange={(file) => setFiles({ ...files, selfie: file })}
+                    />
+                    <UploadBox
+                      label="Proof of Address"
+                      file={files.proof}
+                      onChange={(file) => setFiles({ ...files, proof: file })}
+                    />
                   </div>
 
                   <label className="riskBox">
                     <input
                       type="checkbox"
                       checked={kycForm.risk_acknowledged}
-                      onChange={(e) => setKycForm({ ...kycForm, risk_acknowledged: e.target.checked })}
+                      onChange={(e) =>
+                        setKycForm({
+                          ...kycForm,
+                          risk_acknowledged: e.target.checked,
+                        })
+                      }
                     />
                     <span>
-                      I understand that agarwood ownership involves long-term agricultural,
-                      market, and document-based verification risk.
+                      I understand that agarwood ownership involves long-term
+                      agricultural, market, and verification risk.
                     </span>
                   </label>
 
-                  <button className="primaryButton" onClick={submitKyc} disabled={submittingKyc}>
-                    {submittingKyc ? "Submitting KYC..." : "Submit KYC for Admin Review"}
+                  <button onClick={submitKyc} disabled={submittingKyc}>
+                    {submittingKyc ? "Submitting..." : "Submit KYC for Review"}
                   </button>
                 </>
               )}
@@ -471,16 +566,17 @@ export default function ProfilePage() {
             <aside className="panel">
               <div className="panelHead">
                 <div>
-                  <h2>Latest KYC Record</h2>
-                  <p>Real latest record from kyc_records.</p>
+                  <p className="eyebrow">Latest Record</p>
+                  <h2>KYC History</h2>
+                  <span>Latest real record from kyc_records.</span>
                 </div>
               </div>
 
               {!latestKyc ? (
-                <div className="emptyState">No KYC record submitted yet.</div>
+                <div className="empty small">No KYC record submitted yet.</div>
               ) : (
-                <div className="kycRecord">
-                  <Info label="Status" value={latestKyc.status || "PENDING"} />
+                <div className="trustList">
+                  <Info label="Status" value={statusLabel(latestKyc.status)} />
                   <Info label="ID Type" value={latestKyc.id_type || "—"} />
                   <Info label="ID Number" value={latestKyc.id_number || "—"} />
                   <Info label="Submitted" value={formatDate(latestKyc.submitted_at)} />
@@ -503,167 +599,113 @@ export default function ProfilePage() {
       <style>{`
         * { box-sizing: border-box; }
 
-        .profilePage {
+        .page {
           min-height: 100vh;
-          padding: 28px;
-          color: #18261d;
+          padding: 30px;
+          color: #f8f1d8;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 22%),
-            radial-gradient(circle at 90% 12%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 15% 5%, rgba(214,178,94,.22), transparent 28%),
+            radial-gradient(circle at 90% 10%, rgba(65,120,82,.22), transparent 30%),
+            linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
         }
 
         .hero {
           display: flex;
           justify-content: space-between;
-          align-items: center;
-          gap: 20px;
+          gap: 18px;
           margin-bottom: 22px;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
+          color: #d6b25e;
           font-weight: 900;
-          letter-spacing: .5px;
           text-transform: uppercase;
+          letter-spacing: .14em;
           font-size: 12px;
         }
 
-        .hero h1 {
+        h1 {
           margin: 0;
-          font-size: 42px;
-          letter-spacing: -1.4px;
-          color: #101a14;
+          color: #fff8dc;
+          font-size: 46px;
+          letter-spacing: -1.6px;
         }
 
-        .hero span {
+        .hero span,
+        .panelHead span {
           display: block;
           margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 760px;
+          color: rgba(248,241,216,.68);
+          line-height: 1.6;
         }
 
-        .heroBadge {
-          min-width: 290px;
-          border-radius: 24px;
-          padding: 22px;
-          color: white;
-          box-shadow: 0 18px 42px rgba(36,69,54,.22);
+        .identityCard,
+        .summaryCard,
+        .panel,
+        .message,
+        .empty {
+          border: 1px solid rgba(214,178,94,.22);
+          background: rgba(255,255,255,.07);
+          backdrop-filter: blur(18px);
+          box-shadow: 0 24px 60px rgba(0,0,0,.28);
         }
 
-        .heroBadge.approved {
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 30%),
-            linear-gradient(135deg, #244536, #10281f);
+        .identityCard {
+          min-width: 320px;
+          border-radius: 28px;
+          padding: 24px;
         }
 
-        .heroBadge.pending,
-        .heroBadge.not_submitted {
-          background:
-            radial-gradient(circle at 80% 18%, rgba(255,226,154,.45), transparent 30%),
-            linear-gradient(135deg, #8c6a3c, #4d351b);
-        }
-
-        .heroBadge.rejected {
-          background:
-            radial-gradient(circle at 80% 18%, rgba(255,180,150,.35), transparent 30%),
-            linear-gradient(135deg, #7a2d22, #38120d);
-        }
-
-        .heroBadge p {
+        .identityCard p,
+        .identityCard small {
           margin: 0;
-          color: rgba(255,255,255,.75);
+          color: rgba(248,241,216,.68);
           font-weight: 900;
         }
 
-        .heroBadge strong {
+        .identityCard strong {
           display: block;
-          margin-top: 8px;
-          font-size: 30px;
-          letter-spacing: -1px;
+          margin: 10px 0;
+          color: #d6b25e;
+          font-size: 28px;
+          word-break: break-word;
         }
 
-        .heroBadge small {
-          color: rgba(255,255,255,.72);
-          font-weight: 900;
-        }
-
-        .cards {
+        .stats {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(4, 1fr);
           gap: 16px;
           margin-bottom: 18px;
         }
 
-        .summaryCard,
-        .panel,
-        .loadingBox,
-        .messageBox {
-          border-radius: 22px;
-          background: rgba(255,253,246,.86);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
         .summaryCard {
-          min-height: 145px;
+          border-radius: 24px;
           padding: 20px;
-          display: flex;
-          align-items: center;
-          gap: 18px;
-        }
-
-        .summaryIcon {
-          width: 66px;
-          height: 66px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          font-size: 28px;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-        }
-
-        .summaryIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
         }
 
         .summaryCard p {
-          margin: 0 0 8px;
-          font-size: 13px;
-          color: #5f665e;
+          margin: 0;
+          color: rgba(248,241,216,.6);
           font-weight: 900;
+          font-size: 12px;
+          letter-spacing: .12em;
+          text-transform: uppercase;
         }
 
         .summaryCard h3 {
-          margin: 0 0 8px;
+          margin: 10px 0 0;
+          color: #fff8dc;
           font-size: 23px;
-          letter-spacing: -1px;
-          color: #101a14;
           word-break: break-word;
-        }
-
-        .summaryCard small {
-          color: #8c6a3c;
-          font-weight: 900;
-          word-break: break-word;
-        }
-
-        .loadingBox,
-        .messageBox {
-          padding: 20px;
-          margin-bottom: 16px;
-          color: #31553d;
-          font-weight: 900;
         }
 
         .grid {
           display: grid;
-          grid-template-columns: 1.35fr 420px;
-          gap: 16px;
-          margin-bottom: 16px;
+          grid-template-columns: 1.25fr .85fr;
+          gap: 18px;
+          margin-bottom: 18px;
         }
 
         .kycGrid {
@@ -671,6 +713,7 @@ export default function ProfilePage() {
         }
 
         .panel {
+          border-radius: 28px;
           padding: 22px;
         }
 
@@ -678,306 +721,234 @@ export default function ProfilePage() {
           display: flex;
           justify-content: space-between;
           align-items: start;
-          gap: 18px;
+          gap: 14px;
           margin-bottom: 18px;
         }
 
-        .panelHead h2,
-        .trustPanel h2 {
+        .panelHead h2 {
           margin: 0;
-          color: #101a14;
-          font-size: 24px;
-        }
-
-        .panelHead p,
-        .trustPanel p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 14px;
-          line-height: 1.6;
+          color: #fff8dc;
+          font-size: 26px;
         }
 
         .formGrid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
           gap: 14px;
+          margin-bottom: 16px;
         }
 
         label {
           display: grid;
           gap: 8px;
-          color: #5f665e;
+          color: rgba(248,241,216,.64);
+          font-size: 12px;
           font-weight: 900;
-          font-size: 13px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
         }
 
         input,
         select {
           width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
+          border: 1px solid rgba(214,178,94,.22);
+          border-radius: 16px;
           padding: 13px 14px;
-          background: rgba(255,253,246,.92);
-          color: #101a14;
+          background: rgba(0,0,0,.25);
+          color: #fff8dc;
           outline: none;
-          font-weight: 800;
         }
 
         input:disabled {
           opacity: .65;
-          cursor: not-allowed;
         }
 
-        .primaryButton {
-          margin-top: 16px;
-          width: 100%;
+        option {
+          color: #07140f;
+        }
+
+        button {
           border: 0;
-          border-radius: 16px;
-          padding: 15px 18px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          font-weight: 900;
+          border-radius: 999px;
+          padding: 12px 18px;
+          background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+          color: #07140f;
+          font-weight: 950;
           cursor: pointer;
-          box-shadow: 0 14px 30px rgba(36,69,54,.18);
         }
 
-        .primaryButton:disabled {
-          opacity: .55;
+        button:disabled {
           cursor: not-allowed;
+          opacity: .55;
         }
 
-        .trustPanel {
-          background:
-            radial-gradient(circle at 90% 8%, rgba(214,178,94,.22), transparent 30%),
-            linear-gradient(135deg, rgba(255,253,246,.92), rgba(243,234,216,.92));
+        .message,
+        .empty {
+          padding: 18px;
+          border-radius: 22px;
+          margin-bottom: 18px;
+          color: #fff8dc;
+          font-weight: 900;
+        }
+
+        .small {
+          box-shadow: none;
+          margin: 0;
+          background: rgba(0,0,0,.22);
         }
 
         .trustList {
-          margin-top: 18px;
           display: grid;
           gap: 12px;
         }
 
-        .statusLine {
+        .info {
           display: flex;
           justify-content: space-between;
-          align-items: center;
-          gap: 12px;
+          gap: 14px;
           padding: 14px;
           border-radius: 18px;
-          background: rgba(255,253,246,.72);
-          border: 1px solid rgba(92,70,35,.10);
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
         }
 
-        .statusLine span {
-          color: #6b6b62;
+        .info p {
+          margin: 0;
+          color: rgba(248,241,216,.58);
           font-weight: 900;
-          font-size: 13px;
-        }
-
-        .statusLine b {
-          color: #101a14;
-          text-align: right;
-          font-size: 13px;
-        }
-
-        .statusLine.ok b {
-          color: #31553d;
-        }
-
-        .statusLine.locked b {
-          color: #8c6a3c;
-        }
-
-        .statusPill {
-          border-radius: 999px;
-          padding: 10px 14px;
-          color: white;
           font-size: 12px;
-          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
+
+        .info strong {
+          color: #fff8dc;
+          text-align: right;
+          word-break: break-word;
+        }
+
+        .pill {
+          border-radius: 999px;
+          padding: 9px 12px;
+          font-size: 12px;
           white-space: nowrap;
         }
 
-        .statusPill.approved { background: #31553d; }
-        .statusPill.pending,
-        .statusPill.not_submitted { background: #8c6a3c; }
-        .statusPill.rejected { background: #a33c2a; }
+        .approved {
+          border-color: rgba(95,220,140,.35);
+        }
+
+        .pending {
+          border-color: rgba(214,178,94,.45);
+        }
+
+        .rejected {
+          border-color: rgba(255,105,105,.4);
+        }
+
+        .notSubmitted {
+          border-color: rgba(255,255,255,.16);
+        }
 
         .lockedBox,
         .rejectedBox,
-        .emptyState {
-          padding: 18px;
+        .riskBox,
+        .uploadBox {
           border-radius: 18px;
-          background: #f3ead8;
-          color: #6b6b62;
-          font-weight: 900;
+          padding: 16px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.14);
+          margin-bottom: 16px;
         }
 
         .lockedBox strong,
         .rejectedBox strong {
-          display: block;
-          color: #101a14;
-          margin-bottom: 8px;
+          color: #fff8dc;
         }
 
         .lockedBox p,
         .rejectedBox p {
-          margin: 0;
+          color: rgba(248,241,216,.68);
+          margin: 8px 0 0;
           line-height: 1.6;
-        }
-
-        .rejectedBox {
-          margin-bottom: 16px;
-          background: rgba(163,60,42,.10);
-          color: #7a2d22;
         }
 
         .uploadGrid {
-          margin-top: 18px;
           display: grid;
           grid-template-columns: repeat(2, 1fr);
           gap: 14px;
+          margin-bottom: 16px;
         }
 
         .uploadBox {
-          cursor: pointer;
-          border-radius: 22px;
-          border: 2px dashed rgba(140,106,60,.28);
-          background: #f3ead8;
-          padding: 18px;
-          transition: .2s ease;
+          margin-bottom: 0;
         }
 
-        .uploadBox:hover {
-          border-color: #8c6a3c;
+        .uploadBox p {
+          margin: 0 0 10px;
+          color: #d6b25e;
+          font-weight: 900;
         }
 
-        .uploadBox strong {
+        .uploadBox small {
           display: block;
-          color: #101a14;
-        }
-
-        .uploadBox span {
-          display: block;
-          margin-top: 6px;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .uploadBox input {
-          margin-top: 12px;
-          background: rgba(255,253,246,.78);
+          margin-top: 8px;
+          color: rgba(248,241,216,.62);
+          word-break: break-word;
         }
 
         .riskBox {
-          margin-top: 18px;
-          display: grid;
-          grid-template-columns: 22px 1fr;
+          display: flex;
+          align-items: start;
           gap: 12px;
-          border-radius: 18px;
-          background: rgba(214,178,94,.16);
-          border: 1px solid rgba(140,106,60,.14);
-          padding: 16px;
-          color: #6b6b62;
-          line-height: 1.6;
+          text-transform: none;
+          letter-spacing: 0;
+          line-height: 1.5;
         }
 
         .riskBox input {
-          width: 18px;
+          width: auto;
           margin-top: 3px;
-        }
-
-        .kycRecord {
-          display: grid;
-          gap: 12px;
-        }
-
-        .infoBox {
-          border-radius: 16px;
-          padding: 14px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .infoBox p {
-          margin: 0;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .08em;
-        }
-
-        .infoBox strong {
-          display: block;
-          margin-top: 6px;
-          color: #101a14;
-          word-break: break-word;
         }
 
         .docLinks {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
           gap: 10px;
-          margin-top: 6px;
+          margin-top: 4px;
         }
 
-        .docLink {
-          display: inline-flex;
-          justify-content: center;
-          border-radius: 999px;
-          padding: 12px 14px;
-          background: #244536;
-          color: white;
+        .docLinks a,
+        .docLinks span {
+          border-radius: 14px;
+          padding: 12px;
+          text-align: center;
           text-decoration: none;
-          font-size: 12px;
           font-weight: 900;
+          border: 1px solid rgba(214,178,94,.14);
+          color: #d6b25e;
+          background: rgba(0,0,0,.22);
         }
 
-        .docLink.disabled {
-          background: #d9ccb0;
-          color: #6b6b62;
-          pointer-events: none;
+        .docLinks span {
+          color: rgba(248,241,216,.45);
         }
 
-        @media (max-width: 1200px) {
-          .cards {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
+        @media (max-width: 980px) {
+          .hero,
           .grid {
+            display: grid;
             grid-template-columns: 1fr;
           }
-        }
 
-        @media (max-width: 760px) {
-          .profilePage {
-            padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .heroBadge {
-            width: 100%;
-          }
-
-          .cards,
+          .stats,
           .formGrid,
-          .uploadGrid,
-          .docLinks {
+          .uploadGrid {
             grid-template-columns: 1fr;
           }
 
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .panelHead {
-            flex-direction: column;
+          .identityCard {
+            min-width: 0;
           }
         }
       `}</style>
@@ -985,44 +956,20 @@ export default function ProfilePage() {
   );
 }
 
-function SummaryCard({
-  label,
-  value,
-  note,
-  icon,
-  gold,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  icon: string;
-  gold?: boolean;
-}) {
+function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="summaryCard">
-      <div className={`summaryIcon ${gold ? "gold" : ""}`}>{icon}</div>
-      <div>
-        <p>{label}</p>
-        <h3>{value}</h3>
-        <small>{note}</small>
-      </div>
-    </div>
+    <article className="summaryCard">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </article>
   );
 }
 
-function StatusLine({
-  label,
-  value,
-  ok,
-}: {
-  label: string;
-  value: string;
-  ok: boolean;
-}) {
+function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`statusLine ${ok ? "ok" : "locked"}`}>
-      <span>{label}</span>
-      <b>{value}</b>
+    <div className="info">
+      <p>{label}</p>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -1037,83 +984,24 @@ function UploadBox({
   onChange: (file: File | null) => void;
 }) {
   return (
-    <label className="uploadBox">
-      <strong>{label}</strong>
-      <span>{file ? file.name : "Upload image or PDF"}</span>
+    <div className="uploadBox">
+      <p>{label}</p>
       <input
         type="file"
         accept="image/*,.pdf"
         onChange={(e) => onChange(e.target.files?.[0] || null)}
       />
-    </label>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="infoBox">
-      <p>{label}</p>
-      <strong>{value}</strong>
+      <small>{file ? file.name : "No file selected"}</small>
     </div>
   );
 }
 
-function DocumentLink({ title, url }: { title: string; url: string | null }) {
-  if (!url) {
-    return <span className="docLink disabled">{title}: Missing</span>;
-  }
+function DocumentLink({ title, url }: { title: string; url: string | null | undefined }) {
+  if (!url) return <span>{title}: Missing</span>;
 
   return (
-    <a className="docLink" href={url} target="_blank" rel="noopener noreferrer">
-      Open {title}
+    <a href={url} target="_blank" rel="noreferrer">
+      View {title}
     </a>
   );
-}
-
-function statusClass(status: string | null) {
-  return (status || "NOT_SUBMITTED").toLowerCase();
-}
-
-function statusLabel(status: string | null) {
-  const value = status || "NOT_SUBMITTED";
-
-  if (value === "APPROVED") return "VERIFIED";
-  if (value === "PENDING") return "PENDING REVIEW";
-  if (value === "REJECTED") return "REJECTED";
-  return "NOT SUBMITTED";
-}
-
-function trustTitle(status: string | null) {
-  if (status === "APPROVED") return "Verified Profile";
-  if (status === "PENDING") return "Pending Admin Review";
-  if (status === "REJECTED") return "KYC Needs Resubmission";
-  return "Verification Required";
-}
-
-function trustDescription(status: string | null) {
-  if (status === "APPROVED") {
-    return "Your profile is verified. Withdrawals and sell tree requests are unlocked.";
-  }
-
-  if (status === "PENDING") {
-    return "Your KYC has been submitted and is waiting for admin review.";
-  }
-
-  if (status === "REJECTED") {
-    return "Your previous KYC was rejected. Please submit corrected documents.";
-  }
-
-  return "Submit your identity documents to unlock financial and tree sale features.";
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

@@ -7,12 +7,13 @@ type WithdrawalRequest = {
   id: string;
   profile_id: string | null;
   amount: number | null;
-  payout_method: string | null;
-  account_name: string | null;
-  account_number: string | null;
+  processing_fee: number | null;
+  net_receive: number | null;
   status: string | null;
-  notes: string | null;
   created_at: string | null;
+  payout_method: string | null;
+  payout_account_name: string | null;
+  payout_account_number: string | null;
 };
 
 type ProfileRow = {
@@ -25,15 +26,57 @@ type WalletRow = {
   id: string;
   profile_id: string | null;
   balance: number | null;
+};
+
+type WalletTransaction = {
+  id: string;
+  profile_id: string | null;
+  transaction_type: string | null;
+  amount: number | null;
+  reference_no: string | null;
+  description: string | null;
+  status: string | null;
   created_at: string | null;
 };
 
 type TabKey = "PENDING" | "PROCESSING" | "PAID" | "REJECTED" | "ALL";
 
+function normalize(value: any) {
+  return String(value || "PENDING").trim().toUpperCase();
+}
+
+function peso(value: number | null | undefined) {
+  return Number(value || 0).toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  });
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function statusClass(value: string | null | undefined) {
+  const status = normalize(value);
+
+  if (status === "PAID" || status === "COMPLETED") return "paid";
+  if (status === "PROCESSING") return "processing";
+  if (status === "REJECTED") return "rejected";
+  return "pending";
+}
+
 export default function AdminWithdrawalsPage() {
   const [requests, setRequests] = useState<WithdrawalRequest[]>([]);
-  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
-  const [wallets, setWallets] = useState<WalletRow[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, ProfileRow>>({});
+  const [wallets, setWallets] = useState<Record<string, WalletRow>>({});
+  const [transactions, setTransactions] = useState<Record<string, WalletTransaction>>({});
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
   const [message, setMessage] = useState("");
@@ -50,7 +93,7 @@ export default function AdminWithdrawalsPage() {
     const { data: requestRows, error: requestError } = await supabase
       .from("withdrawal_requests")
       .select(
-        "id, profile_id, amount, payout_method, account_name, account_number, status, notes, created_at"
+        "id, profile_id, amount, processing_fee, net_receive, status, created_at, payout_method, payout_account_name, payout_account_number"
       )
       .order("created_at", { ascending: false });
 
@@ -61,308 +104,211 @@ export default function AdminWithdrawalsPage() {
       return;
     }
 
-    const profileIds = Array.from(
-      new Set((requestRows || []).map((item) => item.profile_id).filter(Boolean))
-    ) as string[];
+    const rows = (requestRows || []) as WithdrawalRequest[];
+    setRequests(rows);
 
-    let profileRows: ProfileRow[] = [];
-    let walletRows: WalletRow[] = [];
+    const profileIds = Array.from(new Set(rows.map((item) => item.profile_id).filter(Boolean))) as string[];
+    const requestIds = rows.map((item) => item.id).filter(Boolean);
 
     if (profileIds.length > 0) {
-      const { data: profileData, error: profileError } = await supabase
+      const { data: profileRows } = await supabase
         .from("profiles")
         .select("id, full_name, email")
         .in("id", profileIds);
 
-      if (profileError) {
-        setMessage(profileError.message);
-      } else {
-        profileRows = (profileData || []) as ProfileRow[];
-      }
+      const profileMap: Record<string, ProfileRow> = {};
+      ((profileRows || []) as ProfileRow[]).forEach((profile) => {
+        profileMap[profile.id] = profile;
+      });
+      setProfiles(profileMap);
 
-      const { data: walletData, error: walletError } = await supabase
+      const { data: walletRows } = await supabase
         .from("wallets")
-        .select("id, profile_id, balance, created_at")
-        .in("profile_id", profileIds)
-        .order("created_at", { ascending: false });
+        .select("id, profile_id, balance")
+        .in("profile_id", profileIds);
 
-      if (walletError) {
-        setMessage(walletError.message);
-      } else {
-        walletRows = (walletData || []) as WalletRow[];
-      }
+      const walletMap: Record<string, WalletRow> = {};
+      ((walletRows || []) as WalletRow[]).forEach((wallet) => {
+        if (wallet.profile_id) walletMap[wallet.profile_id] = wallet;
+      });
+      setWallets(walletMap);
+    } else {
+      setProfiles({});
+      setWallets({});
     }
 
-    setRequests((requestRows || []) as WithdrawalRequest[]);
-    setProfiles(profileRows);
-    setWallets(walletRows);
+    if (requestIds.length > 0) {
+      const { data: txRows } = await supabase
+        .from("wallet_transactions")
+        .select("id, profile_id, transaction_type, amount, reference_no, description, status, created_at")
+        .in("reference_no", requestIds);
+
+      const txMap: Record<string, WalletTransaction> = {};
+      ((txRows || []) as WalletTransaction[]).forEach((tx) => {
+        if (tx.reference_no && !txMap[tx.reference_no]) txMap[tx.reference_no] = tx;
+      });
+      setTransactions(txMap);
+    } else {
+      setTransactions({});
+    }
+
     setLoading(false);
   }
 
-  function normalizeStatus(value: string | null) {
-    const status = String(value || "PENDING").toUpperCase();
+  const grouped = useMemo(() => {
+    const pending = requests.filter((item) => normalize(item.status) === "PENDING");
+    const processing = requests.filter((item) => normalize(item.status) === "PROCESSING");
+    const paid = requests.filter((item) => normalize(item.status) === "PAID");
+    const rejected = requests.filter((item) => normalize(item.status) === "REJECTED");
 
-    if (status === "APPROVED") return "PROCESSING";
-    if (status === "COMPLETED") return "PAID";
-
-    return status;
-  }
-
-  const pendingRequests = useMemo(
-    () => requests.filter((item) => normalizeStatus(item.status) === "PENDING"),
-    [requests]
-  );
-
-  const processingRequests = useMemo(
-    () =>
-      requests.filter(
-        (item) => normalizeStatus(item.status) === "PROCESSING"
-      ),
-    [requests]
-  );
-
-  const paidRequests = useMemo(
-    () => requests.filter((item) => normalizeStatus(item.status) === "PAID"),
-    [requests]
-  );
-
-  const rejectedRequests = useMemo(
-    () => requests.filter((item) => normalizeStatus(item.status) === "REJECTED"),
-    [requests]
-  );
+    return { pending, processing, paid, rejected };
+  }, [requests]);
 
   const activeRequests = useMemo(() => {
-    if (tab === "PENDING") return pendingRequests;
-    if (tab === "PROCESSING") return processingRequests;
-    if (tab === "PAID") return paidRequests;
-    if (tab === "REJECTED") return rejectedRequests;
+    if (tab === "PENDING") return grouped.pending;
+    if (tab === "PROCESSING") return grouped.processing;
+    if (tab === "PAID") return grouped.paid;
+    if (tab === "REJECTED") return grouped.rejected;
     return requests;
-  }, [tab, requests, pendingRequests, processingRequests, paidRequests, rejectedRequests]);
+  }, [tab, grouped, requests]);
 
-  const totalPendingAmount = pendingRequests.reduce(
-    (sum, request) => sum + Number(request.amount || 0),
-    0
-  );
+  const pendingAmount = grouped.pending.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const processingAmount = grouped.processing.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const paidAmount = grouped.paid.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-  const totalProcessingAmount = processingRequests.reduce(
-    (sum, request) => sum + Number(request.amount || 0),
-    0
-  );
+  async function upsertWithdrawalTransaction(
+    request: WithdrawalRequest,
+    status: "PROCESSING" | "COMPLETED" | "REJECTED"
+  ) {
+    if (!request.profile_id) throw new Error("Profile ID missing.");
 
-  const totalPaidAmount = paidRequests.reduce(
-    (sum, request) => sum + Number(request.amount || 0),
-    0
-  );
+    const existing = transactions[request.id];
+    const amount = status === "COMPLETED" ? -Math.abs(Number(request.amount || 0)) : 0;
+    const transactionType =
+      status === "COMPLETED"
+        ? "WITHDRAWAL"
+        : status === "PROCESSING"
+        ? "WITHDRAWAL_PROCESSING"
+        : "WITHDRAWAL_REJECTED";
 
-  function getProfile(profileId: string | null) {
-    return profiles.find((profile) => profile.id === profileId) || null;
-  }
+    const description =
+      status === "COMPLETED"
+        ? `Withdrawal paid via ${request.payout_method || "payout method"}. Account: ${
+            request.payout_account_name || "N/A"
+          } - ${request.payout_account_number || "N/A"}.`
+        : status === "PROCESSING"
+        ? `Withdrawal moved to processing. Amount: ${peso(request.amount)}.`
+        : `Withdrawal rejected. Amount: ${peso(request.amount)}.`;
 
-  function getLatestWallet(profileId: string | null) {
-    return wallets.find((wallet) => wallet.profile_id === profileId) || null;
-  }
+    if (existing) {
+      const { error } = await supabase
+        .from("wallet_transactions")
+        .update({
+          transaction_type: transactionType,
+          amount,
+          status,
+          description,
+        })
+        .eq("id", existing.id);
 
-  function formatMoney(value: number | null) {
-    return Number(value || 0).toLocaleString("en-PH", {
-      style: "currency",
-      currency: "PHP",
+      if (error) throw error;
+      return;
+    }
+
+    const { error } = await supabase.from("wallet_transactions").insert({
+      profile_id: request.profile_id,
+      transaction_type: transactionType,
+      amount,
+      reference_no: request.id,
+      description,
+      status,
+      created_at: new Date().toISOString(),
     });
-  }
 
-  function formatDate(dateValue: string | null) {
-    if (!dateValue) return "—";
-
-    return new Date(dateValue).toLocaleString("en-PH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-
-  function badgeClass(value: string | null) {
-    const status = normalizeStatus(value);
-
-    if (status === "PAID") {
-      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
-    }
-
-    if (status === "PROCESSING") {
-      return "border-blue-400/30 bg-blue-500/20 text-blue-200";
-    }
-
-    if (status === "PENDING") {
-      return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
-    }
-
-    if (status === "REJECTED" || status === "FAILED") {
-      return "border-red-400/30 bg-red-500/20 text-red-200";
-    }
-
-    return "border-white/10 bg-white/10 text-white/60";
+    if (error) throw error;
   }
 
   async function markProcessing(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
 
-    const amount = Number(request.amount || 0);
-
-    if (amount <= 0) {
-      setMessage("Invalid withdrawal amount.");
+    if (normalize(request.status) !== "PENDING") {
+      setMessage("Only PENDING withdrawals can be moved to PROCESSING.");
       return;
     }
 
-    if (!request.account_name || !request.account_number || !request.payout_method) {
-      setMessage("Payout method, account name, and account number are required before processing.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Move withdrawal of ${formatMoney(amount)} to PROCESSING?`
-    );
-
+    const confirmed = window.confirm(`Move withdrawal ${peso(request.amount)} to PROCESSING?`);
     if (!confirmed) return;
 
     setActionLoading(request.id);
     setMessage("");
 
-    const { error: requestError } = await supabase
-      .from("withdrawal_requests")
-      .update({
-        status: "PROCESSING",
-        notes:
-          request.notes ||
-          "Withdrawal verified by admin and moved to processing.",
-      })
-      .eq("id", request.id);
+    try {
+      const { error } = await supabase
+        .from("withdrawal_requests")
+        .update({ status: "PROCESSING" })
+        .eq("id", request.id)
+        .eq("status", "PENDING");
 
-    if (requestError) {
-      setMessage(requestError.message);
-      setActionLoading("");
-      return;
-    }
+      if (error) throw error;
 
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "WITHDRAWAL_PROCESSING",
-      amount: 0,
-      reference_no: request.id,
-      status: "PROCESSING",
-      description: `Withdrawal processing via ${
-        request.payout_method || "payout method"
-      }. Account: ${request.account_name || "N/A"} - ${
-        request.account_number || "N/A"
-      }.`,
-    });
+      await upsertWithdrawalTransaction(request, "PROCESSING");
 
-    if (txError) {
-      setMessage(`Moved to processing, but transaction log failed: ${txError.message}`);
-      setActionLoading("");
+      setMessage("Withdrawal moved to PROCESSING.");
       await loadData();
-      return;
+      setTab("PROCESSING");
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to move withdrawal to processing.");
     }
 
-    setMessage("Withdrawal moved to PROCESSING.");
     setActionLoading("");
-    await loadData();
-    setTab("PROCESSING");
   }
 
   async function markPaid(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
 
-    const amount = Number(request.amount || 0);
+    const currentStatus = normalize(request.status);
 
-    if (amount <= 0) {
-      setMessage("Invalid withdrawal amount.");
+    if (currentStatus !== "PROCESSING" && currentStatus !== "PENDING") {
+      setMessage("Only PENDING or PROCESSING withdrawals can be marked PAID.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Mark this payout as PAID? Confirm that money was already sent to the customer's account.`
+      "Mark this withdrawal as PAID? This will NOT deduct wallet again."
     );
-
     if (!confirmed) return;
 
     setActionLoading(request.id);
     setMessage("");
 
-    const wallet = getLatestWallet(request.profile_id);
+    try {
+      const { error } = await supabase
+        .from("withdrawal_requests")
+        .update({ status: "PAID" })
+        .eq("id", request.id)
+        .in("status", ["PENDING", "PROCESSING"]);
 
-    if (!wallet) {
-      setMessage("Wallet not found for this customer.");
-      setActionLoading("");
-      return;
-    }
+      if (error) throw error;
 
-    const currentBalance = Number(wallet.balance || 0);
+      await upsertWithdrawalTransaction(request, "COMPLETED");
 
-    if (currentBalance < amount) {
-      setMessage("Insufficient wallet balance for this withdrawal.");
-      setActionLoading("");
-      return;
-    }
-
-    const newBalance = currentBalance - amount;
-
-    const { error: walletError } = await supabase
-      .from("wallets")
-      .update({
-        balance: newBalance,
-      })
-      .eq("id", wallet.id);
-
-    if (walletError) {
-      setMessage(walletError.message);
-      setActionLoading("");
-      return;
-    }
-
-    const { error: requestError } = await supabase
-      .from("withdrawal_requests")
-      .update({
-        status: "PAID",
-        notes:
-          request.notes ||
-          "Payout completed by admin. Money was sent to destination account.",
-      })
-      .eq("id", request.id);
-
-    if (requestError) {
-      setMessage(requestError.message);
-      setActionLoading("");
-      return;
-    }
-
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "WITHDRAWAL_PAID",
-      amount: -Math.abs(amount),
-      reference_no: request.id,
-      status: "PAID",
-      description: `Withdrawal paid via ${
-        request.payout_method || "payout method"
-      }. Account: ${request.account_name || "N/A"} - ${
-        request.account_number || "N/A"
-      }.`,
-    });
-
-    if (txError) {
-      setMessage(`Wallet deducted, but transaction log failed: ${txError.message}`);
-      setActionLoading("");
+      setMessage("Withdrawal marked as PAID. Wallet was not deducted again.");
       await loadData();
-      return;
+      setTab("PAID");
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to mark withdrawal as paid.");
     }
 
-    setMessage("Withdrawal marked as PAID. Wallet deducted and transaction recorded.");
     setActionLoading("");
-    await loadData();
-    setTab("PAID");
   }
 
   async function rejectWithdrawal(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
+
+    if (["PAID", "REJECTED"].includes(normalize(request.status))) {
+      setMessage("Paid or rejected withdrawals cannot be rejected again.");
+      return;
+    }
 
     const confirmed = window.confirm("Reject this withdrawal request?");
     if (!confirmed) return;
@@ -370,263 +316,375 @@ export default function AdminWithdrawalsPage() {
     setActionLoading(request.id);
     setMessage("");
 
-    const { error: requestError } = await supabase
-      .from("withdrawal_requests")
-      .update({
-        status: "REJECTED",
-        notes: request.notes || "Withdrawal rejected by admin.",
-      })
-      .eq("id", request.id);
+    try {
+      const { error } = await supabase
+        .from("withdrawal_requests")
+        .update({ status: "REJECTED" })
+        .eq("id", request.id)
+        .in("status", ["PENDING", "PROCESSING"]);
 
-    if (requestError) {
-      setMessage(requestError.message);
-      setActionLoading("");
-      return;
-    }
+      if (error) throw error;
 
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "WITHDRAWAL_REJECTED",
-      amount: 0,
-      reference_no: request.id,
-      status: "REJECTED",
-      description: `Withdrawal rejected. Amount: ${formatMoney(
-        Number(request.amount || 0)
-      )}.`,
-    });
+      await upsertWithdrawalTransaction(request, "REJECTED");
 
-    if (txError) {
-      setMessage(`Rejected, but transaction log failed: ${txError.message}`);
-      setActionLoading("");
+      setMessage("Withdrawal rejected.");
       await loadData();
-      return;
+      setTab("REJECTED");
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to reject withdrawal.");
     }
 
-    setMessage("Withdrawal rejected and moved to rejected history.");
     setActionLoading("");
-    await loadData();
-    setTab("REJECTED");
   }
 
   return (
-    <main className="min-h-screen p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-              Admin Finance Center
-            </p>
-
-            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Payout Queue / Withdrawals
-            </h1>
-
-            <p className="mt-2 text-white/70">
-              Review customer withdrawal requests, verify account details, move
-              to processing, then mark as paid after sending money.
-            </p>
-          </div>
-
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
-          >
-            {loading ? "Refreshing..." : "Refresh Withdrawals"}
-          </button>
+    <main className="page">
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Admin Finance Center</p>
+          <h1>Payout Queue / Withdrawals</h1>
+          <span>
+            Review withdrawal requests, move to processing, and mark paid after external payout.
+            Admin does not deduct customer wallet again.
+          </span>
         </div>
 
-        {message && (
-          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
-            {message}
+        <button onClick={loadData} disabled={loading}>
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </section>
+
+      {message && <div className="message">{message}</div>}
+
+      <section className="stats">
+        <Stat label="Pending" value={String(grouped.pending.length)} />
+        <Stat label="Processing" value={String(grouped.processing.length)} />
+        <Stat label="Paid" value={String(grouped.paid.length)} />
+        <Stat label="Rejected" value={String(grouped.rejected.length)} />
+        <Stat label="Pending Amount" value={peso(pendingAmount)} />
+        <Stat label="Processing Amount" value={peso(processingAmount)} />
+        <Stat label="Total Paid" value={peso(paidAmount)} />
+      </section>
+
+      <section className="tabs">
+        {(["PENDING", "PROCESSING", "PAID", "REJECTED", "ALL"] as TabKey[]).map((item) => (
+          <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>
+            {item}
+          </button>
+        ))}
+      </section>
+
+      <section className="panel">
+        {loading ? (
+          <div className="empty">Loading withdrawal requests...</div>
+        ) : activeRequests.length === 0 ? (
+          <div className="empty">No withdrawal requests in this tab.</div>
+        ) : (
+          <div className="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Amount</th>
+                  <th>Fee</th>
+                  <th>Net Receive</th>
+                  <th>Wallet Balance</th>
+                  <th>Payout</th>
+                  <th>Status</th>
+                  <th>Submitted</th>
+                  <th>Transaction</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {activeRequests.map((request) => {
+                  const profile = request.profile_id ? profiles[request.profile_id] : null;
+                  const wallet = request.profile_id ? wallets[request.profile_id] : null;
+                  const tx = transactions[request.id];
+                  const status = normalize(request.status);
+                  const processing = actionLoading === request.id;
+
+                  return (
+                    <tr key={request.id}>
+                      <td>
+                        <strong>{profile?.full_name || "Unknown Customer"}</strong>
+                        <small>{profile?.email || request.profile_id || "No profile"}</small>
+                      </td>
+
+                      <td>{peso(request.amount)}</td>
+                      <td>{peso(request.processing_fee)}</td>
+                      <td>{peso(request.net_receive || request.amount)}</td>
+                      <td>{peso(wallet?.balance)}</td>
+
+                      <td>
+                        <strong>{request.payout_method || "—"}</strong>
+                        <small>{request.payout_account_name || "No account name"}</small>
+                        <small>{request.payout_account_number || "No account number"}</small>
+                      </td>
+
+                      <td>
+                        <span className={`badge ${statusClass(status)}`}>{status}</span>
+                      </td>
+
+                      <td>{formatDate(request.created_at)}</td>
+
+                      <td>
+                        {tx ? (
+                          <>
+                            <strong>{tx.transaction_type || "WITHDRAWAL"}</strong>
+                            <small>{tx.status || "—"}</small>
+                          </>
+                        ) : (
+                          <small>No wallet log yet</small>
+                        )}
+                      </td>
+
+                      <td>
+                        <div className="actions">
+                          <button
+                            disabled={processing || status !== "PENDING"}
+                            onClick={() => markProcessing(request)}
+                          >
+                            Processing
+                          </button>
+
+                          <button
+                            disabled={processing || !["PENDING", "PROCESSING"].includes(status)}
+                            onClick={() => markPaid(request)}
+                          >
+                            Paid
+                          </button>
+
+                          <button
+                            disabled={processing || ["PAID", "REJECTED"].includes(status)}
+                            onClick={() => rejectWithdrawal(request)}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
+      </section>
 
-        <section className="grid gap-4 md:grid-cols-5">
-          <StatCard label="Pending" value={String(pendingRequests.length)} />
-          <StatCard label="Processing" value={String(processingRequests.length)} />
-          <StatCard label="Paid" value={String(paidRequests.length)} />
-          <StatCard label="Rejected" value={String(rejectedRequests.length)} />
-          <StatCard label="Pending Amount" value={formatMoney(totalPendingAmount)} />
-        </section>
+      <style>{`
+        * { box-sizing: border-box; }
 
-        <section className="grid gap-4 md:grid-cols-2">
-          <StatCard label="Processing Amount" value={formatMoney(totalProcessingAmount)} />
-          <StatCard label="Total Paid" value={formatMoney(totalPaidAmount)} />
-        </section>
+        .page {
+          min-height: 100vh;
+          padding: 30px;
+          color: white;
+          font-family: Arial, Helvetica, sans-serif;
+          background: #071f16;
+        }
 
-        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
-          <div className="flex flex-wrap gap-3">
-            {["PENDING", "PROCESSING", "PAID", "REJECTED", "ALL"].map((item) => (
-              <button
-                key={item}
-                onClick={() => setTab(item as TabKey)}
-                className={`rounded-full px-5 py-3 text-sm font-bold transition ${
-                  tab === item
-                    ? "bg-[#f7d774] text-[#071f16]"
-                    : "bg-white/10 text-white hover:bg-white/15"
-                }`}
-              >
-                {item === "PENDING"
-                  ? "Pending Queue"
-                  : item === "PROCESSING"
-                  ? "Processing"
-                  : item === "PAID"
-                  ? "Paid History"
-                  : item === "REJECTED"
-                  ? "Rejected History"
-                  : "All Records"}
-              </button>
-            ))}
-          </div>
-        </section>
+        .hero {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: start;
+          margin-bottom: 22px;
+        }
 
-        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
-          {loading ? (
-            <div className="p-8 text-white/70">Loading withdrawal requests...</div>
-          ) : activeRequests.length === 0 ? (
-            <div className="p-8 text-white/70">No withdrawal requests in this tab.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1250px] text-left text-sm">
-                <thead className="bg-[#071f16]/80 text-white/70">
-                  <tr>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Amount</th>
-                    <th className="px-5 py-4">Wallet Balance</th>
-                    <th className="px-5 py-4">Payout Method</th>
-                    <th className="px-5 py-4">Account Details</th>
-                    <th className="px-5 py-4">Status</th>
-                    <th className="px-5 py-4">Created</th>
-                    <th className="px-5 py-4">Notes</th>
-                    <th className="px-5 py-4">Action</th>
-                  </tr>
-                </thead>
+        .eyebrow {
+          margin: 0 0 8px;
+          color: #d9b45f;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .22em;
+          text-transform: uppercase;
+        }
 
-                <tbody>
-                  {activeRequests.map((request) => {
-                    const profile = getProfile(request.profile_id);
-                    const wallet = getLatestWallet(request.profile_id);
-                    const status = normalizeStatus(request.status);
+        h1 {
+          margin: 0;
+          color: #d9b45f;
+          font-size: 40px;
+        }
 
-                    return (
-                      <tr
-                        key={request.id}
-                        className="border-t border-white/10 hover:bg-white/5"
-                      >
-                        <td className="px-5 py-4">
-                          <div className="font-semibold text-white">
-                            {profile?.full_name || "Unknown Customer"}
-                          </div>
-                          <div className="mt-1 text-xs text-white/50">
-                            {profile?.email || request.profile_id || "No profile"}
-                          </div>
-                        </td>
+        .hero span {
+          display: block;
+          margin-top: 8px;
+          color: rgba(255,255,255,.7);
+          max-width: 850px;
+          line-height: 1.6;
+        }
 
-                        <td className="px-5 py-4 font-bold text-[#f7d774]">
-                          {formatMoney(request.amount)}
-                        </td>
+        .message,
+        .panel,
+        .stat,
+        .tabs {
+          border: 1px solid rgba(255,255,255,.1);
+          background: rgba(255,255,255,.08);
+          border-radius: 22px;
+          box-shadow: 0 20px 50px rgba(0,0,0,.22);
+        }
 
-                        <td className="px-5 py-4 text-white/80">
-                          {formatMoney(wallet?.balance || 0)}
-                        </td>
+        .message {
+          padding: 16px;
+          margin-bottom: 18px;
+          color: #ffe8a3;
+          font-weight: 900;
+        }
 
-                        <td className="px-5 py-4">
-                          {request.payout_method || "—"}
-                        </td>
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 14px;
+          margin-bottom: 18px;
+        }
 
-                        <td className="px-5 py-4">
-                          <div className="font-semibold">
-                            {request.account_name || "—"}
-                          </div>
-                          <div className="mt-1 text-xs text-white/50">
-                            {request.account_number || "No account number"}
-                          </div>
-                        </td>
+        .stat {
+          padding: 18px;
+        }
 
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              request.status
-                            )}`}
-                          >
-                            {status}
-                          </span>
-                        </td>
+        .stat p {
+          margin: 0;
+          color: rgba(255,255,255,.6);
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
 
-                        <td className="px-5 py-4 text-white/70">
-                          {formatDate(request.created_at)}
-                        </td>
+        .stat h3 {
+          margin: 8px 0 0;
+          color: #f7d774;
+          font-size: 24px;
+        }
 
-                        <td className="px-5 py-4 text-white/60">
-                          {request.notes || "—"}
-                        </td>
+        .tabs {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          padding: 12px;
+          margin-bottom: 18px;
+        }
 
-                        <td className="px-5 py-4">
-                          {status === "PENDING" && (
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                onClick={() => markProcessing(request)}
-                                disabled={actionLoading === request.id}
-                                className="rounded-xl bg-blue-500/20 px-4 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
-                              >
-                                Processing
-                              </button>
+        button {
+          border: 0;
+          border-radius: 999px;
+          padding: 11px 14px;
+          background: rgba(255,255,255,.1);
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
+        }
 
-                              <button
-                                onClick={() => rejectWithdrawal(request)}
-                                disabled={actionLoading === request.id}
-                                className="rounded-xl bg-red-500/20 px-4 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-50"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          )}
+        button.active,
+        .hero button {
+          background: #f7d774;
+          color: #071f16;
+        }
 
-                          {status === "PROCESSING" && (
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                onClick={() => markPaid(request)}
-                                disabled={actionLoading === request.id}
-                                className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
-                              >
-                                Mark Paid
-                              </button>
+        button:disabled {
+          opacity: .45;
+          cursor: not-allowed;
+        }
 
-                              <button
-                                onClick={() => rejectWithdrawal(request)}
-                                disabled={actionLoading === request.id}
-                                className="rounded-xl bg-red-500/20 px-4 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-50"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          )}
+        .panel {
+          padding: 18px;
+        }
 
-                          {["PAID", "REJECTED"].includes(status) && (
-                            <span className="text-xs text-white/50">
-                              Completed
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
+        .empty {
+          padding: 20px;
+          color: rgba(255,255,255,.7);
+        }
+
+        .tableWrap {
+          overflow-x: auto;
+        }
+
+        table {
+          width: 100%;
+          min-width: 1250px;
+          border-collapse: collapse;
+          font-size: 14px;
+        }
+
+        th {
+          text-align: left;
+          padding: 14px;
+          color: rgba(255,255,255,.65);
+          background: rgba(0,0,0,.25);
+        }
+
+        td {
+          padding: 14px;
+          border-top: 1px solid rgba(255,255,255,.1);
+          vertical-align: top;
+        }
+
+        td strong {
+          display: block;
+          color: white;
+        }
+
+        td small {
+          display: block;
+          margin-top: 4px;
+          color: rgba(255,255,255,.55);
+          word-break: break-word;
+        }
+
+        .badge {
+          display: inline-flex;
+          border-radius: 999px;
+          padding: 8px 12px;
+          font-weight: 900;
+          font-size: 12px;
+        }
+
+        .paid {
+          background: rgba(16,185,129,.18);
+          color: #bbf7d0;
+        }
+
+        .processing {
+          background: rgba(59,130,246,.18);
+          color: #bfdbfe;
+        }
+
+        .pending {
+          background: rgba(217,180,95,.18);
+          color: #fde68a;
+        }
+
+        .rejected {
+          background: rgba(239,68,68,.18);
+          color: #fecaca;
+        }
+
+        .actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        @media (max-width: 900px) {
+          .hero {
+            display: grid;
+          }
+
+          .stats {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </main>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
-      <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
-    </div>
+    <article className="stat">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </article>
   );
 }
