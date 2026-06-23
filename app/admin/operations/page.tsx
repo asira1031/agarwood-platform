@@ -420,6 +420,220 @@ export default function AdminOperationsPage() {
     await loadData();
   }
 
+  async function restoreProtectionTrees(item: OperationItem) {
+    const now = new Date().toISOString();
+
+    if (item.assignmentMode === "FOREST" && item.request.group_id) {
+      const customerProfileId = item.request.customer_profile_id || item.request.profile_id;
+
+      let query = supabase
+        .from("trees")
+        .update({
+          care_status: "PENDING_ACTIVATION",
+          care_program_status: "PENDING",
+          updated_at: now,
+        })
+        .eq("group_id", item.request.group_id);
+
+      if (customerProfileId) query = query.eq("customer_profile_id", customerProfileId);
+
+      await query;
+      return;
+    }
+
+    const treeId = item.request.tree_id || item.tree?.id;
+
+    if (treeId) {
+      await supabase
+        .from("trees")
+        .update({
+          care_status: "PENDING_ACTIVATION",
+          care_program_status: "PENDING",
+          updated_at: now,
+        })
+        .eq("id", treeId);
+    }
+  }
+
+  async function approveProtection(item: OperationItem) {
+    setMessage("");
+
+    const requestCareStatus = normalizeStatus(item.request.care_program_status);
+    const taskStatus = normalizeStatus(item.task?.status || "");
+    const evidenceStatus = normalizeStatus(item.task?.evidence_status || "");
+
+    if (requestCareStatus !== "PENDING") {
+      setMessage("Only PENDING protection requests can be approved.");
+      return;
+    }
+
+    if (!item.task?.id) {
+      setMessage("Gardener evidence is required before protection approval.");
+      return;
+    }
+
+    if (
+      !["SUBMITTED", "COMPLETED"].includes(taskStatus) &&
+      !["SUBMITTED", "APPROVED"].includes(evidenceStatus)
+    ) {
+      setMessage("Gardener must submit evidence before protection approval.");
+      return;
+    }
+
+    if (item.assignmentMode === "TREE" && !item.request.tree_id && !item.tree?.id) {
+      setMessage("Tree-level protection approval needs a linked tree.");
+      return;
+    }
+
+    if (item.assignmentMode === "FOREST" && !item.request.group_id) {
+      setMessage("Forest-level protection approval needs a linked forest group.");
+      return;
+    }
+
+    const confirmed = window.confirm("Approve protection and activate customer tree care?");
+    if (!confirmed) return;
+
+    const now = new Date().toISOString();
+
+    setProcessingId(item.request.id);
+
+    if (item.assignmentMode === "FOREST") {
+      const customerProfileId = item.request.customer_profile_id || item.request.profile_id;
+
+      let treeUpdate = supabase
+        .from("trees")
+        .update({
+          care_status: "SUBSCRIBED",
+          care_program_status: "ACTIVE",
+          care_started_at: now,
+          updated_at: now,
+        })
+        .eq("group_id", item.request.group_id);
+
+      if (customerProfileId) treeUpdate = treeUpdate.eq("customer_profile_id", customerProfileId);
+
+      const { error: treeError } = await treeUpdate;
+
+      if (treeError) {
+        setMessage(treeError.message);
+        setProcessingId("");
+        return;
+      }
+    } else {
+      const treeId = item.request.tree_id || item.tree?.id;
+
+      const { error: treeError } = await supabase
+        .from("trees")
+        .update({
+          care_status: "SUBSCRIBED",
+          care_program_status: "ACTIVE",
+          care_started_at: now,
+          updated_at: now,
+        })
+        .eq("id", treeId);
+
+      if (treeError) {
+        setMessage(treeError.message);
+        setProcessingId("");
+        return;
+      }
+    }
+
+    const { error: requestError } = await supabase
+      .from("tree_operation_requests")
+      .update({
+        status: "COMPLETED",
+        assignment_status: "COMPLETED",
+        care_program_status: "ACTIVE",
+        completed_at: now,
+        updated_at: now,
+      })
+      .eq("id", item.request.id);
+
+    if (requestError) {
+      await restoreProtectionTrees(item);
+      setMessage(`Request sync failed. Tree rollback applied: ${requestError.message}`);
+      setProcessingId("");
+      return;
+    }
+
+    if (item.assignment?.id) {
+      const { error: assignmentError } = await supabase
+        .from("caretaker_assignments")
+        .update({
+          status: "COMPLETED",
+          completed_at: now,
+          updated_at: now,
+        })
+        .eq("id", item.assignment.id);
+
+      if (assignmentError) {
+        await restoreProtectionTrees(item);
+        await supabase
+          .from("tree_operation_requests")
+          .update({
+            status: item.request.status || "SUBMITTED",
+            assignment_status: item.request.assignment_status || "SUBMITTED",
+            care_program_status: "PENDING",
+            completed_at: item.request.completed_at || null,
+            updated_at: now,
+          })
+          .eq("id", item.request.id);
+
+        setMessage(`Assignment sync failed. Rollback applied: ${assignmentError.message}`);
+        setProcessingId("");
+        return;
+      }
+    }
+
+    if (item.task?.id) {
+      const { error: taskError } = await supabase
+        .from("caretaker_task_logs")
+        .update({
+          status: "COMPLETED",
+          evidence_status: "APPROVED",
+          completed_at: now,
+          updated_at: now,
+        })
+        .eq("id", item.task.id);
+
+      if (taskError) {
+        await restoreProtectionTrees(item);
+
+        if (item.assignment?.id) {
+          await supabase
+            .from("caretaker_assignments")
+            .update({
+              status: item.assignment.status || "SUBMITTED",
+              completed_at: item.assignment.completed_at || null,
+              updated_at: now,
+            })
+            .eq("id", item.assignment.id);
+        }
+
+        await supabase
+          .from("tree_operation_requests")
+          .update({
+            status: item.request.status || "SUBMITTED",
+            assignment_status: item.request.assignment_status || "SUBMITTED",
+            care_program_status: "PENDING",
+            completed_at: item.request.completed_at || null,
+            updated_at: now,
+          })
+          .eq("id", item.request.id);
+
+        setMessage(`Task sync failed. Rollback applied: ${taskError.message}`);
+        setProcessingId("");
+        return;
+      }
+    }
+
+    setMessage("Protection approved. Customer trees are now SUBSCRIBED / ACTIVE.");
+    setProcessingId("");
+    await loadData();
+    setTab("COMPLETED");
+  }
+
   return (
     <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.28),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
@@ -511,6 +725,7 @@ export default function AdminOperationsPage() {
                 }
                 assignGardener={() => assignGardener(item)}
                 cancelRequest={() => cancelRequest(item)}
+                approveProtection={() => approveProtection(item)}
                 processing={processingId === item.request.id}
               />
             ))
@@ -528,6 +743,7 @@ function OperationCard({
   setSelectedCaretaker,
   assignGardener,
   cancelRequest,
+  approveProtection,
   processing,
 }: {
   item: OperationItem;
@@ -536,6 +752,7 @@ function OperationCard({
   setSelectedCaretaker: (value: string) => void;
   assignGardener: () => void;
   cancelRequest: () => void;
+  approveProtection: () => void;
   processing: boolean;
 }) {
   const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
@@ -543,6 +760,17 @@ function OperationCard({
   const assignedCaretaker = item.assignment?.caretaker_id
     ? caretakers.find((caretaker) => String(caretaker.id) === String(item.assignment?.caretaker_id))
     : null;
+
+  const requestCarePending = normalizeStatus(item.request.care_program_status) === "PENDING";
+  const taskStatus = normalizeStatus(item.task?.status || "");
+  const evidenceStatus = normalizeStatus(item.task?.evidence_status || "");
+
+  const canApproveProtection =
+    requestCarePending &&
+    !closed &&
+    Boolean(item.task) &&
+    (["SUBMITTED", "COMPLETED"].includes(taskStatus) ||
+      ["SUBMITTED", "APPROVED"].includes(evidenceStatus));
 
   return (
     <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
@@ -628,6 +856,16 @@ function OperationCard({
                 ? "Synced to Gardener Portal. Gardener can start work and upload evidence."
                 : "This request is closed."}
             </div>
+          )}
+
+          {canApproveProtection && (
+            <button
+              onClick={approveProtection}
+              disabled={processing}
+              className="mt-3 w-full rounded-2xl bg-emerald-500 px-5 py-4 font-black text-[#03130d] transition hover:bg-emerald-400 disabled:opacity-50"
+            >
+              Approve Protection
+            </button>
           )}
 
           {item.assignment && !closed && (
@@ -750,9 +988,6 @@ function getSourceType(request: Row) {
   const text = `${request.request_type || ""} ${request.operation_type || ""} ${request.service_name || ""} ${request.care_program_name || ""}`.toUpperCase();
 
   if (text.includes("VALUATION")) return "TREE_VALUATION_INSPECTION";
-  if (text.includes("PHOTO")) return "PHOTO_UPDATE";
-  if (text.includes("GPS")) return "GPS_UPDATE";
-  if (text.includes("HEALTH")) return "HEALTH_REPORT";
 
   return "TREE_OPERATION";
 }

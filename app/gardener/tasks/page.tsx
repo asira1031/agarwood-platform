@@ -77,6 +77,7 @@ function getTitle(task?: Row | null, assignment?: Row | null, request?: Row | nu
 
   if (sourceType === "TREE_VALUATION_INSPECTION") return "Tree Valuation Inspection";
   if (sourceType === "SELL_TREE_INSPECTION") return "Sell Tree Inspection";
+
   return request?.service_name || request?.operation_type || task?.task_type || "Tree Operation";
 }
 
@@ -281,7 +282,9 @@ export default function GardenerTasksPage() {
       const task =
         taskLogs.find((item) => String(item.assignment_id || "") === String(assignment.id)) ||
         taskLogs.find(
-          (item) => String(item.operation_request_id || "") === String(assignment.operation_request_id || "")
+          (item) =>
+            String(item.operation_request_id || "") ===
+            String(assignment.operation_request_id || "")
         ) ||
         null;
 
@@ -648,18 +651,24 @@ function TaskCard({
 
           <div>
             <h2 className="text-2xl font-black text-[#ffe49a]">{item.title}</h2>
+
             <p className="mt-2 text-sm text-white/65">
               Forest:{" "}
               <b className="text-white">
-                {item.group?.forest_name || item.group?.group_name || item.tree?.tree_group_name || "Single Tree"}
+                {item.group?.forest_name ||
+                  item.group?.group_name ||
+                  item.tree?.tree_group_name ||
+                  "Single Tree"}
               </b>
             </p>
+
             <p className="mt-1 text-sm text-white/65">
               Tree:{" "}
               <b className="text-white">
                 {item.tree?.display_name || item.tree?.custom_name || "Friendly Tree"}
               </b>
             </p>
+
             <p className="mt-1 text-sm text-white/65">
               Customer:{" "}
               <b className="text-white">
@@ -670,7 +679,10 @@ function TaskCard({
 
           <div className="grid gap-3 md:grid-cols-3">
             <Info label="Created" value={formatDate(item.createdAt)} />
-            <Info label="Care Status" value={item.tree?.care_status || item.request?.care_program_status || "—"} />
+            <Info
+              label="Care Status"
+              value={item.tree?.care_status || item.request?.care_program_status || "—"}
+            />
             <Info label="Evidence" value={item.task?.evidence_status || "PENDING"} />
           </div>
         </div>
@@ -737,17 +749,27 @@ function TaskCard({
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-      <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">{label}</p>
+      <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">
+        {label}
+      </p>
       <p className="mt-3 text-3xl font-black text-[#ffe49a]">{value}</p>
     </div>
   );
 }
 
-function Info({ label, value }: { label: string }) {
+function Info({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string;
+}) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">{label}</p>
-      <p className="mt-2 text-sm font-bold text-white/80">{value}</p>
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-bold text-white/80">{value || "—"}</p>
     </div>
   );
 }
@@ -767,6 +789,7 @@ function StatusBadge({ status }: { status: string }) {
   if (value === "IN_PROGRESS") classes = "border-blue-400/30 bg-blue-500/15 text-blue-200";
   if (value === "SUBMITTED") classes = "border-purple-400/30 bg-purple-500/15 text-purple-200";
   if (value === "COMPLETED") classes = "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
+
   if (["REJECTED", "CANCELLED", "FAILED"].includes(value)) {
     classes = "border-red-400/30 bg-red-500/15 text-red-200";
   }
