@@ -5,25 +5,29 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 type Row = Record<string, any>;
+
 type Filter =
   | "ALL"
   | "ASSIGNED"
   | "IN_PROGRESS"
   | "SUBMITTED"
   | "COMPLETED"
-  | "CANCELLED";
+  | "VALUATION";
 
 type DisplayTask = {
   key: string;
-  source: "TASK_LOG" | "ASSIGNMENT";
-  task: Row | null;
   assignment: Row | null;
+  task: Row | null;
   request: Row | null;
   tree: Row | null;
+  group: Row | null;
   customer: Row | null;
   status: string;
+  sourceType: string;
+  assignmentType: string;
   title: string;
   treeId: string | null;
+  groupId: string | null;
   customerProfileId: string | null;
   operationRequestId: string | null;
   assignmentId: string | null;
@@ -33,10 +37,11 @@ type DisplayTask = {
 
 export default function GardenerTasksPage() {
   const [caretaker, setCaretaker] = useState<Row | null>(null);
-  const [taskLogs, setTaskLogs] = useState<Row[]>([]);
   const [assignments, setAssignments] = useState<Row[]>([]);
+  const [taskLogs, setTaskLogs] = useState<Row[]>([]);
   const [requests, setRequests] = useState<Row[]>([]);
   const [trees, setTrees] = useState<Row[]>([]);
+  const [groups, setGroups] = useState<Row[]>([]);
   const [customers, setCustomers] = useState<Row[]>([]);
   const [filter, setFilter] = useState<Filter>("ALL");
   const [loading, setLoading] = useState(true);
@@ -63,6 +68,34 @@ export default function GardenerTasksPage() {
 
     const email = user.email?.trim() || "";
     const lowerEmail = email.toLowerCase();
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", lowerEmail)
+      .maybeSingle();
+
+    const profile = profileById || profileByEmail;
+
+    const { data: caretakerByProfile, error: caretakerProfileError } = profile?.id
+      ? await supabase
+          .from("caretakers")
+          .select("*")
+          .eq("caretaker_profile_id", profile.id)
+          .maybeSingle()
+      : { data: null, error: null };
+
+    if (caretakerProfileError) {
+      setMessage(caretakerProfileError.message);
+      setLoading(false);
+      return;
+    }
 
     const { data: caretakerByLowerEmail, error: lowerError } = await supabase
       .from("caretakers")
@@ -101,7 +134,10 @@ export default function GardenerTasksPage() {
     }
 
     const caretakerRow =
-      caretakerByLowerEmail || caretakerByExactEmail || caretakerByEmailFallback;
+      caretakerByProfile ||
+      caretakerByLowerEmail ||
+      caretakerByExactEmail ||
+      caretakerByEmailFallback;
 
     if (!caretakerRow) {
       setMessage("Caretaker profile not found. Make sure this email exists in caretakers.");
@@ -117,11 +153,25 @@ export default function GardenerTasksPage() {
 
     setCaretaker(caretakerRow);
 
+    const assignmentFilters = [
+      `caretaker_id.eq.${caretakerRow.id}`,
+      caretakerRow.caretaker_profile_id
+        ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}`
+        : "",
+    ].filter(Boolean);
+
+    const taskFilters = [
+      `caretaker_id.eq.${caretakerRow.id}`,
+      caretakerRow.caretaker_profile_id
+        ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}`
+        : "",
+    ].filter(Boolean);
+
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from("caretaker_assignments")
       .select("*")
-      .eq("caretaker_id", caretakerRow.id)
-      .order("started_at", { ascending: false });
+      .or(assignmentFilters.join(","))
+      .order("created_at", { ascending: false });
 
     if (assignmentError) {
       setMessage(assignmentError.message);
@@ -132,7 +182,7 @@ export default function GardenerTasksPage() {
     const { data: taskRows, error: taskError } = await supabase
       .from("caretaker_task_logs")
       .select("*")
-      .eq("caretaker_id", caretakerRow.id)
+      .or(taskFilters.join(","))
       .order("created_at", { ascending: false });
 
     if (taskError) {
@@ -149,64 +199,90 @@ export default function GardenerTasksPage() {
       ...safeTasks.map((item) => item.operation_request_id),
     ]);
 
-    const treeIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.tree_id),
-      ...safeTasks.map((item) => item.tree_id),
-    ]);
-
-    const customerIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.customer_profile_id),
-      ...safeTasks.map((item) => item.customer_profile_id),
-    ]);
-
     let requestRows: Row[] = [];
 
     if (operationRequestIds.length > 0) {
-      const { data: requestData, error: requestError } = await supabase
+      const { data, error } = await supabase
         .from("tree_operation_requests")
         .select("*")
         .in("id", operationRequestIds)
         .order("created_at", { ascending: false });
 
-      if (requestError) {
-        console.warn("Gardener task request load warning:", requestError.message);
+      if (error) {
+        console.warn("Gardener request load warning:", error.message);
       } else {
-        requestRows = requestData || [];
+        requestRows = data || [];
       }
     }
 
-    const requestTreeIds = uniqueStrings(requestRows.map((item) => item.tree_id));
-    const requestCustomerIds = uniqueStrings(requestRows.map((item) => item.profile_id));
+    const treeIds = uniqueStrings([
+      ...safeAssignments.map((item) => item.tree_id),
+      ...safeTasks.map((item) => item.tree_id),
+      ...requestRows.map((item) => item.tree_id),
+    ]);
+
+    const groupIds = uniqueStrings([
+      ...safeAssignments.map((item) => item.group_id),
+      ...safeTasks.map((item) => item.group_id),
+      ...requestRows.map((item) => item.group_id),
+    ]);
 
     let treeRows: Row[] = [];
-    const allTreeIds = uniqueStrings([...treeIds, ...requestTreeIds]);
 
-    if (allTreeIds.length > 0) {
-      const { data: treeData, error: treeError } = await supabase
+    if (treeIds.length > 0) {
+      const { data, error } = await supabase
         .from("trees")
         .select("*")
-        .in("id", allTreeIds);
+        .in("id", treeIds);
 
-      if (treeError) {
-        console.warn("Gardener task tree load warning:", treeError.message);
+      if (error) {
+        console.warn("Gardener tree load warning:", error.message);
       } else {
-        treeRows = treeData || [];
+        treeRows = data || [];
       }
     }
 
-    let customerRows: Row[] = [];
-    const allCustomerIds = uniqueStrings([...customerIds, ...requestCustomerIds]);
+    const derivedGroupIds = uniqueStrings(treeRows.map((item) => item.group_id));
+    const allGroupIds = uniqueStrings([...groupIds, ...derivedGroupIds]);
 
-    if (allCustomerIds.length > 0) {
-      const { data: profileData, error: profileError } = await supabase
-        .from("profiles")
-        .select("id, full_name, email, membership_status, kyc_status")
-        .in("id", allCustomerIds);
+    let groupRows: Row[] = [];
 
-      if (profileError) {
-        console.warn("Gardener task customer load warning:", profileError.message);
+    if (allGroupIds.length > 0) {
+      const { data, error } = await supabase
+        .from("tree_groups")
+        .select("*")
+        .in("id", allGroupIds);
+
+      if (error) {
+        console.warn("Gardener group load warning:", error.message);
       } else {
-        customerRows = profileData || [];
+        groupRows = data || [];
+      }
+    }
+
+    const customerIds = uniqueStrings([
+      ...safeAssignments.map((item) => item.customer_profile_id),
+      ...safeTasks.map((item) => item.customer_profile_id),
+      ...requestRows.map((item) => item.customer_profile_id),
+      ...requestRows.map((item) => item.profile_id),
+      ...treeRows.map((item) => item.customer_profile_id),
+      ...treeRows.map((item) => item.profile_id),
+      ...groupRows.map((item) => item.customer_profile_id),
+      ...groupRows.map((item) => item.profile_id),
+    ]);
+
+    let customerRows: Row[] = [];
+
+    if (customerIds.length > 0) {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, phone, membership_status, kyc_status")
+        .in("id", customerIds);
+
+      if (error) {
+        console.warn("Gardener customer load warning:", error.message);
+      } else {
+        customerRows = data || [];
       }
     }
 
@@ -214,93 +290,15 @@ export default function GardenerTasksPage() {
     setTaskLogs(safeTasks);
     setRequests(requestRows);
     setTrees(treeRows);
+    setGroups(groupRows);
     setCustomers(customerRows);
     setLoading(false);
   }
 
-  function normalizeStatus(value: any) {
-    return String(value || "ASSIGNED").trim().toUpperCase();
-  }
-
-  function getLatestTaskForAssignment(assignmentId?: string | null) {
-    if (!assignmentId) return null;
-
-    return (
-      taskLogs.find((item) => String(item.assignment_id || "") === String(assignmentId)) ||
-      null
-    );
-  }
-
-  function getLatestTaskForRequest(operationRequestId?: string | null) {
-    if (!operationRequestId) return null;
-
-    return (
-      taskLogs.find(
-        (item) => String(item.operation_request_id || "") === String(operationRequestId)
-      ) || null
-    );
-  }
-
-  function getRequest(operationRequestId?: string | null) {
-    if (!operationRequestId) return null;
-
-    return (
-      requests.find((item) => String(item.id || "") === String(operationRequestId)) ||
-      null
-    );
-  }
-
-  function getAssignment(assignmentId?: string | null) {
-    if (!assignmentId) return null;
-
-    return (
-      assignments.find((item) => String(item.id || "") === String(assignmentId)) ||
-      null
-    );
-  }
-
-  function getTree(treeId?: string | null) {
-    if (!treeId) return null;
-
-    return (
-      trees.find((item) => String(item.id || "") === String(treeId)) ||
-      trees.find((item) => String(item.tree_code || "") === String(treeId)) ||
-      null
-    );
-  }
-
-  function getCustomer(customerId?: string | null) {
-    if (!customerId) return null;
-
-    return (
-      customers.find((item) => String(item.id || "") === String(customerId)) ||
-      null
-    );
-  }
-
-  function getTitle(task: Row | null, assignment: Row | null, request: Row | null) {
-    return (
-      task?.task_type ||
-      assignment?.assignment_type ||
-      request?.care_program_name ||
-      request?.operation_type ||
-      request?.request_type ||
-      "Tree Task"
-    );
-  }
-
-  function buildTaskQuery(item: DisplayTask) {
-    const params = new URLSearchParams();
-
-    if (item.task?.id) params.set("task_id", String(item.task.id));
-    if (item.assignmentId) params.set("assignment_id", item.assignmentId);
-    if (item.operationRequestId) params.set("operation_request_id", item.operationRequestId);
-    if (item.treeId) params.set("tree_id", item.treeId);
-
-    const query = params.toString();
-
-    return query ? `?${query}` : "";
-  }
+  const requestMap = useMemo(() => makeMap(requests), [requests]);
+  const treeMap = useMemo(() => makeMap(trees), [trees]);
+  const groupMap = useMemo(() => makeMap(groups), [groups]);
+  const customerMap = useMemo(() => makeMap(customers), [customers]);
 
   const displayTasks = useMemo<DisplayTask[]>(() => {
     const items: DisplayTask[] = [];
@@ -308,40 +306,65 @@ export default function GardenerTasksPage() {
 
     assignments.forEach((assignment) => {
       const task =
-        getLatestTaskForAssignment(assignment.id) ||
-        getLatestTaskForRequest(assignment.operation_request_id);
+        taskLogs.find((item) => String(item.assignment_id || "") === String(assignment.id)) ||
+        taskLogs.find(
+          (item) => String(item.operation_request_id || "") === String(assignment.operation_request_id || "")
+        ) ||
+        null;
 
       if (task?.id) coveredTaskIds.add(String(task.id));
 
-      const request = getRequest(assignment.operation_request_id);
+      const request = assignment.operation_request_id
+        ? requestMap.get(String(assignment.operation_request_id)) || null
+        : null;
+
       const treeId = task?.tree_id || assignment.tree_id || request?.tree_id || null;
+      const tree = treeId ? treeMap.get(String(treeId)) || null : null;
+
+      const groupId =
+        task?.group_id ||
+        assignment.group_id ||
+        request?.group_id ||
+        tree?.group_id ||
+        null;
+
+      const group = groupId ? groupMap.get(String(groupId)) || null : null;
+
       const customerProfileId =
         task?.customer_profile_id ||
         assignment.customer_profile_id ||
+        request?.customer_profile_id ||
         request?.profile_id ||
+        tree?.customer_profile_id ||
+        tree?.profile_id ||
+        group?.customer_profile_id ||
+        group?.profile_id ||
         null;
 
-      const tree = getTree(treeId);
-      const customer = getCustomer(customerProfileId);
+      const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
+
+      const sourceType = getSourceType(task, assignment, request);
       const status = normalizeStatus(task?.status || assignment.status || request?.status);
-      const title = getTitle(task, assignment, request);
+      const assignmentType = groupId ? "FOREST ASSIGNMENT" : "TREE ASSIGNMENT";
 
       items.push({
         key: `assignment-${assignment.id}`,
-        source: "ASSIGNMENT",
-        task,
         assignment,
+        task,
         request,
         tree,
+        group,
         customer,
         status,
-        title,
+        sourceType,
+        assignmentType,
+        title: getTitle(task, assignment, request),
         treeId,
+        groupId,
         customerProfileId,
-        operationRequestId:
-          task?.operation_request_id || assignment.operation_request_id || request?.id || null,
+        operationRequestId: task?.operation_request_id || assignment.operation_request_id || request?.id || null,
         assignmentId: assignment.id || task?.assignment_id || null,
-        createdAt: task?.created_at || assignment.started_at || request?.created_at || null,
+        createdAt: task?.created_at || assignment.created_at || assignment.assigned_at || request?.created_at || null,
         notes: task?.notes || assignment.notes || request?.notes || null,
       });
     });
@@ -349,35 +372,56 @@ export default function GardenerTasksPage() {
     taskLogs.forEach((task) => {
       if (coveredTaskIds.has(String(task.id))) return;
 
-      const assignment = getAssignment(task.assignment_id);
-      const request = getRequest(task.operation_request_id || assignment?.operation_request_id);
+      const assignment = task.assignment_id
+        ? assignments.find((item) => String(item.id) === String(task.assignment_id)) || null
+        : null;
+
+      const request =
+        task.operation_request_id
+          ? requestMap.get(String(task.operation_request_id)) || null
+          : assignment?.operation_request_id
+          ? requestMap.get(String(assignment.operation_request_id)) || null
+          : null;
+
       const treeId = task.tree_id || assignment?.tree_id || request?.tree_id || null;
+      const tree = treeId ? treeMap.get(String(treeId)) || null : null;
+
+      const groupId = task.group_id || assignment?.group_id || request?.group_id || tree?.group_id || null;
+      const group = groupId ? groupMap.get(String(groupId)) || null : null;
+
       const customerProfileId =
         task.customer_profile_id ||
         assignment?.customer_profile_id ||
+        request?.customer_profile_id ||
         request?.profile_id ||
+        tree?.customer_profile_id ||
+        tree?.profile_id ||
+        group?.customer_profile_id ||
+        group?.profile_id ||
         null;
-      const tree = getTree(treeId);
-      const customer = getCustomer(customerProfileId);
+
+      const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
+      const sourceType = getSourceType(task, assignment, request);
       const status = normalizeStatus(task.status || assignment?.status || request?.status);
-      const title = getTitle(task, assignment, request);
 
       items.push({
         key: `task-${task.id}`,
-        source: "TASK_LOG",
-        task,
         assignment,
+        task,
         request,
         tree,
+        group,
         customer,
         status,
-        title,
+        sourceType,
+        assignmentType: groupId ? "FOREST ASSIGNMENT" : "TREE ASSIGNMENT",
+        title: getTitle(task, assignment, request),
         treeId,
+        groupId,
         customerProfileId,
-        operationRequestId:
-          task.operation_request_id || assignment?.operation_request_id || request?.id || null,
+        operationRequestId: task.operation_request_id || assignment?.operation_request_id || request?.id || null,
         assignmentId: task.assignment_id || assignment?.id || null,
-        createdAt: task.created_at || assignment?.started_at || request?.created_at || null,
+        createdAt: task.created_at || assignment?.created_at || request?.created_at || null,
         notes: task.notes || assignment?.notes || request?.notes || null,
       });
     });
@@ -387,45 +431,51 @@ export default function GardenerTasksPage() {
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return dateB - dateA;
     });
-  }, [assignments, taskLogs, requests, trees, customers]);
+  }, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
+
+  const filteredTasks = useMemo(() => {
+    if (filter === "ALL") return displayTasks;
+    if (filter === "VALUATION") {
+      return displayTasks.filter((item) => item.sourceType === "TREE_VALUATION_INSPECTION");
+    }
+
+    return displayTasks.filter((item) => item.status === filter);
+  }, [displayTasks, filter]);
 
   const stats = useMemo(() => {
     return {
       total: displayTasks.length,
-      assigned: displayTasks.filter((task) => task.status === "ASSIGNED").length,
-      inProgress: displayTasks.filter((task) => task.status === "IN_PROGRESS").length,
-      submitted: displayTasks.filter((task) => task.status === "SUBMITTED").length,
-      completed: displayTasks.filter((task) => task.status === "COMPLETED").length,
-      cancelled: displayTasks.filter((task) =>
-        ["CANCELLED", "REJECTED", "FAILED"].includes(task.status)
-      ).length,
+      assigned: displayTasks.filter((item) => item.status === "ASSIGNED").length,
+      inProgress: displayTasks.filter((item) => item.status === "IN_PROGRESS").length,
+      submitted: displayTasks.filter((item) => item.status === "SUBMITTED").length,
+      completed: displayTasks.filter((item) => item.status === "COMPLETED").length,
+      valuation: displayTasks.filter((item) => item.sourceType === "TREE_VALUATION_INSPECTION").length,
     };
   }, [displayTasks]);
 
-  const filteredTasks = useMemo(() => {
-    if (filter === "ALL") return displayTasks;
-
-    if (filter === "CANCELLED") {
-      return displayTasks.filter((task) =>
-        ["CANCELLED", "REJECTED", "FAILED"].includes(task.status)
-      );
-    }
-
-    return displayTasks.filter((task) => task.status === filter);
-  }, [displayTasks, filter]);
-
-  async function insertTaskStatusLog(item: DisplayTask, cleanStatus: string) {
+  async function ensureTaskLog(item: DisplayTask, status: string) {
     if (!caretaker) throw new Error("Caretaker not loaded.");
+
+    const now = new Date().toISOString();
 
     const payload = {
       assignment_id: item.assignmentId || null,
       caretaker_id: caretaker.id,
+      caretaker_profile_id: caretaker.caretaker_profile_id || null,
       customer_profile_id: item.customerProfileId || null,
       tree_id: item.treeId || null,
+      group_id: item.groupId || null,
       operation_request_id: item.operationRequestId || null,
-      task_type: item.title || "Tree Task",
-      notes: `Gardener updated task status to ${cleanStatus.replace("_", " ")}.`,
-      status: cleanStatus,
+      task_type: item.sourceType || "TREE_OPERATION",
+      source_type: item.sourceType || "TREE_OPERATION",
+      evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
+      notes: `Gardener updated task to ${status.replace("_", " ")}.`,
+      status,
+      created_at: now,
+      updated_at: now,
+      started_at: status === "IN_PROGRESS" ? now : null,
+      submitted_at: status === "SUBMITTED" ? now : null,
+      completed_at: status === "COMPLETED" ? now : null,
     };
 
     const { data, error } = await supabase
@@ -435,187 +485,146 @@ export default function GardenerTasksPage() {
       .single();
 
     if (error || !data) {
-      throw new Error(error?.message || "Failed to create task status log.");
+      throw new Error(error?.message || "Failed to create task log.");
     }
 
-    return data.id as string;
+    return data.id;
   }
 
   async function updateTaskStatus(item: DisplayTask, nextStatus: string) {
     setMessage("");
     setSavingKey(item.key);
 
-    const cleanStatus = normalizeStatus(nextStatus);
+    const status = normalizeStatus(nextStatus);
+    const now = new Date().toISOString();
 
     try {
       if (item.task?.id) {
-        const { error: taskError } = await supabase
-          .from("caretaker_task_logs")
-          .update({ status: cleanStatus })
-          .eq("id", item.task.id)
-          .eq("caretaker_id", caretaker?.id);
+        const taskUpdate: Row = {
+          status,
+          evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
+          updated_at: now,
+        };
 
-        if (taskError) throw taskError;
+        if (status === "IN_PROGRESS") taskUpdate.started_at = item.task.started_at || now;
+        if (status === "SUBMITTED") taskUpdate.submitted_at = now;
+        if (status === "COMPLETED") taskUpdate.completed_at = now;
+
+        const { error } = await supabase
+          .from("caretaker_task_logs")
+          .update(taskUpdate)
+          .eq("id", item.task.id);
+
+        if (error) throw error;
       }
 
-      await insertTaskStatusLog(item, cleanStatus);
+      await ensureTaskLog(item, status);
 
       if (item.assignmentId) {
-        const { error: assignmentError } = await supabase
-          .from("caretaker_assignments")
-          .update({ status: cleanStatus })
-          .eq("id", item.assignmentId)
-          .eq("caretaker_id", caretaker?.id);
+        const assignmentUpdate: Row = {
+          status,
+          updated_at: now,
+        };
 
-        if (assignmentError) throw assignmentError;
+        if (status === "IN_PROGRESS") assignmentUpdate.started_at = item.assignment?.started_at || now;
+        if (status === "SUBMITTED") assignmentUpdate.submitted_at = now;
+        if (status === "COMPLETED") assignmentUpdate.completed_at = now;
+
+        const { error } = await supabase
+          .from("caretaker_assignments")
+          .update(assignmentUpdate)
+          .eq("id", item.assignmentId);
+
+        if (error) throw error;
       }
 
       if (item.operationRequestId) {
-        const { error: requestError } = await supabase
+        const requestUpdate: Row = {
+          status,
+          assignment_status: status,
+          updated_at: now,
+        };
+
+        if (status === "ASSIGNED") requestUpdate.assigned_at = item.request?.assigned_at || now;
+        if (status === "COMPLETED") requestUpdate.completed_at = now;
+
+        const { error } = await supabase
           .from("tree_operation_requests")
-          .update({ status: cleanStatus })
+          .update(requestUpdate)
           .eq("id", item.operationRequestId);
 
-        if (requestError) throw requestError;
+        if (error) throw error;
       }
 
-      setMessage(`Task synced as ${cleanStatus.replace("_", " ")}.`);
+      setMessage(`Task synced as ${status.replace("_", " ")}.`);
       await loadData();
     } catch (error: any) {
-      setMessage(error?.message || "Task status update failed.");
+      setMessage(error?.message || "Task update failed.");
     }
 
     setSavingKey("");
   }
 
-  function formatDate(value: string | null | undefined) {
-    if (!value) return "—";
-
-    return new Date(value).toLocaleString("en-PH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-
-  function badgeClass(status: string) {
-    if (status === "COMPLETED") {
-      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
-    }
-
-    if (status === "SUBMITTED") {
-      return "border-purple-400/30 bg-purple-500/20 text-purple-200";
-    }
-
-    if (status === "IN_PROGRESS") {
-      return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
-    }
-
-    if (["CANCELLED", "REJECTED", "FAILED"].includes(status)) {
-      return "border-red-400/30 bg-red-500/20 text-red-200";
-    }
-
-    return "border-blue-400/30 bg-blue-500/20 text-blue-200";
-  }
-
-  function getTreeLabel(item: DisplayTask) {
-    return (
-      item.tree?.tree_code ||
-      item.tree?.custom_name ||
-      item.tree?.display_name ||
-      shortId(item.treeId) ||
-      "Tree"
-    );
-  }
-
-  function getTreeSubLabel(item: DisplayTask) {
-    const treeType = item.tree?.tree_type || item.tree?.custom_name || "Arganwood Tree";
-    const stage =
-      item.tree?.stage ||
-      item.tree?.growth_stage ||
-      item.tree?.current_stage ||
-      item.tree?.status ||
-      "Stage Pending";
-
-    return item.tree ? `${treeType} • ${stage}` : shortId(item.treeId) || "—";
-  }
-
-  function getCustomerLabel(item: DisplayTask) {
-    return (
-      item.customer?.full_name ||
-      item.customer?.email ||
-      shortId(item.customerProfileId) ||
-      "Customer"
-    );
-  }
-
-  function getCustomerSubLabel(item: DisplayTask) {
-    if (!item.customer) return shortId(item.customerProfileId) || "—";
-
-    return `${item.customer.email || "No email"}${
-      item.customer.membership_status ? ` • ${item.customer.membership_status}` : ""
-    }`;
-  }
-
   return (
-    <main className="min-h-screen p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-              Arganwood Gardener Portal
-            </p>
+    <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
+      <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.28),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
 
-            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Gardener Tasks
-            </h1>
+      <div className="mx-auto max-w-7xl space-y-8">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl md:p-9">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
+                Arganwood Field Work
+              </p>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
+                Forest Work Center
+              </h1>
+              <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
+                See assigned forests and seedlings, start work, submit evidence, and complete tasks
+                for Admin review and Customer visibility.
+              </p>
+            </div>
 
-            <p className="mt-2 text-white/70">
-              Jobs assigned by Admin Operations appear here. Start work, submit updates, and finish tasks to sync Admin, Customer, and Gardener status.
-            </p>
+            <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">
+                Logged Gardener
+              </p>
+              <p className="mt-2 text-xl font-black text-[#ffe49a]">
+                {caretaker?.full_name || caretaker?.email || "—"}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-white/45">
+                {caretaker?.email || "No email"} • {caretaker?.status || "—"}
+              </p>
+            </div>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
-            <p className="text-xs uppercase tracking-[0.2em] text-white/50">
-              Logged Gardener
-            </p>
-            <h3 className="mt-2 font-bold text-[#f7d774]">
-              {caretaker?.full_name || caretaker?.name || caretaker?.email || "—"}
-            </h3>
-            <p className="mt-1 text-xs font-semibold text-white/45">
-              {caretaker?.email || "No email"} • {caretaker?.status || "—"}
-            </p>
-          </div>
-        </div>
+          {message && (
+            <div className="mt-6 rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-4 text-sm font-bold text-[#ffe49a]">
+              {message}
+            </div>
+          )}
 
-        {message && (
-          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
-            {message}
+          <div className="mt-8 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+            <HeroStat label="Total Tasks" value={stats.total} />
+            <HeroStat label="Assigned" value={stats.assigned} tone="blue" />
+            <HeroStat label="In Progress" value={stats.inProgress} tone="yellow" />
+            <HeroStat label="Submitted" value={stats.submitted} tone="purple" />
+            <HeroStat label="Completed" value={stats.completed} tone="green" />
+            <HeroStat label="Valuation" value={stats.valuation} tone="gold" />
           </div>
-        )}
-
-        <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <StatCard label="Total Jobs" value={String(stats.total)} />
-          <StatCard label="Assigned" value={String(stats.assigned)} />
-          <StatCard label="In Progress" value={String(stats.inProgress)} />
-          <StatCard label="Submitted" value={String(stats.submitted)} />
-          <StatCard label="Completed" value={String(stats.completed)} />
-          <StatCard label="Cancelled" value={String(stats.cancelled)} />
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl backdrop-blur-xl">
           <div className="flex flex-wrap gap-3">
-            {(["ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED", "CANCELLED"] as Filter[]).map(
+            {(["ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED", "VALUATION"] as Filter[]).map(
               (item) => (
                 <button
                   key={item}
                   onClick={() => setFilter(item)}
-                  className={`rounded-full px-5 py-3 text-sm font-bold transition ${
+                  className={`rounded-full px-5 py-3 text-sm font-black transition ${
                     filter === item
-                      ? "bg-[#f7d774] text-[#071f16]"
-                      : "bg-white/10 text-white hover:bg-white/15"
+                      ? "bg-[#d9b45f] text-[#071f16]"
+                      : "border border-white/10 bg-white/10 text-white/70 hover:bg-white/15"
                   }`}
                 >
                   {item.replace("_", " ")}
@@ -626,179 +635,19 @@ export default function GardenerTasksPage() {
         </section>
 
         {loading ? (
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            Loading tasks...
-          </div>
+          <EmptyCard text="Loading forest work center..." />
         ) : filteredTasks.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            <h2 className="text-xl font-black text-[#ffe49a]">No tasks found.</h2>
-            <p className="mt-2 leading-relaxed">
-              This page shows jobs where caretaker_assignments.caretaker_id or caretaker_task_logs.caretaker_id equals the logged-in caretaker id.
-            </p>
-            <p className="mt-3 text-sm text-white/50">
-              Logged caretaker id: {caretaker?.id || "—"}
-            </p>
-          </div>
+          <EmptyCard text="No tasks found for this gardener. Check caretaker_assignments and caretaker_task_logs sync." />
         ) : (
           <section className="space-y-5">
-            {filteredTasks.map((item) => {
-              const completed = item.status === "COMPLETED";
-              const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(
-                item.status
-              );
-              const query = buildTaskQuery(item);
-
-              return (
-                <div
-                  key={item.key}
-                  className="rounded-3xl border border-white/10 bg-white/[0.06] p-6"
-                >
-                  <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="flex-1">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <h2 className="text-2xl font-black text-[#ffe49a]">
-                          {item.title}
-                        </h2>
-
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-black ${badgeClass(
-                            item.status
-                          )}`}
-                        >
-                          {item.status.replace("_", " ")}
-                        </span>
-
-                        <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-black text-white/60">
-                          {item.source === "ASSIGNMENT" ? "Assignment Synced" : "Task Log"}
-                        </span>
-                      </div>
-
-                      <div className="mt-5 grid gap-3 md:grid-cols-4">
-                        <Info label="Tree" value={getTreeLabel(item)} subValue={getTreeSubLabel(item)} />
-                        <Info label="Customer" value={getCustomerLabel(item)} subValue={getCustomerSubLabel(item)} />
-                        <Info
-                          label="Operation Request"
-                          value={shortId(item.operationRequestId) || "—"}
-                          subValue={item.request?.status ? `Request: ${item.request.status}` : "tree_operation_requests"}
-                        />
-                        <Info label="Created" value={formatDate(item.createdAt)} />
-                      </div>
-
-                      <div className="mt-3 grid gap-3 md:grid-cols-3">
-                        <Info
-                          label="Assignment"
-                          value={shortId(item.assignmentId) || "—"}
-                          subValue={item.assignment?.status ? `Assignment: ${item.assignment.status}` : "caretaker_assignments"}
-                        />
-                        <Info
-                          label="Latest Task"
-                          value={shortId(item.task?.id) || "No task log yet"}
-                          subValue={item.task?.status ? `Task: ${item.task.status}` : "Will create when updated"}
-                        />
-                        <Info
-                          label="Logged Caretaker"
-                          value={caretaker?.full_name || caretaker?.name || caretaker?.email || "—"}
-                          subValue={shortId(caretaker?.id) || "caretakers.id"}
-                        />
-                      </div>
-
-                      {item.notes && (
-                        <div className="mt-4 rounded-2xl bg-black/20 p-4 text-sm text-white/70">
-                          Notes: {item.notes}
-                        </div>
-                      )}
-
-                      <div className="mt-4 flex flex-wrap gap-3">
-                        <Link
-                          href={`/gardener/photo-updates${query}`}
-                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
-                        >
-                          Photo Update
-                        </Link>
-
-                        <Link
-                          href={`/gardener/gps-updates${query}`}
-                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
-                        >
-                          GPS Update
-                        </Link>
-
-                        <Link
-                          href={`/gardener/health-reports${query}`}
-                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-bold text-white hover:bg-white/15"
-                        >
-                          Health Report
-                        </Link>
-                      </div>
-                    </div>
-
-                    <div className="w-full rounded-2xl bg-black/20 p-4 lg:w-[330px]">
-                      <label className="text-sm font-bold text-white/70">
-                        Update Task Status
-                      </label>
-
-                      <select
-                        value={item.status}
-                        disabled={savingKey === item.key || closed}
-                        onChange={(event) =>
-                          updateTaskStatus(item, event.target.value)
-                        }
-                        className="mt-2 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none disabled:opacity-50"
-                      >
-                        <option value="ASSIGNED">ASSIGNED</option>
-                        <option value="IN_PROGRESS">IN PROGRESS</option>
-                        <option value="SUBMITTED">SUBMITTED</option>
-                        <option value="COMPLETED">COMPLETED</option>
-                      </select>
-
-                      <div className="mt-4 grid gap-3">
-                        {item.status === "ASSIGNED" && (
-                          <button
-                            onClick={() => updateTaskStatus(item, "IN_PROGRESS")}
-                            disabled={savingKey === item.key}
-                            className="rounded-xl bg-blue-500/20 px-4 py-3 font-bold text-blue-100 hover:bg-blue-500/30 disabled:opacity-50"
-                          >
-                            {savingKey === item.key ? "Saving..." : "Start Work"}
-                          </button>
-                        )}
-
-                        {!closed && item.status !== "SUBMITTED" && (
-                          <button
-                            onClick={() => updateTaskStatus(item, "SUBMITTED")}
-                            disabled={savingKey === item.key}
-                            className="rounded-xl bg-purple-500/20 px-4 py-3 font-bold text-purple-100 hover:bg-purple-500/30 disabled:opacity-50"
-                          >
-                            {savingKey === item.key ? "Saving..." : "Submit Updates"}
-                          </button>
-                        )}
-
-                        {!closed && (
-                          <button
-                            onClick={() => updateTaskStatus(item, "COMPLETED")}
-                            disabled={savingKey === item.key}
-                            className="rounded-xl bg-emerald-500/20 px-4 py-3 font-bold text-emerald-100 hover:bg-emerald-500/30 disabled:opacity-50"
-                          >
-                            {savingKey === item.key ? "Saving..." : "Finish Task"}
-                          </button>
-                        )}
-
-                        {completed && (
-                          <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-center text-sm font-bold text-emerald-100">
-                            Completed and synced to Admin + Customer operation status.
-                          </div>
-                        )}
-
-                        {closed && !completed && (
-                          <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-center text-sm font-bold text-red-100">
-                            This task is closed.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {filteredTasks.map((item) => (
+              <TaskCard
+                key={item.key}
+                item={item}
+                saving={savingKey === item.key}
+                updateTaskStatus={(status) => updateTaskStatus(item, status)}
+              />
+            ))}
           </section>
         )}
       </div>
@@ -806,11 +655,155 @@ export default function GardenerTasksPage() {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function TaskCard({
+  item,
+  saving,
+  updateTaskStatus,
+}: {
+  item: DisplayTask;
+  saving: boolean;
+  updateTaskStatus: (status: string) => void;
+}) {
+  const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
+  const query = buildEvidenceQuery(item);
+
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
-      <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
+    <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+      <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+        <div className="flex-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="rounded-full border border-[#d9b45f]/30 bg-[#d9b45f]/10 px-3 py-1 text-xs font-black text-[#ffe49a]">
+              {item.assignmentType}
+            </span>
+            <StatusBadge status={item.status} />
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-black text-white/55">
+              {item.sourceType.replaceAll("_", " ")}
+            </span>
+          </div>
+
+          <h2 className="mt-4 text-3xl font-black text-white">{item.title}</h2>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <Info label="Customer" value={customerName(item.customer)} subValue={item.customer?.email || "No email"} />
+            <Info label="Forest" value={`🌳 ${forestName(item.group, item.tree)}`} subValue={item.groupId ? "Forest assignment ready" : "Tree assignment"} />
+            <Info label="Seedling" value={treeName(item.tree)} subValue={item.tree ? stageText(item.tree) : "Forest-level work"} />
+            <Info label="Care Status" value={careStatus(item.tree)} subValue={valuationStatus(item.tree, item.request, item.sourceType)} />
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <Info label="Assignment Type" value={item.assignmentType} subValue={formatDate(item.createdAt)} />
+            <Info label="Task Status" value={item.status.replaceAll("_", " ")} subValue={item.task?.evidence_status || "Evidence pending"} />
+            <Info label="Admin Flow" value="Admin Review Next" subValue="After evidence submission" />
+          </div>
+
+          {item.notes && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/65">
+              <span className="font-black text-[#ffe49a]">Notes:</span> {item.notes}
+            </div>
+          )}
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href={`/gardener/photo-updates${query}`}
+              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-black text-white hover:bg-white/15"
+            >
+              Upload Photo
+            </Link>
+
+            <Link
+              href={`/gardener/gps-updates${query}`}
+              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-black text-white hover:bg-white/15"
+            >
+              Upload GPS
+            </Link>
+
+            <Link
+              href={`/gardener/health-reports${query}`}
+              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-black text-white hover:bg-white/15"
+            >
+              Upload Health
+            </Link>
+          </div>
+        </div>
+
+        <aside className="w-full rounded-3xl border border-white/10 bg-black/20 p-5 xl:w-[340px]">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">
+            Field Actions
+          </p>
+
+          <div className="mt-5 space-y-3">
+            {item.status === "ASSIGNED" && (
+              <button
+                onClick={() => updateTaskStatus("IN_PROGRESS")}
+                disabled={saving}
+                className="w-full rounded-2xl border border-blue-300/25 bg-blue-500/15 px-5 py-4 font-black text-blue-100 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Start Work"}
+              </button>
+            )}
+
+            {!closed && item.status !== "SUBMITTED" && (
+              <button
+                onClick={() => updateTaskStatus("SUBMITTED")}
+                disabled={saving}
+                className="w-full rounded-2xl border border-purple-300/25 bg-purple-500/15 px-5 py-4 font-black text-purple-100 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Submit Evidence"}
+              </button>
+            )}
+
+            {!closed && (
+              <button
+                onClick={() => updateTaskStatus("COMPLETED")}
+                disabled={saving}
+                className="w-full rounded-2xl border border-emerald-300/25 bg-emerald-500/15 px-5 py-4 font-black text-emerald-100 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Complete Task"}
+              </button>
+            )}
+
+            {item.status === "COMPLETED" && (
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-center text-sm font-bold text-emerald-100">
+                Completed and synced to Admin Operations.
+              </div>
+            )}
+
+            {closed && item.status !== "COMPLETED" && (
+              <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-center text-sm font-bold text-red-100">
+                This task is closed.
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+    </article>
+  );
+}
+
+function HeroStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "green" | "yellow" | "blue" | "purple" | "gold";
+}) {
+  const color =
+    tone === "green"
+      ? "text-emerald-200"
+      : tone === "yellow"
+      ? "text-yellow-200"
+      : tone === "blue"
+      ? "text-blue-200"
+      : tone === "purple"
+      ? "text-purple-200"
+      : "text-[#d9b45f]";
+
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">{label}</p>
+      <p className={`mt-3 text-3xl font-black ${color}`}>{value}</p>
     </div>
   );
 }
@@ -825,18 +818,92 @@ function Info({
   subValue?: string;
 }) {
   return (
-    <div className="rounded-xl bg-white/10 p-3">
-      <p className="text-xs uppercase tracking-[0.12em] text-white/40">
-        {label}
-      </p>
-      <p className="mt-1 break-words font-bold text-white/85">{value || "—"}</p>
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs font-black uppercase tracking-[0.14em] text-white/40">{label}</p>
+      <p className="mt-2 break-words text-lg font-black text-white">{value || "—"}</p>
       {subValue ? (
-        <p className="mt-1 break-words text-xs font-semibold text-white/45">
-          {subValue}
-        </p>
+        <p className="mt-1 break-words text-xs font-semibold text-white/45">{subValue}</p>
       ) : null}
     </div>
   );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const normalized = normalizeStatus(status);
+
+  const color =
+    normalized === "COMPLETED"
+      ? "border-emerald-300/30 bg-emerald-500/20 text-emerald-100"
+      : normalized === "SUBMITTED"
+      ? "border-purple-300/30 bg-purple-500/20 text-purple-100"
+      : normalized === "IN_PROGRESS"
+      ? "border-yellow-300/30 bg-yellow-500/20 text-yellow-100"
+      : normalized === "ASSIGNED"
+      ? "border-blue-300/30 bg-blue-500/20 text-blue-100"
+      : ["CANCELLED", "REJECTED", "FAILED"].includes(normalized)
+      ? "border-red-300/30 bg-red-500/20 text-red-100"
+      : "border-[#d9b45f]/30 bg-[#d9b45f]/10 text-[#ffe49a]";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 text-xs font-black ${color}`}>
+      {normalized.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+function EmptyCard({ text }: { text: string }) {
+  return (
+    <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-8 text-sm font-bold text-white/60 shadow-2xl backdrop-blur-xl">
+      {text}
+    </div>
+  );
+}
+
+function makeMap(rows: Row[]) {
+  const map = new Map<string, Row>();
+
+  rows.forEach((row) => {
+    if (row.id) map.set(String(row.id), row);
+  });
+
+  return map;
+}
+
+function getTitle(task: Row | null, assignment: Row | null, request: Row | null) {
+  return (
+    task?.task_type ||
+    assignment?.assignment_type ||
+    request?.service_name ||
+    request?.care_program_name ||
+    request?.operation_type ||
+    request?.request_type ||
+    "Tree Operation"
+  );
+}
+
+function getSourceType(task: Row | null, assignment: Row | null, request: Row | null) {
+  const raw =
+    task?.source_type ||
+    task?.task_type ||
+    assignment?.source_type ||
+    assignment?.assignment_type ||
+    request?.request_type ||
+    request?.operation_type ||
+    request?.service_name ||
+    "TREE_OPERATION";
+
+  const text = String(raw || "").toUpperCase();
+
+  if (text.includes("VALUATION")) return "TREE_VALUATION_INSPECTION";
+  if (text.includes("PHOTO")) return "PHOTO_UPDATE";
+  if (text.includes("GPS")) return "GPS_UPDATE";
+  if (text.includes("HEALTH")) return "HEALTH_REPORT";
+
+  return "TREE_OPERATION";
+}
+
+function normalizeStatus(value: any) {
+  return String(value || "ASSIGNED").trim().toUpperCase();
 }
 
 function uniqueStrings(values: any[]) {
@@ -849,12 +916,68 @@ function uniqueStrings(values: any[]) {
   );
 }
 
-function shortId(value: string | null | undefined) {
-  if (!value) return "";
+function customerName(customer: Row | null) {
+  if (!customer) return "Customer";
+  return customer.full_name || customer.email || "Customer";
+}
 
-  const text = String(value);
+function forestName(group: Row | null, tree: Row | null) {
+  if (group) {
+    return group.forest_name || group.group_name || group.block_name || group.farm_location || "Customer Forest";
+  }
 
-  if (text.length <= 12) return text;
+  return tree?.tree_group_name || "Ungrouped Forest";
+}
 
-  return `${text.slice(0, 8)}…${text.slice(-4)}`;
+function treeName(tree: Row | null) {
+  if (!tree) return "Forest Level";
+  return tree.display_name || tree.custom_name || "Seedling";
+}
+
+function stageText(tree: Row | null) {
+  if (!tree) return "Forest task";
+  return tree.stage || tree.current_stage || tree.status || "Stage pending";
+}
+
+function careStatus(tree: Row | null) {
+  if (!tree) return "Forest Care Review";
+  return tree.care_status || "NOT_SUBSCRIBED";
+}
+
+function valuationStatus(tree: Row | null, request: Row | null, sourceType: string) {
+  if (sourceType === "TREE_VALUATION_INSPECTION") return "Valuation inspection task";
+
+  const requestText = `${request?.request_type || ""} ${request?.operation_type || ""} ${request?.service_name || ""}`.toUpperCase();
+
+  if (requestText.includes("VALUATION")) return "Valuation request";
+
+  return tree?.valuation_status || "Valuation not requested";
+}
+
+function buildEvidenceQuery(item: DisplayTask) {
+  const params = new URLSearchParams();
+
+  if (item.task?.id) params.set("task_id", String(item.task.id));
+  if (item.assignmentId) params.set("assignment_id", item.assignmentId);
+  if (item.operationRequestId) params.set("operation_request_id", item.operationRequestId);
+  if (item.treeId) params.set("tree_id", item.treeId);
+  if (item.groupId) params.set("group_id", item.groupId);
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function formatDate(value: any) {
+  if (!value) return "No date";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "No date";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
