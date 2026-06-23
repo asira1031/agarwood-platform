@@ -69,6 +69,7 @@ export default function GardenerGpsUpdatesPage() {
       .from("caretaker_assignments")
       .select("*")
       .eq("caretaker_id", caretakerRow.id)
+      .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"])
       .order("started_at", { ascending: false });
 
     if (assignmentError) {
@@ -125,13 +126,28 @@ export default function GardenerGpsUpdatesPage() {
   async function saveGpsUpdate() {
     setMessage("");
 
-    if (!caretaker) {
+    if (!caretaker?.id) {
       setMessage("Caretaker profile not found.");
       return;
     }
 
-    if (!selectedAssignment) {
-      setMessage("Please select an assignment.");
+    if (!selectedAssignment?.id) {
+      setMessage("Please select a valid assignment.");
+      return;
+    }
+
+    if (!selectedAssignment.operation_request_id) {
+      setMessage("Missing operation request link.");
+      return;
+    }
+
+    if (!selectedAssignment.tree_id) {
+      setMessage("Missing tree link.");
+      return;
+    }
+
+    if (!selectedAssignment.customer_profile_id) {
+      setMessage("Missing customer profile link.");
       return;
     }
 
@@ -142,28 +158,36 @@ export default function GardenerGpsUpdatesPage() {
 
     const lat = Number(latitude);
     const lng = Number(longitude);
+    const accuracy = accuracyMeters ? Number(accuracyMeters) : null;
 
     if (Number.isNaN(lat) || Number.isNaN(lng)) {
       setMessage("Latitude and longitude must be valid numbers.");
       return;
     }
 
+    if (accuracyMeters && Number.isNaN(accuracy)) {
+      setMessage("Accuracy must be a valid number.");
+      return;
+    }
+
     setSaving(true);
 
-    const payload = {
+    const gpsPayload = {
       assignment_id: selectedAssignment.id,
+      operation_request_id: selectedAssignment.operation_request_id,
+      tree_id: selectedAssignment.tree_id,
+      customer_profile_id: selectedAssignment.customer_profile_id,
       caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
       latitude: lat,
       longitude: lng,
-      accuracy_meters: accuracyMeters ? Number(accuracyMeters) : null,
+      accuracy_meters: accuracy,
       gps_note: gpsNote.trim() || null,
       status: "SUBMITTED",
     };
 
-    const { error: gpsError } = await supabase.from("tree_gps_logs").insert(payload);
+    const { error: gpsError } = await supabase
+      .from("tree_gps_logs")
+      .insert(gpsPayload);
 
     if (gpsError) {
       setMessage(gpsError.message);
@@ -171,33 +195,17 @@ export default function GardenerGpsUpdatesPage() {
       return;
     }
 
-    const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
-      assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
-      task_type: "GPS Verification",
-      notes: gpsNote.trim() || "GPS verification submitted by gardener.",
-      status: "SUBMITTED",
-    });
+    const { error: treeError } = await supabase
+      .from("trees")
+      .update({
+        last_gps_update_at: new Date().toISOString(),
+      })
+      .eq("id", selectedAssignment.tree_id);
 
-    if (taskError) {
-      setMessage(taskError.message);
+    if (treeError) {
+      setMessage(treeError.message);
       setSaving(false);
       return;
-    }
-
-    await supabase
-      .from("caretaker_assignments")
-      .update({ status: "IN_PROGRESS" })
-      .eq("id", selectedAssignment.id);
-
-    if (selectedAssignment.operation_request_id) {
-      await supabase
-        .from("tree_operation_requests")
-        .update({ status: "IN_PROGRESS" })
-        .eq("id", selectedAssignment.operation_request_id);
     }
 
     setLatitude("");
@@ -205,7 +213,7 @@ export default function GardenerGpsUpdatesPage() {
     setAccuracyMeters("");
     setGpsNote("");
     setSaving(false);
-    setMessage("GPS update submitted and synced to Admin Operations.");
+    setMessage("GPS update submitted.");
     await loadData();
   }
 
@@ -239,7 +247,7 @@ export default function GardenerGpsUpdatesPage() {
           </h1>
 
           <p className="mt-2 text-white/70">
-            Submit verified GPS coordinates for assigned tree operations. Updates are saved to tree_gps_logs and visible to customer My Trees.
+            Submit verified GPS coordinates for assigned tree operations.
           </p>
         </div>
 
@@ -255,7 +263,7 @@ export default function GardenerGpsUpdatesPage() {
           </div>
         ) : assignments.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            No assigned jobs yet.
+            No active assigned jobs yet.
           </div>
         ) : (
           <section className="grid gap-6 lg:grid-cols-2">
@@ -353,7 +361,9 @@ export default function GardenerGpsUpdatesPage() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h3 className="font-bold text-white">GPS Verification</h3>
+                          <h3 className="font-bold text-white">
+                            GPS Verification
+                          </h3>
 
                           <p className="mt-1 text-sm text-white/60">
                             Tree: {item.tree_id || "—"}

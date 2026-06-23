@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+const ACTIVE_ASSIGNMENT_STATUSES = ["ASSIGNED", "IN_PROGRESS", "ACTIVE"];
+const ACTIVE_TASK_STATUSES = ["ASSIGNED", "IN_PROGRESS", "ACTIVE"];
+
 export default function GardenerPhotoUpdatesPage() {
   const [caretaker, setCaretaker] = useState<any>(null);
   const [assignments, setAssignments] = useState<any[]>([]);
@@ -37,10 +40,24 @@ export default function GardenerPhotoUpdatesPage() {
 
     const email = user.email?.trim().toLowerCase() || "";
 
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", email)
+      .maybeSingle();
+
+    const profile = profileById || profileByEmail;
+
     const { data: caretakerRow, error: caretakerError } = await supabase
       .from("caretakers")
       .select("*")
-      .eq("email", email)
+      .or(`email.eq.${email},caretaker_profile_id.eq.${profile?.id || user.id}`)
       .maybeSingle();
 
     if (caretakerError) {
@@ -67,13 +84,40 @@ export default function GardenerPhotoUpdatesPage() {
       .from("caretaker_assignments")
       .select("*")
       .eq("caretaker_id", caretakerRow.id)
-      .order("started_at", { ascending: false });
+      .in("status", ACTIVE_ASSIGNMENT_STATUSES);
 
     if (assignmentError) {
       setMessage(assignmentError.message);
       setLoading(false);
       return;
     }
+
+    const assignmentIds = (assignmentRows || []).map((item) => item.id);
+
+    const { data: taskRows, error: taskError } = assignmentIds.length
+      ? await supabase
+          .from("caretaker_task_logs")
+          .select("*")
+          .in("assignment_id", assignmentIds)
+          .in("status", ACTIVE_TASK_STATUSES)
+      : { data: [], error: null };
+
+    if (taskError) {
+      setMessage(taskError.message);
+      setLoading(false);
+      return;
+    }
+
+    const taskMap = new Map(
+      (taskRows || []).map((task) => [task.assignment_id, task])
+    );
+
+    const activeAssignments = (assignmentRows || [])
+      .filter((assignment) => taskMap.has(assignment.id))
+      .map((assignment) => ({
+        ...assignment,
+        active_task: taskMap.get(assignment.id),
+      }));
 
     const { data: photoRows, error: photoError } = await supabase
       .from("tree_photo_updates")
@@ -87,11 +131,9 @@ export default function GardenerPhotoUpdatesPage() {
       return;
     }
 
-    const rows = assignmentRows || [];
-
-    setAssignments(rows);
+    setAssignments(activeAssignments);
     setPhotoUpdates(photoRows || []);
-    setSelectedAssignmentId((current) => current || rows[0]?.id || "");
+    setSelectedAssignmentId((current) => current || activeAssignments[0]?.id || "");
     setLoading(false);
   }
 
@@ -108,7 +150,7 @@ export default function GardenerPhotoUpdatesPage() {
     }
 
     if (!selectedAssignment) {
-      setMessage("Please select an assignment.");
+      setMessage("Please select an active assignment.");
       return;
     }
 
@@ -119,15 +161,81 @@ export default function GardenerPhotoUpdatesPage() {
 
     setSaving(true);
 
+    const { data: freshAssignment, error: freshAssignmentError } = await supabase
+      .from("caretaker_assignments")
+      .select("*")
+      .eq("id", selectedAssignment.id)
+      .eq("caretaker_id", caretaker.id)
+      .in("status", ACTIVE_ASSIGNMENT_STATUSES)
+      .maybeSingle();
+
+    if (freshAssignmentError || !freshAssignment) {
+      setMessage("Active assignment not found or no longer available.");
+      setSaving(false);
+      return;
+    }
+
+    const { data: activeTask, error: taskError } = await supabase
+      .from("caretaker_task_logs")
+      .select("*")
+      .eq("assignment_id", freshAssignment.id)
+      .eq("caretaker_id", caretaker.id)
+      .in("status", ACTIVE_TASK_STATUSES)
+      .limit(1)
+      .maybeSingle();
+
+    if (taskError || !activeTask) {
+      setMessage("Active task not found for this assignment.");
+      setSaving(false);
+      return;
+    }
+
+    const operationRequestId =
+      freshAssignment.operation_request_id || activeTask.operation_request_id;
+
+    const treeId = freshAssignment.tree_id || activeTask.tree_id;
+    const customerProfileId =
+      freshAssignment.customer_profile_id || activeTask.customer_profile_id;
+
+    if (!operationRequestId || !treeId || !customerProfileId) {
+      setMessage("Assignment is missing required sync data.");
+      setSaving(false);
+      return;
+    }
+
+    if (
+      activeTask.operation_request_id &&
+      activeTask.operation_request_id !== operationRequestId
+    ) {
+      setMessage("Task operation request does not match assignment.");
+      setSaving(false);
+      return;
+    }
+
+    if (activeTask.tree_id && activeTask.tree_id !== treeId) {
+      setMessage("Task tree does not match assignment.");
+      setSaving(false);
+      return;
+    }
+
+    if (
+      activeTask.customer_profile_id &&
+      activeTask.customer_profile_id !== customerProfileId
+    ) {
+      setMessage("Task customer does not match assignment.");
+      setSaving(false);
+      return;
+    }
+
     const finalPhotoUrl =
       photoUrl.trim() || afterPhotoUrl.trim() || beforePhotoUrl.trim();
 
     const payload = {
-      assignment_id: selectedAssignment.id,
+      assignment_id: freshAssignment.id,
+      operation_request_id: operationRequestId,
+      tree_id: treeId,
+      customer_profile_id: customerProfileId,
       caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
       photo_url: finalPhotoUrl,
       before_photo_url: beforePhotoUrl.trim() || null,
       after_photo_url: afterPhotoUrl.trim() || null,
@@ -146,33 +254,15 @@ export default function GardenerPhotoUpdatesPage() {
       return;
     }
 
-    const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
-      assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
-      task_type: "Photo Update",
-      notes: notes.trim() || "Photo update submitted by gardener.",
-      status: "SUBMITTED",
-    });
+    const { error: treeError } = await supabase
+      .from("trees")
+      .update({ last_photo_update_at: new Date().toISOString() })
+      .eq("id", treeId);
 
-    if (taskError) {
-      setMessage(taskError.message);
+    if (treeError) {
+      setMessage(treeError.message);
       setSaving(false);
       return;
-    }
-
-    await supabase
-      .from("caretaker_assignments")
-      .update({ status: "IN_PROGRESS" })
-      .eq("id", selectedAssignment.id);
-
-    if (selectedAssignment.operation_request_id) {
-      await supabase
-        .from("tree_operation_requests")
-        .update({ status: "IN_PROGRESS" })
-        .eq("id", selectedAssignment.operation_request_id);
     }
 
     setPhotoUrl("");
@@ -181,7 +271,7 @@ export default function GardenerPhotoUpdatesPage() {
     setCaption("");
     setNotes("");
     setSaving(false);
-    setMessage("Photo update submitted and synced to Admin Operations.");
+    setMessage("Photo evidence submitted successfully.");
     await loadData();
   }
 
@@ -198,7 +288,7 @@ export default function GardenerPhotoUpdatesPage() {
   }
 
   return (
-    <main className="min-h-screen p-8 text-white">
+    <main className="min-h-screen bg-[#04140f] p-8 text-white">
       <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
@@ -206,11 +296,11 @@ export default function GardenerPhotoUpdatesPage() {
           </p>
 
           <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-            Photo Updates
+            Photo Evidence
           </h1>
 
           <p className="mt-2 text-white/70">
-            Submit tree photos for assigned jobs. Updates are saved to tree_photo_updates and synced to Admin Operations.
+            Submit photo evidence only for active assigned tree tasks.
           </p>
         </div>
 
@@ -222,21 +312,21 @@ export default function GardenerPhotoUpdatesPage() {
 
         {loading ? (
           <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            Loading photo updates...
+            Loading photo evidence...
           </div>
         ) : assignments.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            No assigned jobs yet.
+            No active photo evidence tasks yet.
           </div>
         ) : (
           <section className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
               <h2 className="text-2xl font-bold text-[#ffe49a]">
-                Submit Photo Update
+                Submit Photo Evidence
               </h2>
 
               <label className="mt-5 block text-sm font-bold text-white/70">
-                Assignment
+                Active Assignment
               </label>
               <select
                 value={selectedAssignmentId}
@@ -245,8 +335,8 @@ export default function GardenerPhotoUpdatesPage() {
               >
                 {assignments.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.assignment_type || "Tree Assignment"} —{" "}
-                    {item.tree_id || "No tree"}
+                    {item.assignment_type || "Tree Assignment"} — Tree{" "}
+                    {item.tree_id || "linked"}
                   </option>
                 ))}
               </select>
@@ -306,17 +396,19 @@ export default function GardenerPhotoUpdatesPage() {
                 disabled={saving}
                 className="mt-5 w-full rounded-xl bg-[#d9b45f] px-5 py-3 font-black text-[#071f16] disabled:opacity-50"
               >
-                {saving ? "Submitting..." : "Submit Photo Update"}
+                {saving ? "Submitting..." : "Submit Photo Evidence"}
               </button>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
               <h2 className="text-2xl font-bold text-[#ffe49a]">
-                Recent Photo Updates
+                Recent Photo Evidence
               </h2>
 
               {photoUpdates.length === 0 ? (
-                <p className="mt-5 text-white/70">No photo updates submitted yet.</p>
+                <p className="mt-5 text-white/70">
+                  No photo evidence submitted yet.
+                </p>
               ) : (
                 <div className="mt-5 space-y-4">
                   {photoUpdates.slice(0, 10).map((item) => (
@@ -327,11 +419,8 @@ export default function GardenerPhotoUpdatesPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <h3 className="font-bold text-white">
-                            {item.caption || "Tree Photo Update"}
+                            {item.caption || "Tree Photo Evidence"}
                           </h3>
-                          <p className="mt-1 text-sm text-white/60">
-                            Tree: {item.tree_id || "—"}
-                          </p>
                           <p className="mt-1 text-sm text-white/60">
                             Status: {item.status || "SUBMITTED"}
                           </p>

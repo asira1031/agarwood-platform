@@ -3,11 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+type Profile = Record<string, any>;
+type Caretaker = Record<string, any>;
 type Assignment = Record<string, any>;
 type HealthReport = Record<string, any>;
 
+const ACTIVE_ASSIGNMENT_STATUSES = ["ASSIGNED", "IN_PROGRESS", "STARTED"];
+
 export default function GardenerHealthReportsPage() {
-  const [caretaker, setCaretaker] = useState<any>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [caretaker, setCaretaker] = useState<Caretaker | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [reports, setReports] = useState<HealthReport[]>([]);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
@@ -24,10 +29,11 @@ export default function GardenerHealthReportsPage() {
     loadData();
   }, []);
 
-  async function loadData() {
-    setLoading(true);
-    setMessage("");
+  const selectedAssignment = useMemo(() => {
+    return assignments.find((item) => item.id === selectedAssignmentId) || null;
+  }, [assignments, selectedAssignmentId]);
 
+  async function resolveProfile() {
     const {
       data: { user },
       error: userError,
@@ -35,15 +41,44 @@ export default function GardenerHealthReportsPage() {
 
     if (userError || !user) {
       window.location.href = "/login";
-      return;
+      return null;
     }
 
     const email = user.email?.trim().toLowerCase() || "";
 
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", email)
+      .maybeSingle();
+
+    return profileById || profileByEmail || null;
+  }
+
+  async function loadData() {
+    setLoading(true);
+    setMessage("");
+
+    const profileRow = await resolveProfile();
+
+    if (!profileRow) {
+      setMessage("Profile not found.");
+      setLoading(false);
+      return;
+    }
+
+    setProfile(profileRow);
+
     const { data: caretakerRow, error: caretakerError } = await supabase
       .from("caretakers")
       .select("*")
-      .eq("email", email)
+      .eq("caretaker_profile_id", profileRow.id)
       .maybeSingle();
 
     if (caretakerError) {
@@ -53,7 +88,7 @@ export default function GardenerHealthReportsPage() {
     }
 
     if (!caretakerRow) {
-      setMessage("Caretaker profile not found.");
+      setMessage("Gardener profile not found.");
       setLoading(false);
       return;
     }
@@ -70,7 +105,8 @@ export default function GardenerHealthReportsPage() {
       .from("caretaker_assignments")
       .select("*")
       .eq("caretaker_id", caretakerRow.id)
-      .order("started_at", { ascending: false });
+      .in("status", ACTIVE_ASSIGNMENT_STATUSES)
+      .order("created_at", { ascending: false });
 
     if (assignmentError) {
       setMessage(assignmentError.message);
@@ -98,37 +134,61 @@ export default function GardenerHealthReportsPage() {
     setLoading(false);
   }
 
-  const selectedAssignment = useMemo(() => {
-    return assignments.find((item) => item.id === selectedAssignmentId) || null;
-  }, [assignments, selectedAssignmentId]);
-
   async function saveHealthReport() {
     setMessage("");
 
+    if (!profile) {
+      setMessage("Profile not found.");
+      return;
+    }
+
     if (!caretaker) {
-      setMessage("Caretaker profile not found.");
+      setMessage("Gardener profile not found.");
       return;
     }
 
     if (!selectedAssignment) {
-      setMessage("Please select an assignment.");
+      setMessage("Please select an active assignment.");
+      return;
+    }
+
+    if (!selectedAssignment.operation_request_id) {
+      setMessage("Missing operation request ID from assignment.");
+      return;
+    }
+
+    if (!selectedAssignment.tree_id) {
+      setMessage("Missing tree ID from assignment.");
+      return;
+    }
+
+    if (!selectedAssignment.customer_profile_id) {
+      setMessage("Missing customer profile ID from assignment.");
+      return;
+    }
+
+    if (!selectedAssignment.caretaker_id) {
+      setMessage("Missing caretaker ID from assignment.");
       return;
     }
 
     setSaving(true);
 
+    const now = new Date().toISOString();
+
     const payload = {
       assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
+      operation_request_id: selectedAssignment.operation_request_id,
+      tree_id: selectedAssignment.tree_id,
+      customer_profile_id: selectedAssignment.customer_profile_id,
+      caretaker_id: selectedAssignment.caretaker_id,
       health_status: healthStatus,
       disease_found: diseaseFound,
       pest_found: pestFound,
       issue_notes: issueNotes.trim() || null,
       recommendation: recommendation.trim() || null,
       status: "SUBMITTED",
+      created_at: now,
     };
 
     const { error: reportError } = await supabase
@@ -141,33 +201,18 @@ export default function GardenerHealthReportsPage() {
       return;
     }
 
-    const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
-      assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
-      task_type: "Health Report",
-      notes: issueNotes.trim() || "Health report submitted by gardener.",
-      status: "SUBMITTED",
-    });
+    const { error: treeError } = await supabase
+      .from("trees")
+      .update({
+        last_health_report_at: now,
+        last_health_status: healthStatus,
+      })
+      .eq("id", selectedAssignment.tree_id);
 
-    if (taskError) {
-      setMessage(taskError.message);
+    if (treeError) {
+      setMessage(treeError.message);
       setSaving(false);
       return;
-    }
-
-    await supabase
-      .from("caretaker_assignments")
-      .update({ status: "IN_PROGRESS" })
-      .eq("id", selectedAssignment.id);
-
-    if (selectedAssignment.operation_request_id) {
-      await supabase
-        .from("tree_operation_requests")
-        .update({ status: "IN_PROGRESS" })
-        .eq("id", selectedAssignment.operation_request_id);
     }
 
     setHealthStatus("HEALTHY");
@@ -176,7 +221,7 @@ export default function GardenerHealthReportsPage() {
     setIssueNotes("");
     setRecommendation("");
     setSaving(false);
-    setMessage("Health report submitted and synced to Admin Operations.");
+    setMessage("Health report submitted and synced to customer tree health records.");
     await loadData();
   }
 
@@ -193,8 +238,8 @@ export default function GardenerHealthReportsPage() {
   }
 
   return (
-    <main className="min-h-screen p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
+    <main className="min-h-screen bg-[#06150f] p-8 text-white">
+      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/90 p-8 shadow-2xl backdrop-blur-md">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
             Arganwood Gardener Portal
@@ -205,7 +250,7 @@ export default function GardenerHealthReportsPage() {
           </h1>
 
           <p className="mt-2 text-white/70">
-            Submit tree condition reports, pest checks, disease checks, and recommendations.
+            Submit verified tree health evidence from active assigned tasks.
           </p>
         </div>
 
@@ -221,7 +266,7 @@ export default function GardenerHealthReportsPage() {
           </div>
         ) : assignments.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            No assigned jobs yet.
+            No active assigned health tasks yet.
           </div>
         ) : (
           <section className="grid gap-6 lg:grid-cols-2">
@@ -231,7 +276,7 @@ export default function GardenerHealthReportsPage() {
               </h2>
 
               <label className="mt-5 block text-sm font-bold text-white/70">
-                Assignment
+                Active Assignment
               </label>
 
               <select
@@ -242,7 +287,7 @@ export default function GardenerHealthReportsPage() {
                 {assignments.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.assignment_type || "Tree Assignment"} —{" "}
-                    {item.tree_id || "No tree"}
+                    {item.tree_id || "Tree"}
                   </option>
                 ))}
               </select>
@@ -317,7 +362,9 @@ export default function GardenerHealthReportsPage() {
               </h2>
 
               {reports.length === 0 ? (
-                <p className="mt-5 text-white/70">No health reports submitted yet.</p>
+                <p className="mt-5 text-white/70">
+                  No health reports submitted yet.
+                </p>
               ) : (
                 <div className="mt-5 space-y-4">
                   {reports.slice(0, 10).map((item) => (
