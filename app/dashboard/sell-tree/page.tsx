@@ -7,916 +7,690 @@ type Profile = {
   id: string;
   full_name: string | null;
   email: string | null;
-  membership_status: string | null;
-  kyc_status: string | null;
 };
 
-type Tree = {
+type TreeRow = Record<string, any>;
+
+type SellTreeRequest = {
   id: string;
-  profile_id: string;
-  tree_code: string | null;
-  display_name: string | null;
-  farm_location: string | null;
-  block_name: string | null;
-  estimated_value: number | null;
-  current_stage: string | null;
-  ownership_status: string | null;
+  profile_id: string | null;
+  tree_id: string | null;
+  tree_value: number | null;
+  platform_fee: number | null;
+  net_receive: number | null;
+  approved_value: number | null;
+  status: string | null;
+  admin_notes: string | null;
+  created_at?: string | null;
 };
 
-type SellTreeRequest = Record<string, any>;
+type WithdrawalRequest = {
+  id: string;
+  profile_id: string | null;
+  amount: number | null;
+  processing_fee: number | null;
+  net_receive: number | null;
+  status: string | null;
+  payout_method: string | null;
+  payout_account_name: string | null;
+  payout_account_number: string | null;
+  created_at?: string | null;
+};
 
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
+const forestBg =
+  "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1800&q=80";
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "Not set";
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
+const PLATFORM_FEE_RATE = 0.02;
 
-function normalizeStatus(value: any) {
-  return String(value || "PENDING").trim().toUpperCase();
-}
+const statusText: Record<string, string> = {
+  PENDING: "Your sell request is waiting for Admin review.",
+  INSPECTION_REQUESTED: "Admin requested field inspection.",
+  INSPECTION_SUBMITTED: "Gardener submitted inspection evidence.",
+  OFFER_SENT: "Admin sent you an offer. You can accept or wait.",
+  CUSTOMER_ACCEPTED: "You accepted the offer. Payout is being prepared.",
+  PAYOUT_QUEUED: "Withdrawal request was created and is waiting for Admin payout.",
+  PAID: "Payout completed.",
+  REJECTED: "Admin rejected the sell request.",
+};
 
-function statusClass(value: any) {
-  const status = normalizeStatus(value);
-  if (["APPROVED", "COMPLETED", "PAID", "SOLD"].includes(status)) return "good";
-  if (["PENDING", "PENDING ADMIN VALUATION", "PROCESSING", "WAITING"].includes(status)) return "warning";
-  if (["REJECTED", "CANCELLED", "FAILED"].includes(status)) return "bad";
-  return "neutral";
-}
-
-function getTreeKey(tree: Tree) {
-  return tree.tree_code || tree.display_name || tree.id;
-}
-
-function requestMatchesTree(request: SellTreeRequest, tree: Tree) {
-  const requestTreeId = String(request.tree_id || "");
-  return (
-    requestTreeId === tree.id ||
-    requestTreeId === tree.tree_code ||
-    requestTreeId === tree.display_name
-  );
-}
-
-function isPendingRequest(request: SellTreeRequest) {
-  const status = normalizeStatus(request.status);
-  return ["PENDING", "PENDING ADMIN VALUATION", "PROCESSING", "WAITING"].includes(status);
-}
-
-export default function SellTreePage() {
+export default function CustomerSellTreePageV6() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [trees, setTrees] = useState<Tree[]>([]);
+  const [trees, setTrees] = useState<TreeRow[]>([]);
   const [requests, setRequests] = useState<SellTreeRequest[]>([]);
+  const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+
   const [selectedTreeId, setSelectedTreeId] = useState("");
+  const [payoutMethod, setPayoutMethod] = useState("BANK_TRANSFER");
+  const [payoutAccountName, setPayoutAccountName] = useState("");
+  const [payoutAccountNumber, setPayoutAccountNumber] = useState("");
+
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState("");
-
-  async function findProfile() {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError) throw new Error(userError.message);
-
-    if (!user) {
-      window.location.href = "/login";
-      return null;
-    }
-
-    const email = user.email?.trim().toLowerCase() || "";
-
-    const { data: profileById, error: profileByIdError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (profileByIdError) throw new Error(profileByIdError.message);
-
-    const { data: profileByEmail, error: profileByEmailError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email, membership_status, kyc_status")
-      .ilike("email", email)
-      .maybeSingle();
-
-    if (profileByEmailError) throw new Error(profileByEmailError.message);
-
-    return profileById || profileByEmail;
-  }
-
-  async function loadData() {
-    setLoading(true);
-    setMessage("");
-
-    try {
-      const currentProfile = await findProfile();
-
-      if (!currentProfile) {
-        setLoading(false);
-        return;
-      }
-
-      setProfile(currentProfile);
-
-      const { data: treeData, error: treeError } = await supabase
-        .from("trees")
-        .select(
-          "id, profile_id, tree_code, display_name, farm_location, block_name, estimated_value, current_stage, ownership_status"
-        )
-        .eq("profile_id", currentProfile.id)
-        .order("tree_code", { ascending: true });
-
-      if (treeError) throw new Error(treeError.message);
-
-      const { data: requestData, error: requestError } = await supabase
-        .from("sell_tree_requests")
-        .select("*")
-        .eq("profile_id", currentProfile.id)
-        .order("created_at", { ascending: false });
-
-      if (requestError) throw new Error(requestError.message);
-
-      const activeTrees = (treeData || []).filter((tree) => {
-        const status = normalizeStatus(tree.ownership_status);
-        return !["SOLD", "EXITED", "TRANSFERRED", "CANCELLED"].includes(status);
-      });
-
-      setTrees(activeTrees);
-      setRequests(requestData || []);
-
-      if (activeTrees.length > 0 && !selectedTreeId) {
-        setSelectedTreeId(activeTrees[0].id);
-      }
-    } catch (error: any) {
-      setMessage(error.message || "Failed to load sell tree data.");
-    }
-
-    setLoading(false);
-  }
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    loadData();
+    loadSellTreeCenter();
   }, []);
 
   const selectedTree = useMemo(() => {
     return trees.find((tree) => tree.id === selectedTreeId) || null;
   }, [trees, selectedTreeId]);
 
-  const pendingRequests = useMemo(() => {
-    return requests.filter(isPendingRequest);
-  }, [requests]);
+  const previewValue = useMemo(() => {
+    if (!selectedTree) return 0;
+    return getTreeValue(selectedTree);
+  }, [selectedTree]);
 
-  const selectedTreePendingRequest = useMemo(() => {
-    if (!selectedTree) return null;
-    return pendingRequests.find((request) => requestMatchesTree(request, selectedTree)) || null;
-  }, [pendingRequests, selectedTree]);
+  const previewFee = useMemo(() => {
+    return Math.round(previewValue * PLATFORM_FEE_RATE);
+  }, [previewValue]);
 
-  const membershipActive = normalizeStatus(profile?.membership_status) === "ACTIVE";
-  const kycApproved = normalizeStatus(profile?.kyc_status) === "APPROVED";
+  const previewNet = useMemo(() => {
+    return Math.max(previewValue - previewFee, 0);
+  }, [previewValue, previewFee]);
 
-  const canSubmit =
-    membershipActive &&
-    kycApproved &&
-    Boolean(selectedTree) &&
-    !selectedTreePendingRequest &&
-    !submitting;
+  async function resolveProfile() {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
 
-  async function submitValuationRequest() {
-    setMessage("");
-
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
+    if (authError || !authData.user) {
+      throw new Error("Please login first.");
     }
 
-    if (!selectedTree) {
-      setMessage("Select a tree first.");
-      return;
+    const user = authData.user;
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .eq("email", user.email || "")
+      .maybeSingle();
+
+    const resolved = profileById || profileByEmail;
+
+    if (!resolved) {
+      throw new Error("Customer profile not found.");
     }
 
-    if (!membershipActive || !kycApproved) {
-      setMessage("Sell Tree is locked. Membership must be ACTIVE and KYC must be APPROVED.");
-      return;
+    return resolved as Profile;
+  }
+
+  async function loadCustomerTrees(profileId: string) {
+    const { data: bothRows, error: bothError } = await supabase
+      .from("trees")
+      .select("*")
+      .or(`customer_profile_id.eq.${profileId},profile_id.eq.${profileId}`)
+      .order("created_at", { ascending: false });
+
+    if (!bothError) return (bothRows || []) as TreeRow[];
+
+    const { data: customerRows, error: customerError } = await supabase
+      .from("trees")
+      .select("*")
+      .eq("customer_profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    if (!customerError) return (customerRows || []) as TreeRow[];
+
+    const { data: profileRows, error: profileError } = await supabase
+      .from("trees")
+      .select("*")
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    if (profileError) throw profileError;
+
+    return (profileRows || []) as TreeRow[];
+  }
+
+  async function loadSellTreeCenter() {
+    try {
+      setLoading(true);
+
+      const resolvedProfile = await resolveProfile();
+      setProfile(resolvedProfile);
+
+      const treeRows = await loadCustomerTrees(resolvedProfile.id);
+      setTrees(treeRows);
+
+      const { data: requestRows, error: requestError } = await supabase
+        .from("sell_tree_requests")
+        .select("*")
+        .eq("profile_id", resolvedProfile.id)
+        .order("created_at", { ascending: false });
+
+      if (requestError) throw requestError;
+
+      setRequests((requestRows || []) as SellTreeRequest[]);
+
+      const { data: withdrawalRows, error: withdrawalError } = await supabase
+        .from("withdrawal_requests")
+        .select("*")
+        .eq("profile_id", resolvedProfile.id)
+        .order("created_at", { ascending: false });
+
+      if (withdrawalError) throw withdrawalError;
+
+      setWithdrawals((withdrawalRows || []) as WithdrawalRequest[]);
+    } catch (error: any) {
+      alert(error.message || "Failed to load Sell Tree Center.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createSellRequest() {
+    if (!profile) return alert("Profile not found.");
+    if (!selectedTree) return alert("Please select a seedling to sell.");
+
+    const existingActive = requests.find(
+      (request) =>
+        request.tree_id === selectedTree.id &&
+        !["PAID", "REJECTED"].includes(request.status || "PENDING")
+    );
+
+    if (existingActive) {
+      return alert("This seedling already has an active sell request.");
     }
 
-    if (selectedTreePendingRequest) {
-      setMessage("This tree already has a pending admin valuation request.");
-      return;
+    try {
+      setSaving(true);
+
+      const treeValue = getTreeValue(selectedTree);
+      const platformFee = Math.round(treeValue * PLATFORM_FEE_RATE);
+      const netReceive = Math.max(treeValue - platformFee, 0);
+
+      const { error } = await supabase.from("sell_tree_requests").insert({
+        profile_id: profile.id,
+        tree_id: selectedTree.id,
+        tree_value: treeValue,
+        platform_fee: platformFee,
+        net_receive: netReceive,
+        status: "PENDING",
+        admin_notes: null,
+      });
+
+      if (error) throw error;
+
+      setSelectedTreeId("");
+      await loadSellTreeCenter();
+      alert("Sell request created. Waiting for Admin review.");
+    } catch (error: any) {
+      alert(error.message || "Failed to create sell request.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function acceptOffer(request: SellTreeRequest) {
+    if (!profile) return alert("Profile not found.");
+    if (request.status !== "OFFER_SENT") {
+      return alert("This offer is not available for acceptance.");
     }
 
-    setSubmitting(true);
+    if (!payoutAccountName.trim()) return alert("Please enter payout account name.");
+    if (!payoutAccountNumber.trim()) return alert("Please enter payout account number.");
 
-    const treeCode = getTreeKey(selectedTree);
+    const previousStatus = request.status || "OFFER_SENT";
 
-    const { error } = await supabase.from("sell_tree_requests").insert({
-      profile_id: profile.id,
-      tree_id: treeCode,
-      tree_value: 0,
-      platform_fee: 0,
-      net_receive: 0,
-      status: "PENDING ADMIN VALUATION",
-    });
+    const approvedValue = Number(
+      request.approved_value || request.net_receive || request.tree_value || 0
+    );
+    const fee = Number(request.platform_fee || Math.round(approvedValue * PLATFORM_FEE_RATE));
+    const net = Number(request.net_receive || Math.max(approvedValue - fee, 0));
 
-    if (error) {
-      setMessage(error.message);
-      setSubmitting(false);
-      return;
+    let createdWithdrawalId: string | null = null;
+
+    try {
+      setSaving(true);
+
+      const { error: acceptError } = await supabase
+        .from("sell_tree_requests")
+        .update({ status: "CUSTOMER_ACCEPTED" })
+        .eq("id", request.id)
+        .eq("profile_id", profile.id);
+
+      if (acceptError) throw acceptError;
+
+      const { data: withdrawalData, error: withdrawalError } = await supabase
+        .from("withdrawal_requests")
+        .insert({
+          profile_id: profile.id,
+          amount: approvedValue,
+          processing_fee: fee,
+          net_receive: net,
+          status: "PENDING",
+          payout_method: payoutMethod,
+          payout_account_name: payoutAccountName.trim(),
+          payout_account_number: payoutAccountNumber.trim(),
+        })
+        .select("id")
+        .single();
+
+      if (withdrawalError) {
+        await supabase
+          .from("sell_tree_requests")
+          .update({ status: previousStatus })
+          .eq("id", request.id)
+          .eq("profile_id", profile.id);
+
+        throw withdrawalError;
+      }
+
+      createdWithdrawalId = withdrawalData?.id || null;
+
+      const { error: queuedError } = await supabase
+        .from("sell_tree_requests")
+        .update({ status: "PAYOUT_QUEUED" })
+        .eq("id", request.id)
+        .eq("profile_id", profile.id);
+
+      if (queuedError) {
+        if (createdWithdrawalId) {
+          await supabase
+            .from("withdrawal_requests")
+            .delete()
+            .eq("id", createdWithdrawalId)
+            .eq("profile_id", profile.id);
+        }
+
+        await supabase
+          .from("sell_tree_requests")
+          .update({ status: previousStatus })
+          .eq("id", request.id)
+          .eq("profile_id", profile.id);
+
+        throw queuedError;
+      }
+
+      setPayoutAccountName("");
+      setPayoutAccountNumber("");
+
+      await loadSellTreeCenter();
+      alert("Offer accepted. Withdrawal request created.");
+    } catch (error: any) {
+      alert(error.message || "Failed to accept offer. Changes were rolled back.");
+    } finally {
+      setSaving(false);
     }
+  }
 
-    setMessage("Tree valuation request submitted. Waiting for admin valuation.");
-    await loadData();
-    setSubmitting(false);
+  function getForestName(tree: TreeRow | null | undefined) {
+    if (!tree) return "Robert Forest";
+
+    return (
+      tree.tree_group_name ||
+      tree.plantation_block ||
+      tree.block_name ||
+      tree.farm_location ||
+      "Robert Forest"
+    );
+  }
+
+  function getSeedlingName(tree: TreeRow | null | undefined) {
+    if (!tree) return "Seedling";
+
+    return tree.display_name || tree.custom_name || "Seedling";
+  }
+
+  function getTreeValue(tree: TreeRow | null | undefined) {
+    if (!tree) return 0;
+
+    return Number(
+      tree.valuation_amount ||
+        tree.current_value ||
+        tree.tree_value ||
+        tree.purchase_price ||
+        tree.price ||
+        0
+    );
+  }
+
+  function findTree(treeId?: string | null) {
+    if (!treeId) return null;
+    return trees.find((tree) => tree.id === treeId) || null;
+  }
+
+  function findWithdrawalForRequest(request: SellTreeRequest) {
+    const net = Number(request.net_receive || 0);
+    const amount = Number(request.approved_value || request.tree_value || 0);
+
+    return (
+      withdrawals.find((withdrawal) => Number(withdrawal.net_receive || 0) === net && net > 0) ||
+      withdrawals.find((withdrawal) => Number(withdrawal.amount || 0) === amount && amount > 0) ||
+      null
+    );
+  }
+
+  function money(value?: number | null) {
+    return `₱${Number(value || 0).toLocaleString("en-PH", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  function statusBadge(status?: string | null) {
+    const s = status || "PENDING";
+
+    if (s === "PAID") return "border-emerald-400/40 bg-emerald-500/15 text-emerald-300";
+    if (s === "REJECTED") return "border-red-400/40 bg-red-500/15 text-red-300";
+    if (s === "OFFER_SENT") return "border-amber-400/40 bg-amber-500/15 text-amber-300";
+    if (s === "PAYOUT_QUEUED" || s === "CUSTOMER_ACCEPTED") {
+      return "border-blue-400/40 bg-blue-500/15 text-blue-300";
+    }
+    return "border-white/15 bg-white/10 text-white/75";
+  }
+
+  function formatDate(date?: string | null) {
+    if (!date) return "";
+    return new Date(date).toLocaleString();
+  }
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-[#020b06] text-white flex items-center justify-center">
+        <div className="rounded-3xl border border-amber-400/20 bg-white/5 px-8 py-6 text-amber-200">
+          Loading Sell Tree Center...
+        </div>
+      </main>
+    );
   }
 
   return (
-    <main className="sellPage">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Agarwood Sell Tree</p>
-          <h1>Sell Tree</h1>
-          <span>
-            Request admin valuation for your selected tree. Admin will set the offered price,
-            add notes, and approve or reject the sale.
-          </span>
-        </div>
+    <main className="min-h-screen bg-[#020b06] text-white p-4 md:p-6">
+      <div className="mx-auto max-w-7xl rounded-[2rem] border border-emerald-400/20 bg-[#03110b]/95 p-4 md:p-6 shadow-2xl">
+        <section
+          className="relative overflow-hidden rounded-[2rem] border border-emerald-300/20 bg-cover bg-center p-8 md:p-12"
+          style={{
+            backgroundImage: `linear-gradient(90deg, rgba(2,11,6,.98), rgba(2,11,6,.70), rgba(2,11,6,.30)), url(${forestBg})`,
+          }}
+        >
+          <div className="relative z-10 max-w-3xl">
+            <p className="text-amber-300 text-sm font-bold tracking-[0.25em] uppercase">
+              Arganwood Sell Tree
+            </p>
+            <h1 className="mt-4 text-4xl md:text-5xl font-serif font-bold">
+              Sell Tree Center V6
+            </h1>
+            <p className="mt-4 text-white/85 max-w-xl">
+              Create a sell request, wait for Admin offer, accept offer, then track payout queue.
+            </p>
+          </div>
+        </section>
 
-        <div className="heroCard">
-          <p>Admin Valuation</p>
-          <strong>Pending</strong>
-          <small>Price is set by admin review</small>
-        </div>
-      </section>
+        <section className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard title="Owned Seedlings" value={trees.length} icon="🌱" />
+          <StatCard title="Sell Requests" value={requests.length} icon="📄" />
+          <StatCard
+            title="Offers Sent"
+            value={requests.filter((r) => r.status === "OFFER_SENT").length}
+            icon="🤝"
+          />
+          <StatCard
+            title="Payout Queue"
+            value={withdrawals.filter((w) => w.status !== "PAID").length}
+            icon="🏦"
+          />
+        </section>
 
-      {loading ? (
-        <div className="loadingBox">Loading trees and sell tree requests...</div>
-      ) : (
-        <>
-          {message && <div className="messageBox">{message}</div>}
+        <section className="mt-5 grid grid-cols-1 lg:grid-cols-[430px_1fr] gap-5">
+          <div className="space-y-5">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+              <StepHeader step="1" title="CREATE SELL REQUEST" subtitle="Select your owned seedling." />
 
-          <section className="cards">
-            <SummaryCard
-              icon="🌳"
-              label="Available Trees"
-              value={String(trees.length)}
-              note="Can request valuation"
-            />
-            <SummaryCard
-              icon="⏳"
-              label="Pending Valuation"
-              value={String(pendingRequests.length)}
-              note="Waiting for admin"
-              gold
-            />
-            <SummaryCard
-              icon="🎖️"
-              label="Membership"
-              value={profile?.membership_status || "UNKNOWN"}
-              note="Required to sell"
-            />
-            <SummaryCard
-              icon="🛡️"
-              label="KYC Status"
-              value={profile?.kyc_status || "UNKNOWN"}
-              note="Required for payout"
-              gold
-            />
-          </section>
+              <div className="mt-6 space-y-4">
+                <label className="block">
+                  <span className="text-sm font-semibold">Choose Seedling</span>
+                  <select
+                    className="mt-2 w-full rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
+                    value={selectedTreeId}
+                    onChange={(e) => setSelectedTreeId(e.target.value)}
+                  >
+                    <option value="">Select seedling</option>
+                    {trees.map((tree) => (
+                      <option key={tree.id} value={tree.id}>
+                        {getForestName(tree)} — {getSeedlingName(tree)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-          <section className="grid">
-            <div className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Select Tree</h2>
-                  <p>
-                    Choose the tree you want admin to evaluate. Trees with pending valuation
-                    requests are locked from duplicate requests.
-                  </p>
-                </div>
+                {selectedTree ? (
+                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5 space-y-3">
+                    <InfoRow label="Forest Name" value={getForestName(selectedTree)} />
+                    <InfoRow label="Seedling Name" value={getSeedlingName(selectedTree)} />
+                    <InfoRow label="Estimated Value" value={money(previewValue)} />
+                    <InfoRow label="Preview Fee" value={money(previewFee)} />
+                    <InfoRow label="Preview Net Receive" value={money(previewNet)} />
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-white/60">
+                    Choose a seedling to preview estimated sell value.
+                  </div>
+                )}
+
+                <button
+                  onClick={createSellRequest}
+                  disabled={saving || !selectedTree}
+                  className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Create Sell Request"}
+                </button>
               </div>
+            </div>
 
-              {trees.length === 0 ? (
-                <div className="emptyState">No active owned trees found.</div>
+            <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+              <StepHeader step="2" title="PAYOUT DETAILS" subtitle="Required when accepting offer." />
+
+              <div className="mt-6 space-y-4">
+                <label className="block">
+                  <span className="text-sm font-semibold">Payout Method</span>
+                  <select
+                    className="mt-2 w-full rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
+                    value={payoutMethod}
+                    onChange={(e) => setPayoutMethod(e.target.value)}
+                  >
+                    <option value="BANK_TRANSFER">Bank Transfer</option>
+                    <option value="GCASH">GCash</option>
+                    <option value="MAYA">Maya</option>
+                    <option value="MANUAL_PAYOUT">Manual Payout</option>
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="text-sm font-semibold">Account Name</span>
+                  <input
+                    className="mt-2 w-full rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
+                    value={payoutAccountName}
+                    onChange={(e) => setPayoutAccountName(e.target.value)}
+                    placeholder="Account holder name"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-sm font-semibold">Account Number</span>
+                  <input
+                    className="mt-2 w-full rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
+                    value={payoutAccountNumber}
+                    onChange={(e) => setPayoutAccountNumber(e.target.value)}
+                    placeholder="Bank / wallet number"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+            <StepHeader step="3" title="SELL REQUEST HISTORY" subtitle="View Admin offer and payout status." />
+
+            <div className="mt-6 space-y-4">
+              {requests.length === 0 ? (
+                <div className="rounded-3xl border border-white/10 bg-black/20 p-8 text-white/60">
+                  No sell requests yet.
+                </div>
               ) : (
-                <div className="treeList">
-                  {trees.map((tree) => {
-                    const pending = pendingRequests.find((request) =>
-                      requestMatchesTree(request, tree)
-                    );
-                    const selected = selectedTreeId === tree.id;
-
-                    return (
-                      <button
-                        key={tree.id}
-                        className={selected ? "treeCard selected" : "treeCard"}
-                        onClick={() => setSelectedTreeId(tree.id)}
-                      >
-                        <div>
-                          <strong>{tree.tree_code || tree.display_name || "Unnamed Tree"}</strong>
-                          <p>{tree.display_name || "Agarwood Tree"}</p>
-                          <small>
-                            {tree.farm_location || "No farm"} • {tree.block_name || "No block"}
-                          </small>
-                        </div>
-
-                        <div>
-                          <span className={pending ? "pendingBadge" : ""}>
-                            {pending ? "Pending Admin Valuation" : tree.current_stage || "Unknown Stage"}
-                          </span>
-                          <b>{tree.ownership_status || "ACTIVE"}</b>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <aside className="panel">
-              <div className="panelHead">
-                <div>
-                  <h2>Valuation Request</h2>
-                  <p>Customer does not set the price. Admin will decide the tree value.</p>
-                </div>
-              </div>
-
-              <Rule ok={membershipActive} title="Membership" value={profile?.membership_status || "UNKNOWN"} />
-              <Rule ok={kycApproved} title="KYC Verification" value={profile?.kyc_status || "UNKNOWN"} />
-
-              <div className="previewBox">
-                <Preview
-                  label="Selected Tree"
-                  value={selectedTree?.tree_code || selectedTree?.display_name || "None"}
-                />
-                <Preview label="Admin Valuation" value="Waiting for admin review" />
-                <Preview label="Platform Fee" value="Calculated after approval" />
-                <Preview label="Net Receive" value="Available after approval" final />
-              </div>
-
-              <button className="primaryButton" onClick={submitValuationRequest} disabled={!canSubmit}>
-                {submitting
-                  ? "Submitting..."
-                  : selectedTreePendingRequest
-                    ? "Already Pending Valuation"
-                    : "Request Tree Valuation"}
-              </button>
-
-              {!canSubmit && (
-                <small className="lockText">
-                  Sell Tree requires ACTIVE membership, APPROVED KYC, selected tree,
-                  and no duplicate pending valuation request.
-                </small>
-              )}
-            </aside>
-          </section>
-
-          <section className="panel requestsPanel">
-            <div className="panelHead">
-              <div>
-                <h2>Sell Tree Requests</h2>
-                <p>Live request log from sell_tree_requests.</p>
-              </div>
-            </div>
-
-            {requests.length === 0 ? (
-              <div className="emptyState">No sell tree requests yet.</div>
-            ) : (
-              <div className="requestList">
-                {requests.map((item) => {
-                  const adminValue = Number(item.approved_value || item.final_value || item.tree_value || 0);
-                  const fee = Number(item.platform_fee || 0);
-                  const net = Number(item.net_receive || 0);
+                requests.map((request) => {
+                  const tree = findTree(request.tree_id);
+                  const withdrawal = findWithdrawalForRequest(request);
+                  const status = request.status || "PENDING";
 
                   return (
-                    <div className="requestCard" key={item.id}>
-                      <div>
-                        <strong>{item.tree_id || "No Tree ID"}</strong>
-                        <p>
-                          Admin Valuation:{" "}
-                          {adminValue > 0 ? peso(adminValue) : "Waiting for admin review"}
-                        </p>
-                        <p>
-                          Platform Fee: {fee > 0 ? peso(fee) : "Pending approval"}
-                        </p>
-                        <small>{item.admin_notes || "Admin Notes: Waiting for review"}</small>
+                    <div
+                      key={request.id}
+                      className="rounded-3xl border border-white/10 bg-black/20 p-5"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                        <div>
+                          <p className="text-amber-300 text-xs font-bold tracking-[0.2em] uppercase">
+                            Sell Request
+                          </p>
+                          <h3 className="mt-2 text-2xl font-serif font-bold">
+                            {getSeedlingName(tree)}
+                          </h3>
+                          <p className="text-white/60">{getForestName(tree)}</p>
+                          <p className="mt-1 text-xs text-white/45">{formatDate(request.created_at)}</p>
+                        </div>
+
+                        <span className={`w-fit rounded-xl border px-4 py-2 text-xs font-bold ${statusBadge(status)}`}>
+                          {status}
+                        </span>
                       </div>
 
-                      <div>
-                        <span className={`status ${statusClass(item.status)}`}>
-                          {item.status || "PENDING ADMIN VALUATION"}
-                        </span>
-                        <b>{net > 0 ? `Net Receive: ${peso(net)}` : "Net Receive: Pending"}</b>
-                        <small>{formatDate(item.created_at)}</small>
+                      <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <MiniBox label="Tree Value" value={money(request.tree_value)} />
+                        <MiniBox label="Admin Offer" value={money(request.approved_value)} />
+                        <MiniBox label="Net Receive" value={money(request.net_receive)} />
                       </div>
+
+                      <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <InfoRow label="Platform Fee" value={money(request.platform_fee)} />
+                        <InfoRow
+                          label="Withdrawal Status"
+                          value={withdrawal?.status || (status === "PAYOUT_QUEUED" ? "PENDING" : "Not created yet")}
+                        />
+                        {withdrawal ? (
+                          <InfoRow label="Paid Amount" value={money(withdrawal.net_receive)} />
+                        ) : null}
+                      </div>
+
+                      {request.admin_notes ? (
+                        <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4">
+                          <p className="text-amber-300 font-bold text-sm">Admin Notes</p>
+                          <p className="mt-2 text-white/85">{request.admin_notes}</p>
+                        </div>
+                      ) : null}
+
+                      <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+                        <p className="text-emerald-300 font-bold text-sm">Status Meaning</p>
+                        <p className="mt-2 text-white/80">
+                          {statusText[status] || "Your sell request is being processed."}
+                        </p>
+                      </div>
+
+                      {status === "OFFER_SENT" ? (
+                        <div className="mt-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
+                          <div>
+                            <p className="text-amber-300 font-bold">Admin Offer Ready</p>
+                            <p className="text-white/70 text-sm">
+                              Accepting this creates a withdrawal request. Wallet will not be credited.
+                            </p>
+                          </div>
+
+                          <button
+                            onClick={() => acceptOffer(request)}
+                            disabled={saving}
+                            className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-6 py-3 text-black font-bold hover:opacity-90 disabled:opacity-50"
+                          >
+                            Accept Offer
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   );
-                })}
-              </div>
-            )}
-          </section>
-        </>
-      )}
-
-      <style>{`
-        * { box-sizing: border-box; }
-
-        .sellPage {
-          min-height: 100vh;
-          padding: 28px;
-          color: #18261d;
-          font-family: Arial, Helvetica, sans-serif;
-          background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 22%),
-            radial-gradient(circle at 90% 12%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
-        }
-
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 20px;
-          margin-bottom: 22px;
-        }
-
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          letter-spacing: .5px;
-          text-transform: uppercase;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 42px;
-          letter-spacing: -1.4px;
-          color: #101a14;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 760px;
-          line-height: 1.5;
-        }
-
-        .heroCard {
-          min-width: 290px;
-          border-radius: 24px;
-          padding: 22px;
-          color: white;
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 30%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 18px 42px rgba(36,69,54,.22);
-        }
-
-        .heroCard p {
-          margin: 0;
-          color: rgba(255,255,255,.75);
-          font-weight: 900;
-        }
-
-        .heroCard strong {
-          display: block;
-          margin-top: 8px;
-          font-size: 32px;
-          letter-spacing: -1px;
-        }
-
-        .heroCard small {
-          color: rgba(255,255,255,.72);
-          font-weight: 900;
-        }
-
-        .cards {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .summaryCard,
-        .panel,
-        .loadingBox,
-        .messageBox {
-          border-radius: 22px;
-          background: rgba(255,253,246,.86);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .summaryCard {
-          min-height: 145px;
-          padding: 20px;
-          display: flex;
-          align-items: center;
-          gap: 18px;
-        }
-
-        .summaryIcon {
-          width: 66px;
-          height: 66px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          font-size: 28px;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-        }
-
-        .summaryIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
-        }
-
-        .summaryCard p {
-          margin: 0 0 8px;
-          font-size: 13px;
-          color: #5f665e;
-          font-weight: 900;
-        }
-
-        .summaryCard h3 {
-          margin: 0 0 8px;
-          font-size: 25px;
-          letter-spacing: -1px;
-          color: #101a14;
-        }
-
-        .summaryCard small {
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .loadingBox,
-        .messageBox {
-          padding: 20px;
-          margin-bottom: 16px;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .grid {
-          display: grid;
-          grid-template-columns: 1.45fr 420px;
-          gap: 16px;
-          margin-bottom: 16px;
-        }
-
-        .panel {
-          padding: 22px;
-        }
-
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: start;
-          gap: 18px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #101a14;
-          font-size: 24px;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 14px;
-          line-height: 1.45;
-        }
-
-        .treeList {
-          display: grid;
-          gap: 12px;
-        }
-
-        .treeCard {
-          width: 100%;
-          border: 2px solid transparent;
-          border-radius: 20px;
-          padding: 16px;
-          background: #f3ead8;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 14px;
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .treeCard.selected {
-          border-color: #8c6a3c;
-          box-shadow: 0 14px 30px rgba(140,106,60,.16);
-        }
-
-        .treeCard strong {
-          color: #101a14;
-          font-size: 18px;
-        }
-
-        .treeCard p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-weight: 800;
-        }
-
-        .treeCard small {
-          display: block;
-          margin-top: 4px;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .treeCard div:last-child {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-        }
-
-        .treeCard span {
-          border-radius: 999px;
-          padding: 8px 11px;
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .treeCard span.pendingBadge {
-          background: rgba(214,178,94,.25);
-          color: #8c6a3c;
-        }
-
-        .treeCard b {
-          color: #101a14;
-          font-size: 14px;
-        }
-
-        .rule {
-          margin-bottom: 14px;
-          display: grid;
-          grid-template-columns: 42px 1fr;
-          gap: 12px;
-          padding: 14px;
-          border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .rule span {
-          width: 38px;
-          height: 38px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          font-weight: 900;
-        }
-
-        .rule.ok span {
-          background: rgba(49,85,61,.14);
-          color: #31553d;
-        }
-
-        .rule.locked span {
-          background: rgba(214,178,94,.25);
-          color: #8c6a3c;
-        }
-
-        .rule strong {
-          color: #101a14;
-        }
-
-        .rule p {
-          margin: 5px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-        }
-
-        .previewBox {
-          margin-top: 18px;
-          border-radius: 20px;
-          padding: 18px;
-          background: rgba(255,253,246,.72);
-          border: 1px solid rgba(92,70,35,.10);
-        }
-
-        .previewRow {
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
-          margin-top: 12px;
-          padding-top: 12px;
-          border-top: 1px solid rgba(92,70,35,.10);
-        }
-
-        .previewRow:first-child {
-          margin-top: 0;
-          padding-top: 0;
-          border-top: 0;
-        }
-
-        .previewRow span {
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .previewRow b {
-          color: #101a14;
-          text-align: right;
-        }
-
-        .previewRow.final b {
-          color: #31553d;
-          font-size: 18px;
-        }
-
-        .primaryButton {
-          margin-top: 16px;
-          width: 100%;
-          border: 0;
-          border-radius: 16px;
-          padding: 15px 18px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          font-weight: 900;
-          cursor: pointer;
-          box-shadow: 0 14px 30px rgba(36,69,54,.18);
-        }
-
-        .primaryButton:disabled {
-          opacity: .55;
-          cursor: not-allowed;
-        }
-
-        .lockText {
-          display: block;
-          margin-top: 12px;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .emptyState {
-          padding: 18px;
-          border-radius: 18px;
-          background: #f3ead8;
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .requestsPanel {
-          margin-top: 16px;
-        }
-
-        .requestList {
-          display: grid;
-          gap: 12px;
-        }
-
-        .requestCard {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 14px;
-          padding: 16px;
-          border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .requestCard strong {
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .requestCard p {
-          margin: 5px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .requestCard small {
-          display: block;
-          margin-top: 5px;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .requestCard div:last-child {
-          display: grid;
-          justify-items: end;
-          gap: 8px;
-        }
-
-        .requestCard b {
-          color: #31553d;
-        }
-
-        .status {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 92px;
-          padding: 8px 10px;
-          border-radius: 999px;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .status.good {
-          background: rgba(49,85,61,.14);
-          color: #31553d;
-        }
-
-        .status.warning {
-          background: rgba(214,178,94,.25);
-          color: #8c6a3c;
-        }
-
-        .status.bad {
-          background: rgba(163,60,42,.14);
-          color: #a33c2a;
-        }
-
-        .status.neutral {
-          background: rgba(95,102,94,.12);
-          color: #5f665e;
-        }
-
-        @media (max-width: 1050px) {
-          .hero,
-          .requestCard {
-            flex-direction: column;
-            align-items: stretch;
-          }
-
-          .cards,
-          .grid {
-            grid-template-columns: 1fr;
-          }
-        }
-      `}</style>
+                })
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-6">
+          <h3 className="text-xl font-bold">Important Sell Tree Rule</h3>
+          <p className="mt-2 text-white/75">
+            Sell Tree does not credit your wallet. After Admin sends an offer and you accept it,
+            a withdrawal request is created for payout processing.
+          </p>
+        </section>
+
+        <footer className="py-8 text-center">
+          <p className="text-amber-300 font-serif text-xl font-bold">ARGANWOOD</p>
+          <p className="text-xs text-white/45">Growing a Greener Tomorrow 🌿</p>
+        </footer>
+      </div>
     </main>
   );
 }
 
-function SummaryCard({
-  icon,
-  label,
-  value,
-  note,
-  gold,
+function StepHeader({
+  step,
+  title,
+  subtitle,
 }: {
-  icon: string;
-  label: string;
-  value: string;
-  note: string;
-  gold?: boolean;
+  step: string;
+  title: string;
+  subtitle: string;
 }) {
   return (
-    <div className="summaryCard">
-      <div className={`summaryIcon ${gold ? "gold" : ""}`}>{icon}</div>
+    <div className="flex items-start gap-3">
+      <div className="h-9 w-9 rounded-full border border-amber-400 text-amber-300 flex items-center justify-center font-bold">
+        {step}
+      </div>
       <div>
-        <p>{label}</p>
-        <h3>{value}</h3>
-        <small>{note}</small>
+        <h2 className="font-bold text-lg">{title}</h2>
+        <p className="text-white/60 text-sm">{subtitle}</p>
       </div>
     </div>
   );
 }
 
-function Rule({ ok, title, value }: { ok: boolean; title: string; value: string }) {
+function StatCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string;
+  value: number;
+  icon: string;
+}) {
   return (
-    <div className={`rule ${ok ? "ok" : "locked"}`}>
-      <span>{ok ? "✓" : "!"}</span>
-      <div>
-        <strong>{title}</strong>
-        <p>{value}</p>
+    <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+      <div className="flex items-center gap-3">
+        <div className="h-11 w-11 rounded-2xl bg-emerald-500/15 flex items-center justify-center text-xl">
+          {icon}
+        </div>
+        <p className="text-sm font-semibold text-white/85">{title}</p>
       </div>
+      <p className="mt-4 text-4xl font-bold">{value}</p>
     </div>
   );
 }
 
-function Preview({ label, value, final }: { label: string; value: string; final?: boolean }) {
+function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`previewRow ${final ? "final" : ""}`}>
-      <span>{label}</span>
-      <b>{value}</b>
+    <div className="flex items-center justify-between gap-4 border-b border-white/10 py-2 last:border-b-0">
+      <span className="text-white/55 text-sm">{label}</span>
+      <span className="font-semibold text-white text-right">{value}</span>
+    </div>
+  );
+}
+
+function MiniBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <p className="text-white/50 text-xs">{label}</p>
+      <p className="mt-2 text-lg font-bold text-amber-200">{value}</p>
     </div>
   );
 }
