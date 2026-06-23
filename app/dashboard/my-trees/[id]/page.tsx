@@ -2,1588 +2,70 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-type TreeRow = Record<string, any>;
-type SellRequest = Record<string, any>;
-type PanelType = "NONE" | "PHOTOS" | "GPS" | "QR" | "RENAME" | "CARE";
-
-const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
-
-export default function MyTreesPage() {
-  const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [sellRequests, setSellRequests] = useState<SellRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedTree, setSelectedTree] = useState<TreeRow | null>(null);
-  const [message, setMessage] = useState("");
-
-  const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState<"TREES" | "GROUPS">("TREES");
-  const [stageFilter, setStageFilter] = useState("ALL");
-
-  const [activePanel, setActivePanel] = useState<PanelType>("NONE");
-  const [renameValue, setRenameValue] = useState("");
-
-  async function loadTrees() {
-    setLoading(true);
-    setMessage("");
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
-
-    const email = user.email?.trim().toLowerCase() || "";
-
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
-      .eq("email", email)
-      .maybeSingle();
-
-    const profile = profileById || profileByEmail;
-
-    if (!profile) {
-      setMessage("Profile not found.");
-      setLoading(false);
-      return;
-    }
-
-    const { data: treeData, error: treeError } = await supabase
-      .from("trees")
-      .select("*")
-      .eq("profile_id", profile.id)
-      .order("created_at", { ascending: false });
-
-    if (treeError) {
-      setMessage(treeError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: sellData } = await supabase
-      .from("sell_tree_requests")
-      .select("*")
-      .eq("profile_id", profile.id)
-      .order("created_at", { ascending: false });
-
-    const rows = treeData || [];
-
-    setTrees(rows);
-    setSellRequests(sellData || []);
-
-    setSelectedTree((current) => {
-      if (current) {
-        const refreshed = rows.find((tree) => tree.id === current.id);
-        if (refreshed) return refreshed;
-      }
-
-      return rows[0] || null;
-    });
-
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    loadTrees();
-  }, []);
-
-  const stats = useMemo(() => {
-    const owned = trees.length;
-    const protectedTrees = trees.filter((tree) => getCareStatus(tree).type === "PROTECTED").length;
-    const needsCare = trees.filter((tree) => getCareStatus(tree).type === "NONE").length;
-    const estimatedValue = trees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
-    const totalSpent = trees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
-    const profit = estimatedValue - totalSpent;
-
-    return { owned, protectedTrees, needsCare, totalSpent, estimatedValue, profit };
-  }, [trees]);
-
-  const filteredTrees = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return trees.filter((tree) => {
-      const stage = String(tree.stage || tree.growth_stage || "").toLowerCase();
-      const code = String(tree.tree_code || tree.code || tree.id || "").toLowerCase();
-      const name = String(tree.custom_name || tree.display_name || tree.name || "").toLowerCase();
-      const group = String(tree.tree_group_name || "Ungrouped Trees").toLowerCase();
-      const care = getCareStatus(tree).label.toLowerCase();
-
-      const matchesSearch =
-        !q ||
-        code.includes(q) ||
-        name.includes(q) ||
-        group.includes(q) ||
-        stage.includes(q) ||
-        care.includes(q);
-
-      const matchesStage =
-        stageFilter === "ALL" ||
-        stage === stageFilter.toLowerCase() ||
-        normalizeStage(stage).toLowerCase() === stageFilter.toLowerCase();
-
-      return matchesSearch && matchesStage;
-    });
-  }, [trees, search, stageFilter]);
-
-  const groups = useMemo(() => {
-    const map: Record<string, TreeRow[]> = {};
-
-    filteredTrees.forEach((tree) => {
-      const groupName = tree.tree_group_name || "Ungrouped Trees";
-      if (!map[groupName]) map[groupName] = [];
-      map[groupName].push(tree);
-    });
-
-    return Object.entries(map).map(([name, groupTrees]) => {
-      const totalSpent = groupTrees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
-      const estimatedValue = groupTrees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
-      const profit = estimatedValue - totalSpent;
-      const protectedCount = groupTrees.filter((tree) => getCareStatus(tree).type === "PROTECTED").length;
-
-      return { name, trees: groupTrees, totalSpent, estimatedValue, profit, protectedCount };
-    });
-  }, [filteredTrees]);
-
-  const selectedMath = selectedTree
-    ? getTreeMath(selectedTree)
-    : { totalSpent: 0, estimatedValue: 0, profit: 0, roi: 0 };
-
-  const selectedQrUrl = selectedTree
-    ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
-    : "";
-
-  const selectedCare = selectedTree
-    ? getCareStatus(selectedTree)
-    : { type: "NONE", label: "No Active Care Program", description: "Not enrolled", className: "none" };
-
-  function openPanel(panel: PanelType) {
-    if (!selectedTree) return;
-
-    if (panel === "RENAME") {
-      setRenameValue(
-        selectedTree.custom_name ||
-          selectedTree.display_name ||
-          selectedTree.name ||
-          "Agarwood Tree"
-      );
-    }
-
-    setActivePanel(panel);
-  }
-
-  async function saveRename() {
-    setMessage("");
-
-    if (!selectedTree) return;
-
-    const cleanName = renameValue.trim();
-
-    if (!cleanName) {
-      setMessage("Tree name cannot be empty.");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("trees")
-      .update({ custom_name: cleanName })
-      .eq("id", selectedTree.id);
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    setActivePanel("NONE");
-    setMessage("Tree renamed successfully. Tree code and QR identity did not change.");
-    await loadTrees();
-  }
-
-  function goToCarePrograms() {
-    window.location.href = "/dashboard/tree-operations";
-  }
-
-  return (
-    <main className="page">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Agarwood Asset Portfolio</p>
-          <h1>My Trees</h1>
-          <span>
-            Monitor your owned agarwood assets, protection status, care program,
-            projected value, QR identity, GPS verification, and sell readiness.
-          </span>
-        </div>
-
-        <div className="heroActions">
-          <Link href="/dashboard/marketplace">Buy More Trees</Link>
-          <Link className="primary" href="/dashboard/tree-operations">
-            Manage Care
-          </Link>
-        </div>
-      </section>
-
-      {message && <div className="message">{message}</div>}
-
-      {loading ? (
-        <div className="empty">Loading your trees...</div>
-      ) : trees.length === 0 ? (
-        <div className="empty">
-          You do not own any trees yet. Visit Marketplace to purchase your first agarwood tree.
-        </div>
-      ) : (
-        <>
-          <section className="stats">
-            <Stat label="Owned Trees" value={String(stats.owned)} />
-            <Stat label="Protected Trees" value={String(stats.protectedTrees)} good />
-            <Stat label="Needs Care" value={String(stats.needsCare)} warning={stats.needsCare > 0} />
-            <Stat label="Projected Profit" value={peso(stats.profit)} good={stats.profit >= 0} />
-          </section>
-
-          {stats.needsCare > 0 && (
-            <section className="careAlert">
-              <div>
-                <strong>Protect your agarwood investment</strong>
-                <p>
-                  {stats.needsCare} tree{stats.needsCare === 1 ? "" : "s"} do not have an active
-                  care program. Subscribe to a care program to keep monitoring and treatment organized.
-                </p>
-              </div>
-              <button onClick={goToCarePrograms}>Protect Trees Now</button>
-            </section>
-          )}
-
-          <section className="layout">
-            <aside className="treeList">
-              <div className="searchBox">
-                <label>Search Portfolio</label>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Tree code, name, group, stage, care status..."
-                />
-              </div>
-
-              <div className="viewSwitch">
-                <button
-                  className={viewMode === "TREES" ? "active" : ""}
-                  onClick={() => setViewMode("TREES")}
-                >
-                  Trees
-                </button>
-                <button
-                  className={viewMode === "GROUPS" ? "active" : ""}
-                  onClick={() => setViewMode("GROUPS")}
-                >
-                  Groups
-                </button>
-              </div>
-
-              <div className="stageFilters">
-                {["ALL", ...STAGES].map((stage) => (
-                  <button
-                    key={stage}
-                    className={stageFilter === stage ? "active" : ""}
-                    onClick={() => setStageFilter(stage)}
-                  >
-                    {stage}
-                  </button>
-                ))}
-              </div>
-
-              {viewMode === "TREES" ? (
-                <div className="listItems">
-                  {filteredTrees.length === 0 ? (
-                    <div className="empty small">No matching trees.</div>
-                  ) : (
-                    filteredTrees.map((tree) => {
-                      const math = getTreeMath(tree);
-                      const care = getCareStatus(tree);
-                      const active = selectedTree?.id === tree.id;
-
-                      return (
-                        <button
-                          key={tree.id}
-                          className={`treeItem ${active ? "active" : ""}`}
-                          onClick={() => setSelectedTree(tree)}
-                        >
-                          <div>
-                            <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                            <p>{tree.custom_name || tree.display_name || tree.name || "Agarwood Tree"}</p>
-                            <small>{tree.tree_group_name || "Ungrouped Trees"}</small>
-                            <em className={`carePill ${care.className}`}>{care.label}</em>
-                          </div>
-                          <span className={math.profit >= 0 ? "gain" : "loss"}>
-                            {peso(math.profit)}
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              ) : (
-                <div className="listItems">
-                  {groups.length === 0 ? (
-                    <div className="empty small">No matching groups.</div>
-                  ) : (
-                    groups.map((group) => (
-                      <button
-                        key={group.name}
-                        className="groupItem"
-                        onClick={() => setSelectedTree(group.trees[0])}
-                      >
-                        <div>
-                          <strong>{group.name}</strong>
-                          <p>{group.trees.length} tree{group.trees.length === 1 ? "" : "s"}</p>
-                          <small>{group.protectedCount} protected • Value {peso(group.estimatedValue)}</small>
-                        </div>
-                        <span className={group.profit >= 0 ? "gain" : "loss"}>
-                          {peso(group.profit)}
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </aside>
-
-            {selectedTree && (
-              <section className="detail">
-                <div className="detailTop">
-                  <div>
-                    <p className="eyebrow">Tree Asset</p>
-                    <h2>{selectedTree.custom_name || selectedTree.display_name || selectedTree.name || "Agarwood Tree"}</h2>
-                    <span>{selectedTree.tree_code || selectedTree.code || selectedTree.id}</span>
-                    <p className="groupName">{selectedTree.tree_group_name || "Ungrouped Trees"}</p>
-                  </div>
-
-                  <div className={`protectionBox ${selectedCare.className}`}>
-                    <strong>{selectedCare.label}</strong>
-                    <p>{selectedCare.description}</p>
-                    <button onClick={() => openPanel("CARE")}>
-                      {selectedCare.type === "PROTECTED" ? "View Care" : "Protect Tree"}
-                    </button>
-                  </div>
-                </div>
-
-                <section className="growth">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Growth Journey</h3>
-                      <p>Current stage is based on the tree record from Supabase.</p>
-                    </div>
-                  </div>
-
-                  <div className="stageLine">
-                    {STAGES.map((stage, index) => {
-                      const current = normalizeStage(selectedTree.stage || selectedTree.growth_stage);
-                      const foundIndex = STAGES.findIndex(
-                        (item) => item.toLowerCase() === current.toLowerCase()
-                      );
-                      const currentIndex = foundIndex >= 0 ? foundIndex : 0;
-
-                      return (
-                        <div
-                          key={stage}
-                          className={`stage ${index <= currentIndex ? "done" : ""} ${
-                            index === currentIndex ? "current" : ""
-                          }`}
-                        >
-                          <span>{index + 1}</span>
-                          <strong>{stage}</strong>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section className="cards">
-                  <Mini label="Stage" value={selectedTree.stage || selectedTree.growth_stage || "—"} />
-                  <Mini label="Age" value={getAgeText(selectedTree)} />
-                  <Mini label="GPS Status" value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"} />
-                  <Mini label="Care Program" value={getCareProgramName(selectedTree)} />
-                  <Mini label="Auto Renew" value={getAutoRenewText(selectedTree)} />
-                  <Mini label="Next Renewal" value={formatDate(selectedTree.next_renewal_date || selectedTree.care_program_next_renewal)} />
-                </section>
-
-                <section className={`carePanel ${selectedCare.className}`}>
-                  <div>
-                    <strong>{selectedCare.type === "PROTECTED" ? "Active Care Protection" : "Care Protection Needed"}</strong>
-                    <p>
-                      {selectedCare.type === "PROTECTED"
-                        ? "This tree is enrolled in a care program. Keep auto-renew active to avoid coverage gaps."
-                        : "This tree has no active care program. Protect it with weekly or monthly care from Tree Operations."}
-                    </p>
-                  </div>
-
-                  <div className="carePanelActions">
-                    <Link href="/dashboard/tree-operations">
-                      {selectedCare.type === "PROTECTED" ? "Manage Care Program" : "Protect This Tree"}
-                    </Link>
-                    <Link className="secondary" href="/dashboard/marketplace">
-                      Buy Supplies
-                    </Link>
-                  </div>
-                </section>
-
-                <section className="moneyBox">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Investment Tracker</h3>
-                      <p>Shows if this tree is currently projected as profit or loss.</p>
-                    </div>
-                  </div>
-
-                  <div className="moneyGrid">
-                    <Money label="Purchase Price" value={getPurchasePrice(selectedTree)} />
-                    <Money label="Operations / Care Cost" value={getOperationCost(selectedTree)} />
-                    <Money label="GPS / Photo Fees" value={getVerificationCost(selectedTree)} />
-                    <Money label="Total Spent" value={selectedMath.totalSpent} strong />
-                    <Money label="Estimated Sell Value" value={selectedMath.estimatedValue} />
-                    <Money label="Projected Profit / Loss" value={selectedMath.profit} strong good={selectedMath.profit >= 0} />
-                    <Money label="ROI" value={selectedMath.roi} percent good={selectedMath.roi >= 0} />
-                  </div>
-                </section>
-
-                <section className="actions">
-                  <button onClick={() => openPanel("PHOTOS")}>View Photos</button>
-                  <button onClick={() => openPanel("GPS")}>View GPS</button>
-                  <button onClick={() => openPanel("QR")}>Tree QR</button>
-                  <button onClick={() => openPanel("RENAME")}>Rename</button>
-                  <button onClick={goToCarePrograms} className="care">
-                    Protect / Manage Care
-                  </button>
-                  <button onClick={() => (window.location.href = "/dashboard/sell-tree")} className="sell">
-                    Sell Tree
-                  </button>
-                </section>
-
-                <section className="history">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Sell Requests</h3>
-                      <p>Pending or completed sale requests for this tree.</p>
-                    </div>
-                  </div>
-
-                  {sellRequests.filter((item) => item.tree_id === selectedTree.id).length === 0 ? (
-                    <div className="empty small">No sell request for this tree.</div>
-                  ) : (
-                    <div className="requestList">
-                      {sellRequests
-                        .filter((item) => item.tree_id === selectedTree.id)
-                        .map((item) => (
-                          <div className="requestRow" key={item.id}>
-                            <div>
-                              <strong>{peso(Number(item.expected_amount || item.selling_price || 0))}</strong>
-                              <p>{formatDate(item.created_at)}</p>
-                            </div>
-                            <span>{item.status || "PENDING"}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </section>
-              </section>
-            )}
-          </section>
-
-          {activePanel !== "NONE" && selectedTree && (
-            <div className="modal">
-              <div className="modalCard">
-                {activePanel === "PHOTOS" && (
-                  <>
-                    <h3>Tree Photos</h3>
-                    <p>
-                      Photos will appear here after caretaker or operations team uploads real tree photo updates.
-                      No fake images are shown.
-                    </p>
-                    <div className="empty small">No caretaker photo uploaded yet.</div>
-                    <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "GPS" && (
-                  <>
-                    <h3>GPS Verification</h3>
-                    <p>
-                      GPS details will appear here once field staff uploads verified plantation location data.
-                    </p>
-                    <div className="modalGrid">
-                      <Mini label="GPS Status" value={selectedTree.gps_status || "Pending"} />
-                      <Mini label="Plantation Block" value={selectedTree.plantation_block || "Not assigned"} />
-                      <Mini label="GPS Location" value={selectedTree.gps_location || "Not uploaded"} />
-                    </div>
-                    <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "CARE" && (
-                  <>
-                    <h3>Care Protection</h3>
-                    <p>{selectedCare.description}</p>
-
-                    <div className="modalGrid">
-                      <Mini label="Care Status" value={selectedCare.label} />
-                      <Mini label="Program" value={getCareProgramName(selectedTree)} />
-                      <Mini label="Coverage" value={selectedTree.care_program_coverage || selectedTree.care_coverage || "No active coverage"} />
-                      <Mini label="Next Renewal" value={formatDate(selectedTree.next_renewal_date || selectedTree.care_program_next_renewal)} />
-                      <Mini label="Auto Renew" value={getAutoRenewText(selectedTree)} />
-                      <Mini label="Program Cost" value={peso(Number(selectedTree.care_program_price || selectedTree.care_plan_price || 0))} />
-                    </div>
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Close</button>
-                      <button className="primary" onClick={goToCarePrograms}>
-                        Go To Care Programs
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {activePanel === "QR" && (
-                  <>
-                    <h3>Tree QR Identity</h3>
-                    <p>
-                      This QR identity is for the real tree tag. Scanning opens the official tree
-                      verification page.
-                    </p>
-
-                    <div className="qrPreview">
-                      <div className="fakeQr">
-                        <span>QR</span>
-                      </div>
-
-                      <div>
-                        <strong>{selectedTree.tree_code || selectedTree.id}</strong>
-                        <p>{selectedTree.custom_name || selectedTree.display_name || selectedTree.name || "Agarwood Tree"}</p>
-                        <small>{selectedQrUrl}</small>
-                      </div>
-                    </div>
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Close</button>
-                      <button className="primary" onClick={() => window.open(selectedQrUrl, "_blank")}>
-                        Open Verification Page
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {activePanel === "RENAME" && (
-                  <>
-                    <h3>Rename Tree</h3>
-                    <p>
-                      Rename only changes the display name. Tree code and QR identity remain permanent.
-                    </p>
-
-                    <label>New Tree Name</label>
-                    <input
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      placeholder="Example: Retirement Tree A"
-                    />
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Cancel</button>
-                      <button className="primary" onClick={saveRename}>
-                        Save Name
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      <style>{`
-        * { box-sizing: border-box; }
-
-        .page {
-          min-height: 100vh;
-          padding: 30px;
-          color: #18261d;
-          font-family: Arial, Helvetica, sans-serif;
-          background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
-        }
-
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 18px;
-          margin-bottom: 22px;
-        }
-
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          letter-spacing: .5px;
-          text-transform: uppercase;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: 44px;
-          letter-spacing: -1.6px;
-          color: #101a14;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 850px;
-          line-height: 1.6;
-        }
-
-        .heroActions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
-        .heroActions a,
-        .carePanelActions a {
-          border-radius: 999px;
-          padding: 13px 16px;
-          background: rgba(255,253,246,.9);
-          color: #244536;
-          border: 1px solid rgba(92,70,35,.12);
-          text-decoration: none;
-          font-weight: 900;
-          box-shadow: 0 14px 28px rgba(82,60,27,.08);
-        }
-
-        .heroActions a.primary,
-        .carePanelActions a {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          border-color: transparent;
-        }
-
-        .carePanelActions a.secondary {
-          background: #f3ead8;
-          color: #244536;
-          border: 1px solid rgba(92,70,35,.12);
-        }
-
-        .message,
-        .empty,
-        .stat,
-        .treeList,
-        .detail,
-        .growth,
-        .moneyBox,
-        .history,
-        .careAlert,
-        .carePanel {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
-        }
-
-        .message,
-        .empty {
-          padding: 20px;
-          color: #31553d;
-          font-weight: 900;
-        }
-
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .stat {
-          padding: 22px;
-        }
-
-        .stat p {
-          margin: 0;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .stat h3 {
-          margin: 10px 0 0;
-          color: #244536;
-          font-size: 28px;
-        }
-
-        .stat.good h3 {
-          color: #176b3a;
-        }
-
-        .stat.warning h3 {
-          color: #a33c2a;
-        }
-
-        .careAlert {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 18px;
-          padding: 20px;
-          margin-bottom: 18px;
-          background:
-            radial-gradient(circle at 94% 20%, rgba(255, 226, 154, .5), transparent 26%),
-            rgba(255,253,246,.9);
-        }
-
-        .careAlert strong {
-          display: block;
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .careAlert p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .careAlert button {
-          border: 0;
-          border-radius: 999px;
-          padding: 13px 16px;
-          background: linear-gradient(135deg, #d6b25e, #b99242);
-          color: #10281f;
-          font-weight: 900;
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
-        .layout {
-          display: grid;
-          grid-template-columns: 390px 1fr;
-          gap: 18px;
-          align-items: start;
-        }
-
-        .treeList {
-          padding: 14px;
-          display: grid;
-          gap: 12px;
-          max-height: 880px;
-          overflow: auto;
-        }
-
-        .searchBox {
-          display: grid;
-          gap: 8px;
-        }
-
-        .searchBox label,
-        .modalCard label {
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        input {
-          width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
-          padding: 13px 14px;
-          background: rgba(255,253,246,.94);
-          color: #101a14;
-          outline: none;
-          font-weight: 800;
-        }
-
-        .viewSwitch {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-        }
-
-        .viewSwitch button,
-        .stageFilters button {
-          border: 1px solid rgba(92,70,35,.12);
-          border-radius: 999px;
-          padding: 11px 12px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .viewSwitch button.active,
-        .stageFilters button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          border-color: transparent;
-        }
-
-        .stageFilters {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .listItems {
-          display: grid;
-          gap: 10px;
-        }
-
-        .treeItem,
-        .groupItem {
-          border: 1px solid rgba(92,70,35,.08);
-          border-radius: 20px;
-          padding: 16px;
-          background: #f3ead8;
-          text-align: left;
-          cursor: pointer;
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
-        }
-
-        .treeItem.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .treeItem strong,
-        .groupItem strong {
-          display: block;
-          font-size: 15px;
-        }
-
-        .treeItem p,
-        .groupItem p {
-          margin: 6px 0 0;
-          color: inherit;
-          opacity: .75;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .treeItem small,
-        .groupItem small {
-          display: block;
-          margin-top: 6px;
-          color: inherit;
-          opacity: .65;
-          font-weight: 800;
-        }
-
-        .treeItem span,
-        .groupItem span {
-          font-weight: 900;
-          white-space: nowrap;
-        }
-
-        .carePill {
-          display: inline-flex;
-          margin-top: 10px;
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 11px;
-          font-style: normal;
-          font-weight: 900;
-        }
-
-        .carePill.protected { background: rgba(49,85,61,.12); color: #176b3a; }
-        .carePill.pending { background: rgba(214,178,94,.22); color: #8c6a3c; }
-        .carePill.expired,
-        .carePill.none { background: rgba(163,60,42,.12); color: #a33c2a; }
-
-        .treeItem.active .carePill {
-          background: rgba(255,255,255,.13);
-          color: #d9b45f;
-        }
-
-        .gain { color: #176b3a; }
-        .loss { color: #a33c2a; }
-        .treeItem.active .gain,
-        .treeItem.active .loss { color: #d9b45f; }
-
-        .detail {
-          padding: 24px;
-        }
-
-        .detailTop {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          margin-bottom: 18px;
-        }
-
-        .detailTop h2 {
-          margin: 0;
-          font-size: 36px;
-          color: #101a14;
-        }
-
-        .detailTop span {
-          display: block;
-          margin-top: 8px;
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .groupName {
-          margin: 8px 0 0;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .protectionBox {
-          min-width: 280px;
-          border-radius: 26px;
-          padding: 20px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 18px 42px rgba(36,69,54,.18);
-        }
-
-        .protectionBox.none,
-        .protectionBox.expired {
-          background: linear-gradient(135deg, #7c3329, #3b1712);
-        }
-
-        .protectionBox.pending {
-          background: linear-gradient(135deg, #8c6a3c, #4e371a);
-        }
-
-        .protectionBox strong {
-          display: block;
-          font-size: 22px;
-        }
-
-        .protectionBox p {
-          margin: 8px 0 14px;
-          color: rgba(255,255,255,.78);
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .protectionBox button {
-          width: 100%;
-          border: 0;
-          border-radius: 999px;
-          padding: 12px;
-          background: rgba(255,255,255,.14);
-          color: white;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .growth,
-        .moneyBox,
-        .history,
-        .carePanel {
-          padding: 20px;
-          margin-top: 18px;
-        }
-
-        .panelHead h3 {
-          margin: 0;
-          font-size: 24px;
-          color: #101a14;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 14px;
-        }
-
-        .stageLine {
-          display: grid;
-          grid-template-columns: repeat(5, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .stage {
-          border-radius: 20px;
-          padding: 16px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-          text-align: center;
-        }
-
-        .stage span {
-          width: 34px;
-          height: 34px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          margin: 0 auto 10px;
-          background: rgba(214,178,94,.25);
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .stage strong {
-          font-size: 13px;
-          color: #6b6b62;
-        }
-
-        .stage.done {
-          background: rgba(49,85,61,.12);
-        }
-
-        .stage.done span {
-          background: #244536;
-          color: white;
-        }
-
-        .stage.current {
-          outline: 3px solid rgba(214,178,94,.45);
-        }
-
-        .cards,
-        .modalGrid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .mini,
-        .money,
-        .requestRow {
-          border-radius: 18px;
-          background: #f3ead8;
-          padding: 14px;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .mini span,
-        .money span {
-          display: block;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .1em;
-        }
-
-        .mini strong,
-        .money strong {
-          display: block;
-          margin-top: 7px;
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .carePanel {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          align-items: center;
-          background:
-            radial-gradient(circle at 94% 12%, rgba(255,255,255,.72), transparent 25%),
-            rgba(49,85,61,.08);
-        }
-
-        .carePanel.none,
-        .carePanel.expired {
-          background:
-            radial-gradient(circle at 94% 12%, rgba(255,255,255,.72), transparent 25%),
-            rgba(163,60,42,.08);
-        }
-
-        .carePanel strong {
-          display: block;
-          color: #101a14;
-          font-size: 21px;
-        }
-
-        .carePanel p {
-          margin: 7px 0 0;
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .carePanelActions {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
-        .moneyGrid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .money.strong {
-          background: linear-gradient(135deg, #244536, #10281f);
-        }
-
-        .money.strong span,
-        .money.strong strong {
-          color: white;
-        }
-
-        .money.good strong {
-          color: #176b3a;
-        }
-
-        .money.strong.good strong {
-          color: #d9b45f;
-        }
-
-        .actions {
-          display: grid;
-          grid-template-columns: repeat(6, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .actions button {
-          border: 0;
-          border-radius: 18px;
-          padding: 15px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .actions .care {
-          grid-column: span 2;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .actions .sell {
-          background: linear-gradient(135deg, #d6b25e, #b99242);
-          color: #10281f;
-        }
-
-        .requestList {
-          display: grid;
-          gap: 12px;
-          margin-top: 16px;
-        }
-
-        .requestRow {
-          display: flex;
-          justify-content: space-between;
-          gap: 14px;
-          align-items: center;
-        }
-
-        .requestRow p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 13px;
-        }
-
-        .requestRow span {
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-          font-weight: 900;
-          font-size: 12px;
-        }
-
-        .modal {
-          position: fixed;
-          inset: 0;
-          z-index: 100;
-          padding: 24px;
-          background: rgba(0,0,0,.55);
-          display: grid;
-          place-items: center;
-        }
-
-        .modalCard {
-          width: min(680px, 100%);
-          max-height: 88vh;
-          overflow: auto;
-          border-radius: 28px;
-          padding: 24px;
-          background: #fffdf6;
-          box-shadow: 0 24px 70px rgba(0,0,0,.22);
-        }
-
-        .modalCard h3 {
-          margin: 0;
-          font-size: 28px;
-          color: #101a14;
-        }
-
-        .modalCard p {
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .modalActions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-          margin-top: 18px;
-        }
-
-        .modalActions button {
-          border: 0;
-          border-radius: 16px;
-          padding: 14px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .modalActions .primary {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .qrPreview {
-          display: grid;
-          grid-template-columns: 150px 1fr;
-          gap: 16px;
-          align-items: center;
-          padding: 18px;
-          border-radius: 22px;
-          background: #f3ead8;
-          margin-top: 18px;
-        }
-
-        .fakeQr {
-          width: 150px;
-          height: 150px;
-          border-radius: 18px;
-          display: grid;
-          place-items: center;
-          background:
-            linear-gradient(90deg, #10281f 12px, transparent 12px) 0 0 / 30px 30px,
-            linear-gradient(#10281f 12px, transparent 12px) 0 0 / 30px 30px,
-            white;
-          border: 8px solid white;
-        }
-
-        .fakeQr span {
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: white;
-          color: #244536;
-          font-weight: 900;
-        }
-
-        .qrPreview strong {
-          display: block;
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .qrPreview p {
-          margin: 8px 0;
-        }
-
-        .qrPreview small {
-          display: block;
-          color: #6b6b62;
-          word-break: break-all;
-          font-weight: 800;
-        }
-
-        @media (max-width: 1180px) {
-          .stats,
-          .stageLine,
-          .cards,
-          .moneyGrid,
-          .actions,
-          .modalGrid {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .layout {
-            grid-template-columns: 1fr;
-          }
-
-          .carePanel {
-            flex-direction: column;
-            align-items: stretch;
-          }
-
-          .carePanelActions {
-            justify-content: flex-start;
-          }
-        }
-
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          .hero {
-            flex-direction: column;
-          }
-
-          .heroActions {
-            justify-content: flex-start;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .stats,
-          .stageLine,
-          .cards,
-          .moneyGrid,
-          .actions,
-          .modalActions,
-          .qrPreview,
-          .modalGrid {
-            grid-template-columns: 1fr;
-          }
-
-          .detailTop,
-          .careAlert {
-            flex-direction: column;
-          }
-
-          .protectionBox {
-            width: 100%;
-          }
-
-          .fakeQr {
-            width: 100%;
-          }
-
-          .actions .care {
-            grid-column: span 1;
-          }
-        }
-      `}</style>
-    </main>
-  );
+type Profile = {
+  id: string;
+  full_name: string | null;
+  display_name?: string | null;
+  email: string | null;
+};
+
+type TreeVerifyRow = {
+  tree_id: string;
+  customer_profile_id: string | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  group_id: string | null;
+  forest_name: string | null;
+  customer_tree_name: string | null;
+  tree_code: string | null;
+  tree_qr_url: string | null;
+  care_status: string | null;
+  care_expires_at: string | null;
+  alert_status: string | null;
+  alert_reason: string | null;
+  valuation_status: string | null;
+  official_valuation_amount: number | null;
+  latest_photo_at: string | null;
+  latest_gps_at: string | null;
+  latest_health_at: string | null;
+  latest_health_status: string | null;
+};
+
+type AdminRow = {
+  id: string;
+  admin_profile_id: string | null;
+  status: string | null;
+};
+
+type CaretakerRow = {
+  id: string;
+  caretaker_profile_id: string | null;
+  status: string | null;
+};
+
+type AssignmentRow = {
+  id: string;
+  caretaker_id: string | null;
+  caretaker_profile_id: string | null;
+  customer_profile_id: string | null;
+  source_type: string | null;
+  tree_id: string | null;
+  group_id: string | null;
+  status: string | null;
+  assigned_at: string | null;
+};
+
+function normalizeStatus(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .toUpperCase();
 }
 
-function ModalActions({ close }: { close: () => void }) {
-  return (
-    <div className="modalActions">
-      <button onClick={close}>Close</button>
-      <button className="primary" onClick={close}>
-        Done
-      </button>
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  good,
-  warning,
-}: {
-  label: string;
-  value: string;
-  good?: boolean;
-  warning?: boolean;
-}) {
-  return (
-    <div className={`stat ${good ? "good" : ""} ${warning ? "warning" : ""}`}>
-      <p>{label}</p>
-      <h3>{value}</h3>
-    </div>
-  );
-}
-
-function Mini({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="mini">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function Money({
-  label,
-  value,
-  strong,
-  good,
-  percent,
-}: {
-  label: string;
-  value: number;
-  strong?: boolean;
-  good?: boolean;
-  percent?: boolean;
-}) {
-  return (
-    <div className={`money ${strong ? "strong" : ""} ${good ? "good" : ""}`}>
-      <span>{label}</span>
-      <strong>{percent ? `${value.toFixed(2)}%` : peso(value)}</strong>
-    </div>
-  );
-}
-
-function getCareStatus(tree: TreeRow) {
-  const rawStatus = String(
-    tree.care_program_status ||
-      tree.care_status ||
-      tree.protection_status ||
-      ""
-  ).toUpperCase();
-
-  const carePlan = getCareProgramName(tree);
-  const hasPlan = Boolean(carePlan && carePlan !== "Not Enrolled");
-
-  if (["ACTIVE", "PROTECTED", "ENROLLED"].includes(rawStatus) || hasPlan) {
-    return {
-      type: "PROTECTED",
-      label: "Protected",
-      className: "protected",
-      description: `${carePlan} is active for this tree.`,
-    };
-  }
-
-  if (["PENDING", "PROCESSING", "FOR_REVIEW"].includes(rawStatus)) {
-    return {
-      type: "PENDING",
-      label: "Care Pending",
-      className: "pending",
-      description: "Care program request is waiting for admin or operations processing.",
-    };
-  }
-
-  if (["EXPIRED", "CANCELLED", "INACTIVE"].includes(rawStatus)) {
-    return {
-      type: "EXPIRED",
-      label: "Care Expired",
-      className: "expired",
-      description: "Care coverage is no longer active. Renew to keep the tree protected.",
-    };
-  }
-
-  return {
-    type: "NONE",
-    label: "No Active Care Program",
-    className: "none",
-    description: "This tree has no active care program yet.",
-  };
-}
-
-function getCareProgramName(tree: TreeRow) {
-  return (
-    tree.care_program_name ||
-    tree.care_plan ||
-    tree.carePlan ||
-    tree.subscription_name ||
-    "Not Enrolled"
-  );
-}
-
-function getAutoRenewText(tree: TreeRow) {
-  const value =
-    tree.auto_renew_enabled ??
-    tree.auto_renew ??
-    tree.care_auto_renew ??
-    false;
-
-  return value ? "ON" : "OFF";
-}
-
-function getTreeMath(tree: TreeRow) {
-  const totalSpent = getTotalSpent(tree);
-  const estimatedValue = getEstimatedValue(tree);
-  const profit = estimatedValue - totalSpent;
-  const roi = totalSpent > 0 ? (profit / totalSpent) * 100 : 0;
-
-  return { totalSpent, estimatedValue, profit, roi };
-}
-
-function getPurchasePrice(tree: TreeRow) {
-  return Number(tree.purchase_price || tree.buy_price || tree.price || tree.investment_amount || 0);
-}
-
-function getOperationCost(tree: TreeRow) {
-  return Number(tree.operation_cost || tree.operations_cost || tree.care_cost || tree.total_operation_cost || 0);
-}
-
-function getVerificationCost(tree: TreeRow) {
-  return Number(tree.verification_cost || tree.gps_photo_cost || tree.photo_fee_total || tree.gps_fee_total || 0);
-}
-
-function getTotalSpent(tree: TreeRow) {
-  return Number(tree.total_spent || getPurchasePrice(tree) + getOperationCost(tree) + getVerificationCost(tree));
-}
-
-function getEstimatedValue(tree: TreeRow) {
-  return Number(tree.estimated_value || tree.current_value || tree.selling_price || 0);
-}
-
-function normalizeStage(value: string | null | undefined) {
-  if (!value) return "Seedling";
-  return value;
-}
-
-function getAgeText(tree: TreeRow) {
-  if (tree.age_text) return tree.age_text;
-  if (!tree.planting_date && !tree.created_at) return "—";
-
-  const start = new Date(tree.planting_date || tree.created_at);
-  const now = new Date();
-  const months = Math.max(
-    0,
-    (now.getFullYear() - start.getFullYear()) * 12 + now.getMonth() - start.getMonth()
-  );
-
-  const years = Math.floor(months / 12);
-  const remainingMonths = months % 12;
-
-  if (years <= 0) return `${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
-  return `${years} year${years === 1 ? "" : "s"} ${remainingMonths} month${remainingMonths === 1 ? "" : "s"}`;
-}
-
-function peso(value: number) {
+function peso(value: number | null | undefined) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -1591,11 +73,698 @@ function peso(value: number) {
 }
 
 function formatDate(value: string | null | undefined) {
-  if (!value) return "Not set";
+  if (!value) return "No update yet";
 
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  try {
+    return new Intl.DateTimeFormat("en-PH", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "No update yet";
+  }
 }
+
+function alertClass(status: string | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "protected";
+  if (normalized === "CRITICAL") return "critical";
+
+  return "attention";
+}
+
+function alertIcon(status: string | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "🟢";
+  if (normalized === "CRITICAL") return "🔴";
+
+  return "🟡";
+}
+
+function alertLabel(status: string | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "Protected";
+  if (normalized === "CRITICAL") return "Critical";
+
+  return "Needs Attention";
+}
+
+function careLabel(status: string | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "ACTIVE" || normalized === "SUBSCRIBED" || normalized === "PROTECTED") {
+    return "Subscribed";
+  }
+
+  if (normalized === "EXPIRED") return "Expired";
+  if (normalized === "CANCELLED" || normalized === "CANCELED") return "Cancelled";
+  if (normalized === "INACTIVE") return "Inactive";
+
+  return "Not Subscribed";
+}
+
+function valuationLabel(status: string | null | undefined, amount: number | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "APPROVED" && amount) return peso(amount);
+  if (normalized === "APPROVED") return "Approved";
+  if (normalized === "PENDING" || normalized === "REQUESTED" || normalized === "PENDING_ADMIN_VALUATION") {
+    return "Pending Admin Valuation";
+  }
+
+  if (normalized === "ASSIGNED") return "Assigned for Inspection";
+  if (normalized === "INSPECTION_SUBMITTED") return "Inspection Submitted";
+
+  return "Not Requested";
+}
+
+function treeName(tree: TreeVerifyRow | null) {
+  return tree?.customer_tree_name || "Verified Tree";
+}
+
+function forestName(tree: TreeVerifyRow | null) {
+  return tree?.forest_name || "Unnamed Forest";
+}
+
+export default function TreeVerifyPage() {
+  const params = useParams();
+  const treeId = String(params?.id || "");
+
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [tree, setTree] = useState<TreeVerifyRow | null>(null);
+  const [admin, setAdmin] = useState<AdminRow | null>(null);
+  const [caretaker, setCaretaker] = useState<CaretakerRow | null>(null);
+  const [matchingAssignment, setMatchingAssignment] = useState<AssignmentRow | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+
+  async function resolveProfile() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return null;
+
+    const email = user.email?.trim().toLowerCase() || "";
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id, full_name, display_name, email")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, display_name, email")
+      .eq("email", email)
+      .maybeSingle();
+
+    return (profileById || profileByEmail) as Profile | null;
+  }
+
+  async function loadVerifyPage() {
+    setLoading(true);
+    setMessage("");
+
+    if (!treeId) {
+      setMessage("Invalid tree verification link.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: treeRow, error: treeError } = await supabase
+      .from("v_tree_verify")
+      .select("*")
+      .eq("tree_id", treeId)
+      .maybeSingle();
+
+    if (treeError) {
+      setMessage(`Tree verification failed: ${treeError.message}`);
+      setLoading(false);
+      return;
+    }
+
+    if (!treeRow) {
+      setMessage("Tree tag not found.");
+      setLoading(false);
+      return;
+    }
+
+    const currentTree = treeRow as TreeVerifyRow;
+    const currentProfile = await resolveProfile();
+
+    setTree(currentTree);
+    setProfile(currentProfile);
+
+    if (currentProfile) {
+      const { data: adminRow } = await supabase
+        .from("admins")
+        .select("id, admin_profile_id, status")
+        .eq("admin_profile_id", currentProfile.id)
+        .maybeSingle();
+
+      const { data: caretakerRow } = await supabase
+        .from("caretakers")
+        .select("id, caretaker_profile_id, status")
+        .eq("caretaker_profile_id", currentProfile.id)
+        .maybeSingle();
+
+      const currentAdmin = (adminRow || null) as AdminRow | null;
+      const currentCaretaker = (caretakerRow || null) as CaretakerRow | null;
+
+      setAdmin(currentAdmin);
+      setCaretaker(currentCaretaker);
+
+      if (currentCaretaker) {
+        const { data: assignmentRowsById } = await supabase
+          .from("caretaker_assignments")
+          .select("id, caretaker_id, caretaker_profile_id, customer_profile_id, source_type, tree_id, group_id, status, assigned_at")
+          .eq("caretaker_id", currentCaretaker.id)
+          .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"])
+          .limit(50);
+
+        const { data: assignmentRowsByProfile } = await supabase
+          .from("caretaker_assignments")
+          .select("id, caretaker_id, caretaker_profile_id, customer_profile_id, source_type, tree_id, group_id, status, assigned_at")
+          .eq("caretaker_profile_id", currentProfile.id)
+          .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"])
+          .limit(50);
+
+        const mergedAssignments = [
+          ...((assignmentRowsById || []) as AssignmentRow[]),
+          ...((assignmentRowsByProfile || []) as AssignmentRow[]),
+        ];
+
+        const uniqueAssignments = Array.from(
+          new Map(mergedAssignments.map((assignment) => [assignment.id, assignment])).values()
+        );
+
+        const activeAssignment =
+          uniqueAssignments.find((assignment) => assignment.tree_id === currentTree.tree_id) ||
+          uniqueAssignments.find((assignment) => !!assignment.group_id && assignment.group_id === currentTree.group_id) ||
+          null;
+
+        setMatchingAssignment(activeAssignment);
+      }
+    }
+
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    loadVerifyPage();
+  }, [treeId]);
+
+  const isOwner = useMemo(() => {
+    return !!profile?.id && !!tree?.customer_profile_id && profile.id === tree.customer_profile_id;
+  }, [profile, tree]);
+
+  const isAdmin = !!admin;
+  const isCaretaker = !!caretaker;
+  const canShowOwnerDetails = isOwner || isAdmin;
+  const canUploadAsGardener = isCaretaker && !!matchingAssignment;
+
+  if (loading) {
+    return (
+      <main className="page">
+        <section className="loadingCard">Verifying tree tag...</section>
+
+        <style>{styles}</style>
+      </main>
+    );
+  }
+
+  if (!tree) {
+    return (
+      <main className="page">
+        <section className="errorCard">
+          <p>ARGANWOOD TREE TAG</p>
+          <h1>Tree Not Found</h1>
+          <span>{message || "This QR tag could not be verified."}</span>
+          <Link href="/dashboard">Go to Dashboard</Link>
+        </section>
+
+        <style>{styles}</style>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page">
+      <section className="verifyHero">
+        <div>
+          <p className="eyebrow">ARGANWOOD TREE TAG</p>
+          <h1>Verified Tree</h1>
+          <span>
+            This QR confirms a real Arganwood tree record. Access level changes based on whether you are the customer,
+            admin, or assigned gardener.
+          </span>
+        </div>
+
+        <div className={`statusOrb ${alertClass(tree.alert_status)}`}>
+          <strong>{alertIcon(tree.alert_status)}</strong>
+          <b>{alertLabel(tree.alert_status)}</b>
+          <small>{tree.alert_reason || "Verification complete"}</small>
+        </div>
+      </section>
+
+      {message && <div className="message">{message}</div>}
+
+      <section className="verifiedCard">
+        <div className="treeBadge">🌳</div>
+
+        <p className="eyebrow">Tree Identity</p>
+        <h2>{treeName(tree)}</h2>
+        <span className="forestLine">{forestName(tree)}</span>
+
+        <div className="publicGrid">
+          <div>
+            <small>Care</small>
+            <b>{careLabel(tree.care_status)}</b>
+          </div>
+          <div>
+            <small>Status</small>
+            <b>{alertLabel(tree.alert_status)}</b>
+          </div>
+          <div>
+            <small>Latest Photo</small>
+            <b>{formatDate(tree.latest_photo_at)}</b>
+          </div>
+          <div>
+            <small>Latest GPS</small>
+            <b>{formatDate(tree.latest_gps_at)}</b>
+          </div>
+          <div>
+            <small>Latest Health</small>
+            <b>{tree.latest_health_status || formatDate(tree.latest_health_at)}</b>
+          </div>
+          <div>
+            <small>Valuation</small>
+            <b>{valuationLabel(tree.valuation_status, tree.official_valuation_amount)}</b>
+          </div>
+        </div>
+      </section>
+
+      {isOwner && (
+        <section className="rolePanel customerPanel">
+          <p className="eyebrow">Customer View</p>
+          <h2>Your tree is verified</h2>
+          <p>
+            You can review your forest, request care, request valuation, and view updates from your My Trees dashboard.
+          </p>
+          <div className="buttonRow">
+            <Link href="/dashboard/my-trees">Open My Trees</Link>
+            <Link href={`/dashboard/tree-operations?tree_id=${tree.tree_id}${tree.group_id ? `&group_id=${tree.group_id}` : ""}`}>
+              Request Care
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {isAdmin && (
+        <section className="rolePanel adminPanel">
+          <p className="eyebrow">Admin View</p>
+          <h2>Internal Tree Verification</h2>
+          <div className="adminGrid">
+            <div>
+              <small>Customer</small>
+              <b>{tree.customer_name || "Customer"}</b>
+            </div>
+            <div>
+              <small>Email</small>
+              <b>{tree.customer_email || "Not available"}</b>
+            </div>
+            <div>
+              <small>Forest</small>
+              <b>{forestName(tree)}</b>
+            </div>
+            <div>
+              <small>Internal Tree Code</small>
+              <b>{tree.tree_code || "No code"}</b>
+            </div>
+            <div>
+              <small>Tree UUID</small>
+              <b>{tree.tree_id}</b>
+            </div>
+            <div>
+              <small>Customer Profile ID</small>
+              <b>{tree.customer_profile_id || "No profile"}</b>
+            </div>
+          </div>
+          <div className="buttonRow">
+            <Link href="/admin/forest-center">Forest Center</Link>
+            <Link href="/admin/tree-alerts">Tree Alerts</Link>
+            <Link href="/admin/operations">Assign Caretaker</Link>
+          </div>
+        </section>
+      )}
+
+      {isCaretaker && (
+        <section className={canUploadAsGardener ? "rolePanel gardenerPanel allowed" : "rolePanel gardenerPanel blocked"}>
+          <p className="eyebrow">Gardener View</p>
+          <h2>{canUploadAsGardener ? "Assigned Tree Verified" : "Tree Verified"}</h2>
+          <p>
+            {canUploadAsGardener
+              ? "You are assigned to this tree or forest. Open your task list to upload photo, GPS, and health evidence."
+              : "This tree is verified, but no active assignment was found for your gardener account."}
+          </p>
+
+          {matchingAssignment && (
+            <div className="assignmentBox">
+              <small>Assignment</small>
+              <b>{matchingAssignment.source_type || "TREE_OPERATION"}</b>
+              <span>{matchingAssignment.status || "ASSIGNED"} • {formatDate(matchingAssignment.assigned_at)}</span>
+            </div>
+          )}
+
+          <div className="buttonRow">
+            <Link href={`/gardener/tasks?tree_id=${tree.tree_id}`}>Open Gardener Tasks</Link>
+          </div>
+        </section>
+      )}
+
+      {!profile && (
+        <section className="rolePanel publicPanel">
+          <p className="eyebrow">Public Verification</p>
+          <h2>Tree tag is valid</h2>
+          <p>
+            Sign in as the customer, admin, or assigned gardener to see your role-specific actions for this tree.
+          </p>
+          <div className="buttonRow">
+            <Link href="/login">Sign In</Link>
+          </div>
+        </section>
+      )}
+
+      {!canShowOwnerDetails && profile && !isCaretaker && (
+        <section className="rolePanel publicPanel">
+          <p className="eyebrow">Limited View</p>
+          <h2>Tree tag is valid</h2>
+          <p>
+            This account is not the owner, admin, or assigned gardener for this tree.
+          </p>
+          <div className="buttonRow">
+            <Link href="/dashboard">Go to Dashboard</Link>
+          </div>
+        </section>
+      )}
+
+      <style>{styles}</style>
+    </main>
+  );
+}
+
+const styles = `
+  * {
+    box-sizing: border-box;
+  }
+
+  .page {
+    min-height: 100vh;
+    padding: 30px;
+    color: #fff7df;
+    font-family: Arial, Helvetica, sans-serif;
+    background:
+      radial-gradient(circle at 15% 5%, rgba(220,176,88,.24), transparent 28%),
+      radial-gradient(circle at 86% 0%, rgba(85,132,93,.20), transparent 30%),
+      linear-gradient(180deg, #07130d 0%, #0b1f15 48%, #06100b 100%);
+  }
+
+  .loadingCard,
+  .errorCard,
+  .verifyHero,
+  .verifiedCard,
+  .rolePanel,
+  .message {
+    border: 1px solid rgba(232,190,103,.18);
+    background:
+      linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)),
+      rgba(7, 24, 15, .84);
+    box-shadow: 0 24px 70px rgba(0,0,0,.32);
+    backdrop-filter: blur(10px);
+  }
+
+  .loadingCard,
+  .message {
+    border-radius: 26px;
+    padding: 20px;
+    color: #f4d58b;
+    font-weight: 900;
+  }
+
+  .errorCard {
+    min-height: calc(100vh - 60px);
+    border-radius: 34px;
+    padding: 40px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+  }
+
+  .errorCard p,
+  .eyebrow {
+    margin: 0 0 8px;
+    color: #e8be67;
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+  }
+
+  .errorCard h1 {
+    margin: 0;
+    color: #fff7df;
+    font-size: 48px;
+  }
+
+  .errorCard span {
+    color: rgba(255,247,223,.72);
+    font-weight: 800;
+  }
+
+  .errorCard a,
+  .buttonRow a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    padding: 14px 18px;
+    color: #08120d;
+    background: linear-gradient(135deg, #f4d58b, #c99536);
+    text-decoration: none;
+    font-weight: 900;
+  }
+
+  .verifyHero {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: 18px;
+    align-items: stretch;
+    border-radius: 34px;
+    padding: 28px;
+    margin-bottom: 18px;
+  }
+
+  .verifyHero h1 {
+    margin: 0;
+    color: #fff7df;
+    font-size: 56px;
+    letter-spacing: -2px;
+  }
+
+  .verifyHero span {
+    display: block;
+    margin-top: 12px;
+    max-width: 760px;
+    color: rgba(255,247,223,.72);
+    font-weight: 800;
+    line-height: 1.6;
+  }
+
+  .statusOrb {
+    border-radius: 30px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 20px;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  .statusOrb strong {
+    display: block;
+    font-size: 48px;
+  }
+
+  .statusOrb b {
+    color: #fff7df;
+    font-size: 22px;
+  }
+
+  .statusOrb small {
+    color: rgba(255,247,223,.62);
+    font-weight: 800;
+    line-height: 1.35;
+  }
+
+  .statusOrb.protected {
+    border-color: rgba(121,225,146,.24);
+  }
+
+  .statusOrb.attention {
+    border-color: rgba(244,213,139,.24);
+  }
+
+  .statusOrb.critical {
+    border-color: rgba(255,120,96,.26);
+  }
+
+  .verifiedCard,
+  .rolePanel {
+    border-radius: 34px;
+    padding: 26px;
+    margin-bottom: 18px;
+  }
+
+  .treeBadge {
+    width: 74px;
+    height: 74px;
+    border-radius: 26px;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,.08);
+    font-size: 38px;
+    margin-bottom: 18px;
+  }
+
+  .verifiedCard h2,
+  .rolePanel h2 {
+    margin: 0;
+    color: #fff7df;
+    font-size: 38px;
+    letter-spacing: -1px;
+  }
+
+  .forestLine {
+    display: block;
+    margin-top: 8px;
+    color: rgba(255,247,223,.68);
+    font-weight: 900;
+  }
+
+  .publicGrid,
+  .adminGrid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  .publicGrid div,
+  .adminGrid div,
+  .assignmentBox {
+    border-radius: 18px;
+    padding: 14px;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  .publicGrid small,
+  .adminGrid small,
+  .assignmentBox small {
+    display: block;
+    color: #e8be67;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    margin-bottom: 5px;
+  }
+
+  .publicGrid b,
+  .adminGrid b,
+  .assignmentBox b {
+    display: block;
+    color: #fff7df;
+    font-size: 15px;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
+  .rolePanel p {
+    color: rgba(255,247,223,.72);
+    font-weight: 800;
+    line-height: 1.6;
+  }
+
+  .buttonRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  .buttonRow a:nth-child(even) {
+    color: #fff7df;
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(232,190,103,.22);
+  }
+
+  .customerPanel {
+    border-color: rgba(121,225,146,.22);
+  }
+
+  .adminPanel {
+    border-color: rgba(244,213,139,.24);
+  }
+
+  .gardenerPanel.allowed {
+    border-color: rgba(121,225,146,.22);
+  }
+
+  .gardenerPanel.blocked {
+    border-color: rgba(255,120,96,.24);
+  }
+
+  .publicPanel {
+    border-color: rgba(255,255,255,.12);
+  }
+
+  .assignmentBox {
+    margin-top: 14px;
+  }
+
+  .assignmentBox span {
+    display: block;
+    margin-top: 5px;
+    color: rgba(255,247,223,.62);
+    font-weight: 800;
+  }
+
+  @media (max-width: 900px) {
+    .page {
+      padding: 18px;
+    }
+
+    .verifyHero,
+    .publicGrid,
+    .adminGrid {
+      grid-template-columns: 1fr;
+    }
+
+    .verifyHero h1 {
+      font-size: 42px;
+    }
+
+    .verifiedCard h2,
+    .rolePanel h2 {
+      font-size: 30px;
+    }
+  }
+`;

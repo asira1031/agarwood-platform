@@ -157,10 +157,10 @@ function alertLabel(status: AlertStatus | null | undefined) {
   const normalized = normalizeStatus(status);
 
   if (normalized === "PROTECTED") return "Protected";
-  if (normalized === "ATTENTION") return "Attention";
+  if (normalized === "ATTENTION") return "Needs Attention";
   if (normalized === "CRITICAL") return "Critical";
 
-  return "Attention";
+  return "Needs Attention";
 }
 
 function alertIcon(status: AlertStatus | null | undefined) {
@@ -549,14 +549,21 @@ export default function MyTreesPage() {
     setActionLoading(false);
   }
 
-  function renderTreeMiniCard(tree: TreeDetail) {
+  function renderTreePremiumCard(tree: TreeDetail) {
     return (
-      <button className={`treeMini ${alertClass(tree.alert_status)}`} key={tree.tree_id} onClick={() => setSelectedTree(tree)}>
-        <span className="treeMiniIcon">{alertIcon(tree.alert_status)}</span>
-        <span>
-          <b>{customerTreeName(tree)}</b>
-          <small>{tree.alert_reason || alertLabel(tree.alert_status)}</small>
-        </span>
+      <button className={`treeCard ${alertClass(tree.alert_status)}`} key={tree.tree_id} onClick={() => setSelectedTree(tree)}>
+        <div className="treeCardTop">
+          <span>{alertIcon(tree.alert_status)}</span>
+          <small>{alertLabel(tree.alert_status)}</small>
+        </div>
+
+        <b>{customerTreeName(tree)}</b>
+        <p>{tree.alert_reason || alertLabel(tree.alert_status)}</p>
+
+        <div className="treeCardMeta">
+          <span>{careLabel(tree.care_status)}</span>
+          <span>{formatShortDate(tree.latest_health_at || tree.latest_photo_at || tree.latest_gps_at)}</span>
+        </div>
       </button>
     );
   }
@@ -564,34 +571,43 @@ export default function MyTreesPage() {
   return (
     <main className="page">
       <section className="hero">
-        <div>
+        <div className="heroCopy">
           <Link href="/dashboard" className="back">
             ← Back to Dashboard
           </Link>
 
-          <p className="eyebrow">Arganwood V6 Forest View</p>
+          <p className="eyebrow">Arganwood V6 Forest Command</p>
           <h1>My Forests</h1>
           <span>
-            Your trees are grouped by forest. Open a forest to see which seedlings are protected, need attention, or are critical.
+            Monitor every forest at a glance. Protected trees stay green, attention trees need follow-up, and critical
+            trees require care before they can be considered protected.
           </span>
+
+          <div className="heroActions">
+            <Link href="/dashboard/marketplace">Buy Trees</Link>
+            <Link href="/dashboard/tree-operations">Request Care</Link>
+          </div>
         </div>
 
-        <div className="heroStats">
-          <div>
-            <small>Total Trees</small>
-            <b>{totals.total}</b>
-          </div>
-          <div>
-            <small>Protected</small>
-            <b>{totals.protected}</b>
-          </div>
-          <div>
-            <small>Attention</small>
-            <b>{totals.attention}</b>
-          </div>
-          <div>
-            <small>Critical</small>
-            <b>{totals.critical}</b>
+        <div className="forestHeroCard">
+          <div className="forestHeroGlow" />
+          <p>Forest Protection Overview</p>
+          <strong>{totals.total}</strong>
+          <span>Total Trees Managed</span>
+
+          <div className="heroMiniStats">
+            <div>
+              <small>Protected</small>
+              <b>{totals.protected}</b>
+            </div>
+            <div>
+              <small>Attention</small>
+              <b>{totals.attention}</b>
+            </div>
+            <div>
+              <small>Critical</small>
+              <b>{totals.critical}</b>
+            </div>
           </div>
         </div>
       </section>
@@ -662,9 +678,10 @@ export default function MyTreesPage() {
                   </span>
                 </div>
 
-                <Link href="/dashboard/marketplace" className="addTreeBtn">
-                  Add Trees
-                </Link>
+                <div className="forestHeadActions">
+                  <Link href="/dashboard/tree-operations">Request Care</Link>
+                  <Link href="/dashboard/marketplace">Add Trees</Link>
+                </div>
               </div>
 
               <div className="treeSections">
@@ -677,7 +694,7 @@ export default function MyTreesPage() {
                   {criticalTrees.length === 0 ? (
                     <div className="softEmpty">No critical trees.</div>
                   ) : (
-                    <div className="treeList">{criticalTrees.map(renderTreeMiniCard)}</div>
+                    <div className="treeList">{criticalTrees.map(renderTreePremiumCard)}</div>
                   )}
                 </section>
 
@@ -690,20 +707,20 @@ export default function MyTreesPage() {
                   {attentionTrees.length === 0 ? (
                     <div className="softEmpty">No attention warnings.</div>
                   ) : (
-                    <div className="treeList">{attentionTrees.map(renderTreeMiniCard)}</div>
+                    <div className="treeList">{attentionTrees.map(renderTreePremiumCard)}</div>
                   )}
                 </section>
 
                 <section className="treeSection protectedBox">
                   <div className="treeSectionHead">
-                    <b>🟢 Protected / Healthy</b>
+                    <b>🟢 Protected</b>
                     <span>{protectedTrees.length}</span>
                   </div>
 
                   {protectedTrees.length === 0 ? (
                     <div className="softEmpty">No protected trees yet.</div>
                   ) : (
-                    <div className="treeList">{protectedTrees.map(renderTreeMiniCard)}</div>
+                    <div className="treeList">{protectedTrees.map(renderTreePremiumCard)}</div>
                   )}
                 </section>
               </div>
@@ -806,10 +823,10 @@ export default function MyTreesPage() {
               </div>
 
               <div className="qrBox">
-                <QRCodeCanvas value={getQrValue(qrTree)} size={210} includeMargin />
+                <QRCodeCanvas value={getQrValue(qrTree)} size={214} includeMargin />
               </div>
 
-              <small className="qrPath">{getQrPath(qrTree)}</small>
+              <small className="qrHint">Scan to verify this tree.</small>
             </div>
           </div>
         </div>
@@ -941,98 +958,215 @@ export default function MyTreesPage() {
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #102017;
+          color: #fff7df;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 14% 7%, rgba(255, 222, 145, .50), transparent 25%),
-            radial-gradient(circle at 90% 0%, rgba(255,255,255,.70), transparent 32%),
-            linear-gradient(180deg, #f8f4e9 0%, #eee2cc 48%, #dfc9a8 100%);
+            radial-gradient(circle at 15% 5%, rgba(220, 176, 88, .24), transparent 28%),
+            radial-gradient(circle at 86% 0%, rgba(85, 132, 93, .22), transparent 30%),
+            radial-gradient(circle at 50% 90%, rgba(218, 173, 82, .12), transparent 34%),
+            linear-gradient(180deg, #07130d 0%, #0b1f15 45%, #06100b 100%);
         }
 
         .hero {
           display: grid;
-          grid-template-columns: 1fr 460px;
-          gap: 18px;
+          grid-template-columns: 1fr 430px;
+          gap: 22px;
           align-items: stretch;
-          margin-bottom: 20px;
+          margin-bottom: 22px;
+        }
+
+        .heroCopy,
+        .forestHeroCard,
+        .message,
+        .empty,
+        .forestCard,
+        .forestDetail,
+        .emptyState {
+          border: 1px solid rgba(232, 190, 103, .18);
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)),
+            rgba(7, 24, 15, .82);
+          box-shadow: 0 24px 70px rgba(0,0,0,.32);
+          backdrop-filter: blur(10px);
+        }
+
+        .heroCopy {
+          border-radius: 34px;
+          min-height: 330px;
+          padding: 28px;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .heroCopy:before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(90deg, rgba(7,19,13,.96), rgba(7,19,13,.74), rgba(7,19,13,.92)),
+            url("https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1600&q=80");
+          background-size: cover;
+          background-position: center;
+          opacity: .82;
+          z-index: -2;
+        }
+
+        .heroCopy:after {
+          content: "";
+          position: absolute;
+          width: 300px;
+          height: 300px;
+          right: -90px;
+          bottom: -120px;
+          border-radius: 50%;
+          background: rgba(232, 190, 103, .20);
+          filter: blur(8px);
+          z-index: -1;
         }
 
         .back {
-          display: inline-block;
-          margin-bottom: 14px;
-          color: #8a6739;
+          display: inline-flex;
+          margin-bottom: 18px;
+          color: #e8be67;
           font-weight: 900;
           text-decoration: none;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8a6739;
+          color: #e8be67;
           font-weight: 900;
           text-transform: uppercase;
-          letter-spacing: .12em;
+          letter-spacing: .14em;
           font-size: 12px;
         }
 
         h1 {
           margin: 0;
-          font-size: 54px;
-          letter-spacing: -2px;
-          color: #0b1b12;
+          color: #fff7df;
+          font-size: 58px;
+          letter-spacing: -2.4px;
+          line-height: .95;
         }
 
-        .hero span {
+        .heroCopy span {
+          display: block;
+          margin-top: 16px;
+          max-width: 760px;
+          color: rgba(255,247,223,.78);
+          font-weight: 800;
+          line-height: 1.65;
+        }
+
+        .heroActions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 26px;
+        }
+
+        .heroActions a,
+        .forestHeadActions a,
+        .emptyState a {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 16px;
+          padding: 14px 18px;
+          color: #08120d;
+          background: linear-gradient(135deg, #f4d58b, #c99536);
+          text-decoration: none;
+          font-weight: 900;
+          box-shadow: 0 16px 34px rgba(201, 149, 54, .20);
+        }
+
+        .heroActions a:last-child,
+        .forestHeadActions a:first-child {
+          color: #fff7df;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(232, 190, 103, .22);
+          box-shadow: none;
+        }
+
+        .forestHeroCard {
+          border-radius: 34px;
+          padding: 26px;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .forestHeroGlow {
+          position: absolute;
+          width: 220px;
+          height: 220px;
+          right: -80px;
+          top: -80px;
+          border-radius: 50%;
+          background: rgba(232,190,103,.24);
+          filter: blur(4px);
+        }
+
+        .forestHeroCard p {
+          margin: 0;
+          color: rgba(255,247,223,.72);
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .13em;
+        }
+
+        .forestHeroCard strong {
+          display: block;
+          margin-top: 22px;
+          color: #f4d58b;
+          font-size: 84px;
+          line-height: .9;
+          letter-spacing: -4px;
+        }
+
+        .forestHeroCard > span {
           display: block;
           margin-top: 8px;
-          max-width: 780px;
-          color: #627064;
-          font-weight: 800;
-          line-height: 1.6;
+          color: rgba(255,247,223,.78);
+          font-weight: 900;
         }
 
-        .heroStats {
+        .heroMiniStats {
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 12px;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+          margin-top: 26px;
         }
 
-        .heroStats div,
-        .message,
-        .empty,
-        .forestCard,
-        .forestDetail,
-        .emptyState {
-          border-radius: 28px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(81, 61, 32, .08);
-          box-shadow: 0 20px 50px rgba(79, 55, 20, .10);
+        .heroMiniStats div {
+          border-radius: 20px;
+          padding: 14px;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
         }
 
-        .heroStats div {
-          padding: 18px;
-        }
-
-        .heroStats small {
+        .heroMiniStats small {
           display: block;
-          color: #8a6739;
-          font-size: 11px;
+          color: rgba(255,247,223,.58);
+          font-size: 10px;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .10em;
-          margin-bottom: 5px;
+          margin-bottom: 6px;
         }
 
-        .heroStats b {
+        .heroMiniStats b {
           display: block;
-          color: #244536;
-          font-size: 30px;
+          color: #fff7df;
+          font-size: 28px;
         }
 
         .message,
         .empty {
+          border-radius: 24px;
           padding: 18px;
           margin-bottom: 18px;
-          color: #244536;
+          color: #f4d58b;
           font-weight: 900;
         }
 
@@ -1041,31 +1175,21 @@ export default function MyTreesPage() {
           display: grid;
           place-items: center;
           text-align: center;
-          padding: 40px;
+          padding: 44px;
+          border-radius: 34px;
         }
 
         .emptyState h2 {
           margin: 0;
-          font-size: 34px;
-          color: #0b1b12;
+          color: #fff7df;
+          font-size: 36px;
         }
 
         .emptyState p {
-          max-width: 560px;
-          color: #627064;
+          max-width: 600px;
+          color: rgba(255,247,223,.72);
           font-weight: 800;
           line-height: 1.65;
-        }
-
-        .emptyState a {
-          display: inline-flex;
-          margin-top: 8px;
-          padding: 14px 20px;
-          border-radius: 16px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-          text-decoration: none;
-          font-weight: 900;
         }
 
         .emptyIcon {
@@ -1081,8 +1205,8 @@ export default function MyTreesPage() {
         }
 
         .forestCard {
+          border-radius: 28px;
           cursor: pointer;
-          border: 1px solid rgba(81, 61, 32, .08);
           text-align: left;
           padding: 18px;
           transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
@@ -1091,14 +1215,15 @@ export default function MyTreesPage() {
         .forestCard:hover,
         .forestCard.active {
           transform: translateY(-3px);
-          border-color: rgba(36,69,54,.25);
-          box-shadow: 0 24px 60px rgba(36,69,54,.16);
+          border-color: rgba(232,190,103,.46);
+          box-shadow: 0 28px 70px rgba(0,0,0,.40);
         }
 
         .forestCard.active {
           background:
-            radial-gradient(circle at 86% 10%, rgba(255, 222, 145, .36), transparent 32%),
-            rgba(255,253,246,.95);
+            radial-gradient(circle at 90% 8%, rgba(232,190,103,.22), transparent 28%),
+            linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.04)),
+            rgba(9, 30, 19, .94);
         }
 
         .forestTop {
@@ -1111,17 +1236,17 @@ export default function MyTreesPage() {
 
         .forestTop small {
           display: block;
-          color: #8a6739;
+          color: #e8be67;
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .10em;
-          margin-bottom: 4px;
+          margin-bottom: 6px;
         }
 
         .forestTop b {
           display: block;
-          color: #0b1b12;
+          color: #fff7df;
           font-size: 24px;
           line-height: 1.12;
         }
@@ -1130,8 +1255,8 @@ export default function MyTreesPage() {
           white-space: nowrap;
           border-radius: 999px;
           padding: 8px 11px;
-          color: white;
-          background: #244536;
+          color: #08120d;
+          background: #f4d58b;
           font-size: 12px;
           font-weight: 900;
         }
@@ -1145,7 +1270,8 @@ export default function MyTreesPage() {
         .forestCounts div {
           border-radius: 18px;
           padding: 12px;
-          background: #f2ead9;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
         }
 
         .forestCounts small {
@@ -1154,7 +1280,7 @@ export default function MyTreesPage() {
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .08em;
-          margin-bottom: 4px;
+          margin-bottom: 5px;
         }
 
         .forestCounts b {
@@ -1163,20 +1289,21 @@ export default function MyTreesPage() {
 
         .protected small,
         .protected b {
-          color: #245f39;
+          color: #8df0a4;
         }
 
         .attention small,
         .attention b {
-          color: #8a6739;
+          color: #f4d58b;
         }
 
         .critical small,
         .critical b {
-          color: #8b2d20;
+          color: #ff9a88;
         }
 
         .forestDetail {
+          border-radius: 34px;
           padding: 22px;
         }
 
@@ -1185,34 +1312,28 @@ export default function MyTreesPage() {
           justify-content: space-between;
           gap: 16px;
           align-items: center;
-          margin-bottom: 18px;
+          margin-bottom: 20px;
         }
 
         .forestDetailHead h2 {
           margin: 0;
-          color: #0b1b12;
-          font-size: 36px;
-          letter-spacing: -1px;
+          color: #fff7df;
+          font-size: 38px;
+          letter-spacing: -1.2px;
         }
 
         .forestDetailHead span {
           display: block;
           margin-top: 7px;
-          color: #627064;
+          color: rgba(255,247,223,.68);
           font-weight: 900;
         }
 
-        .addTreeBtn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 16px;
-          padding: 14px 18px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-          text-decoration: none;
-          font-weight: 900;
-          white-space: nowrap;
+        .forestHeadActions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 10px;
         }
 
         .treeSections {
@@ -1223,24 +1344,24 @@ export default function MyTreesPage() {
         }
 
         .treeSection {
-          border-radius: 24px;
+          border-radius: 26px;
           padding: 14px;
-          min-height: 220px;
+          min-height: 260px;
         }
 
         .criticalBox {
-          background: linear-gradient(180deg, rgba(139,45,32,.10), rgba(139,45,32,.04));
-          border: 1px solid rgba(139,45,32,.14);
+          background: linear-gradient(180deg, rgba(255,120,96,.13), rgba(255,120,96,.04));
+          border: 1px solid rgba(255,120,96,.18);
         }
 
         .attentionBox {
-          background: linear-gradient(180deg, rgba(178,129,45,.14), rgba(178,129,45,.04));
-          border: 1px solid rgba(178,129,45,.16);
+          background: linear-gradient(180deg, rgba(244,213,139,.14), rgba(244,213,139,.04));
+          border: 1px solid rgba(244,213,139,.18);
         }
 
         .protectedBox {
-          background: linear-gradient(180deg, rgba(36,95,57,.12), rgba(36,95,57,.04));
-          border: 1px solid rgba(36,95,57,.14);
+          background: linear-gradient(180deg, rgba(121,225,146,.12), rgba(121,225,146,.04));
+          border: 1px solid rgba(121,225,146,.18);
         }
 
         .treeSectionHead {
@@ -1252,81 +1373,120 @@ export default function MyTreesPage() {
         }
 
         .treeSectionHead b {
-          color: #0b1b12;
+          color: #fff7df;
           font-size: 18px;
         }
 
         .treeSectionHead span {
           display: inline-grid;
           place-items: center;
-          min-width: 30px;
-          height: 30px;
+          min-width: 31px;
+          height: 31px;
           border-radius: 999px;
-          color: white;
-          background: #244536;
+          color: #08120d;
+          background: #f4d58b;
           font-size: 12px;
           font-weight: 900;
         }
 
         .treeList {
           display: grid;
-          gap: 9px;
+          gap: 10px;
         }
 
-        .treeMini {
+        .treeCard {
           width: 100%;
-          border: 0;
-          border-radius: 18px;
-          padding: 12px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
+          border: 1px solid rgba(255,255,255,.08);
+          border-radius: 22px;
+          padding: 14px;
           text-align: left;
           cursor: pointer;
-          background: rgba(255,253,246,.78);
-          box-shadow: 0 10px 24px rgba(79, 55, 20, .06);
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.04)),
+            rgba(8, 23, 15, .78);
+          box-shadow: 0 14px 30px rgba(0,0,0,.20);
+          transition: transform .18s ease, border-color .18s ease;
         }
 
-        .treeMiniIcon {
+        .treeCard:hover {
+          transform: translateY(-2px);
+          border-color: rgba(232,190,103,.38);
+        }
+
+        .treeCardTop {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+
+        .treeCardTop span {
           display: grid;
           place-items: center;
           width: 38px;
           height: 38px;
-          border-radius: 14px;
-          background: rgba(36,69,54,.08);
-          flex: 0 0 auto;
+          border-radius: 16px;
+          background: rgba(255,255,255,.08);
         }
 
-        .treeMini b {
+        .treeCardTop small {
+          border-radius: 999px;
+          padding: 7px 10px;
+          background: rgba(255,255,255,.08);
+          color: rgba(255,247,223,.75);
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+        }
+
+        .treeCard b {
           display: block;
-          color: #0b1b12;
-          font-size: 15px;
-          margin-bottom: 3px;
+          color: #fff7df;
+          font-size: 18px;
+          margin-bottom: 6px;
         }
 
-        .treeMini small {
-          color: #687467;
+        .treeCard p {
+          min-height: 38px;
+          margin: 0;
+          color: rgba(255,247,223,.66);
           font-weight: 800;
-          line-height: 1.3;
+          line-height: 1.45;
         }
 
-        .treeMini.critical {
-          border: 1px solid rgba(139,45,32,.16);
+        .treeCardMeta {
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          align-items: center;
+          margin-top: 12px;
         }
 
-        .treeMini.attention {
-          border: 1px solid rgba(178,129,45,.16);
+        .treeCardMeta span {
+          color: rgba(255,247,223,.62);
+          font-size: 11px;
+          font-weight: 900;
         }
 
-        .treeMini.protected {
-          border: 1px solid rgba(36,95,57,.16);
+        .treeCard.critical {
+          border-color: rgba(255,120,96,.26);
+        }
+
+        .treeCard.attention {
+          border-color: rgba(244,213,139,.24);
+        }
+
+        .treeCard.protected {
+          border-color: rgba(121,225,146,.22);
         }
 
         .softEmpty {
-          border-radius: 18px;
-          padding: 14px;
-          color: #687467;
-          background: rgba(255,253,246,.58);
+          border-radius: 20px;
+          padding: 16px;
+          color: rgba(255,247,223,.62);
+          background: rgba(255,255,255,.06);
           font-weight: 900;
           text-align: center;
         }
@@ -1338,22 +1498,24 @@ export default function MyTreesPage() {
           display: grid;
           place-items: center;
           padding: 20px;
-          background: rgba(10, 18, 13, .55);
-          backdrop-filter: blur(8px);
+          background: rgba(3, 10, 7, .72);
+          backdrop-filter: blur(9px);
         }
 
         .modal {
           position: relative;
-          width: min(760px, 100%);
+          width: min(770px, 100%);
           max-height: 92vh;
           overflow: auto;
           border-radius: 34px;
           padding: 26px;
+          color: #fff7df;
           background:
-            radial-gradient(circle at 90% 8%, rgba(255, 222, 145, .36), transparent 30%),
-            #fffdf6;
-          box-shadow: 0 30px 90px rgba(0,0,0,.28);
-          border: 1px solid rgba(81, 61, 32, .10);
+            radial-gradient(circle at 90% 8%, rgba(232,190,103,.20), transparent 30%),
+            linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)),
+            #07180f;
+          box-shadow: 0 34px 100px rgba(0,0,0,.52);
+          border: 1px solid rgba(232,190,103,.18);
         }
 
         .closeBtn {
@@ -1364,8 +1526,8 @@ export default function MyTreesPage() {
           height: 42px;
           border: 0;
           border-radius: 999px;
-          background: #f2ead9;
-          color: #244536;
+          background: rgba(255,255,255,.10);
+          color: #f4d58b;
           font-size: 26px;
           font-weight: 900;
           cursor: pointer;
@@ -1383,30 +1545,30 @@ export default function MyTreesPage() {
         }
 
         .detailStatus.protected {
-          background: rgba(36,95,57,.12);
-          color: #245f39;
+          background: rgba(121,225,146,.14);
+          color: #8df0a4;
         }
 
         .detailStatus.attention {
-          background: rgba(178,129,45,.14);
-          color: #8a6739;
+          background: rgba(244,213,139,.14);
+          color: #f4d58b;
         }
 
         .detailStatus.critical {
-          background: rgba(139,45,32,.12);
-          color: #8b2d20;
+          background: rgba(255,120,96,.14);
+          color: #ff9a88;
         }
 
         .modal h2 {
           margin: 0;
-          color: #0b1b12;
+          color: #fff7df;
           font-size: 38px;
           letter-spacing: -1px;
         }
 
         .detailSubtitle {
           margin: 8px 0 18px;
-          color: #627064;
+          color: rgba(255,247,223,.66);
           font-weight: 900;
         }
 
@@ -1420,14 +1582,15 @@ export default function MyTreesPage() {
         .detailGrid div {
           border-radius: 18px;
           padding: 14px;
-          background: #f2ead9;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
         }
 
         .detailGrid small,
         .tagRows small,
         .fieldLabel {
           display: block;
-          color: #8a6739;
+          color: #e8be67;
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
@@ -1438,7 +1601,7 @@ export default function MyTreesPage() {
         .detailGrid b,
         .tagRows b {
           display: block;
-          color: #102017;
+          color: #fff7df;
           font-size: 15px;
           line-height: 1.35;
         }
@@ -1447,17 +1610,17 @@ export default function MyTreesPage() {
           border-radius: 18px;
           padding: 14px;
           margin: 0 0 18px;
-          background: rgba(139,45,32,.08);
-          border: 1px solid rgba(139,45,32,.12);
+          background: rgba(255,120,96,.10);
+          border: 1px solid rgba(255,120,96,.16);
         }
 
         .warningNote b {
-          color: #8b2d20;
+          color: #ff9a88;
         }
 
         .warningNote p {
           margin: 6px 0 0;
-          color: #6f3c32;
+          color: rgba(255,247,223,.74);
           font-weight: 800;
           line-height: 1.5;
         }
@@ -1473,10 +1636,16 @@ export default function MyTreesPage() {
           border: 0;
           border-radius: 16px;
           padding: 14px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
+          color: #08120d;
+          background: linear-gradient(135deg, #f4d58b, #c99536);
           font-weight: 900;
           cursor: pointer;
+        }
+
+        .actionGrid button:nth-child(odd) {
+          color: #fff7df;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(232,190,103,.20);
         }
 
         .actionGrid button:disabled,
@@ -1486,7 +1655,7 @@ export default function MyTreesPage() {
         }
 
         .qrModal {
-          width: min(460px, 100%);
+          width: min(470px, 100%);
         }
 
         .tagCard {
@@ -1494,14 +1663,14 @@ export default function MyTreesPage() {
           padding: 22px;
           text-align: center;
           background:
-            radial-gradient(circle at 50% 0%, rgba(255, 222, 145, .38), transparent 30%),
-            #f8f1df;
-          border: 1px solid rgba(81, 61, 32, .12);
+            radial-gradient(circle at 50% 0%, rgba(232,190,103,.22), transparent 30%),
+            rgba(255,255,255,.06);
+          border: 1px solid rgba(232,190,103,.20);
         }
 
         .tagCard p {
           margin: 0 0 16px;
-          color: #0b1b12;
+          color: #f4d58b;
           font-size: 18px;
           font-weight: 900;
           letter-spacing: .10em;
@@ -1518,7 +1687,8 @@ export default function MyTreesPage() {
         .tagRows div {
           border-radius: 16px;
           padding: 12px;
-          background: rgba(255,253,246,.78);
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
         }
 
         .qrBox {
@@ -1527,15 +1697,14 @@ export default function MyTreesPage() {
           padding: 14px;
           border-radius: 22px;
           background: white;
-          box-shadow: 0 14px 34px rgba(79, 55, 20, .12);
+          box-shadow: 0 14px 38px rgba(0,0,0,.28);
         }
 
-        .qrPath {
+        .qrHint {
           display: block;
           margin-top: 12px;
-          color: #687467;
+          color: rgba(255,247,223,.64);
           font-weight: 900;
-          word-break: break-word;
         }
 
         .fieldLabel {
@@ -1546,11 +1715,11 @@ export default function MyTreesPage() {
 
         .fieldLabel input {
           width: 100%;
-          border: 1px solid rgba(36,69,54,.16);
+          border: 1px solid rgba(232,190,103,.20);
           border-radius: 16px;
           padding: 14px;
-          background: rgba(255,253,246,.92);
-          color: #102017;
+          background: rgba(255,255,255,.08);
+          color: #fff7df;
           outline: none;
           font-size: 16px;
           font-weight: 900;
@@ -1569,7 +1738,8 @@ export default function MyTreesPage() {
           gap: 14px;
           border-radius: 22px;
           padding: 12px;
-          background: #f2ead9;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
           align-items: center;
         }
 
@@ -1579,7 +1749,7 @@ export default function MyTreesPage() {
           height: 100px;
           border-radius: 18px;
           object-fit: cover;
-          background: rgba(36,69,54,.10);
+          background: rgba(255,255,255,.08);
           display: grid;
           place-items: center;
           font-size: 36px;
@@ -1587,20 +1757,20 @@ export default function MyTreesPage() {
 
         .evidenceCard b {
           display: block;
-          color: #102017;
+          color: #fff7df;
           font-size: 18px;
         }
 
         .evidenceCard small {
           display: block;
           margin-top: 4px;
-          color: #8a6739;
+          color: #e8be67;
           font-weight: 900;
         }
 
         .evidenceCard p {
           margin: 8px 0 0;
-          color: #627064;
+          color: rgba(255,247,223,.66);
           font-weight: 800;
           line-height: 1.5;
         }
@@ -1608,7 +1778,7 @@ export default function MyTreesPage() {
         .evidenceCard a {
           display: inline-flex;
           margin-top: 8px;
-          color: #244536;
+          color: #f4d58b;
           font-weight: 900;
         }
 
@@ -1618,7 +1788,7 @@ export default function MyTreesPage() {
           width: 74px;
           height: 74px;
           border-radius: 24px;
-          background: rgba(36,69,54,.10);
+          background: rgba(255,255,255,.08);
           font-size: 36px;
         }
 
@@ -1632,8 +1802,8 @@ export default function MyTreesPage() {
           margin-top: 8px;
           border-radius: 999px;
           padding: 7px 10px;
-          color: #8b2d20;
-          background: rgba(139,45,32,.10);
+          color: #ff9a88;
+          background: rgba(255,120,96,.12);
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
@@ -1647,8 +1817,8 @@ export default function MyTreesPage() {
             grid-template-columns: 1fr;
           }
 
-          .heroStats {
-            grid-template-columns: repeat(4, 1fr);
+          .forestHeroCard strong {
+            font-size: 66px;
           }
         }
 
@@ -1658,10 +1828,10 @@ export default function MyTreesPage() {
           }
 
           h1 {
-            font-size: 38px;
+            font-size: 42px;
           }
 
-          .heroStats,
+          .heroMiniStats,
           .forestCounts,
           .forestDetailHead,
           .detailGrid,
@@ -1676,6 +1846,13 @@ export default function MyTreesPage() {
 
           .forestDetailHead {
             align-items: start;
+          }
+
+          .forestHeadActions,
+          .heroActions {
+            display: grid;
+            grid-template-columns: 1fr;
+            width: 100%;
           }
 
           .evidenceCard img,
