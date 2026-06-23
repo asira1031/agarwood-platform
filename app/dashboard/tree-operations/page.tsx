@@ -706,6 +706,151 @@ export default function TreeOperationsPage() {
     };
   }
 
+  async function rollbackCreatedRequests(requestIds: string[]) {
+    if (requestIds.length === 0) return;
+
+    await supabase
+      .from("tree_operation_requests")
+      .delete()
+      .in("id", requestIds);
+  }
+
+  async function rollbackCreatedSubscriptions(subscriptionIds: string[]) {
+    if (subscriptionIds.length === 0) return;
+
+    await supabase
+      .from("care_program_subscriptions")
+      .delete()
+      .in("id", subscriptionIds);
+  }
+
+  async function getTreeCareSnapshots(treeIds: string[]) {
+    if (!profile || treeIds.length === 0) return [];
+
+    const { data, error } = await supabase
+      .from("trees")
+      .select(
+        "id, care_status, care_started_at, care_expires_at, care_program_name, care_program_price, care_program_started_at, care_program_next_renewal, care_program_coverage, care_program_status, auto_renew_enabled, updated_at"
+      )
+      .in("id", treeIds)
+      .eq("customer_profile_id", profile.id);
+
+    if (error) throw error;
+
+    return (data || []) as Array<Record<string, any>>;
+  }
+
+  async function restoreTreeCareSnapshots(snapshots: Array<Record<string, any>>) {
+    if (!profile || snapshots.length === 0) return;
+
+    for (const snapshot of snapshots) {
+      const { id, ...fields } = snapshot;
+
+      await supabase
+        .from("trees")
+        .update({
+          ...fields,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .eq("customer_profile_id", profile.id);
+    }
+  }
+
+  async function insertPlatformTreasury(args: {
+    amount: number;
+    referenceNo: string;
+    description: string;
+  }) {
+    if (!profile || args.amount <= 0) return;
+
+    const payload = {
+      profile_id: profile.id,
+      source: "CARE_SERVICE",
+      amount: args.amount,
+      reference_no: args.referenceNo,
+      description: args.description,
+      status: "RECEIVED",
+      created_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("platform_treasury").insert(payload);
+
+    if (error) throw error;
+  }
+
+  async function hasDuplicateCareRequest(args: {
+    operationName: string;
+    groupId: string;
+    treeId: string | null;
+    careProgramName?: string | null;
+  }) {
+    if (!profile) return false;
+
+    const activeStatuses = ["PENDING", "ASSIGNED", "IN_PROGRESS", "SUBMITTED"];
+
+    let query = supabase
+      .from("tree_operation_requests")
+      .select("id")
+      .or(`profile_id.eq.${profile.id},customer_profile_id.eq.${profile.id}`)
+      .eq("group_id", args.groupId)
+      .in("status", activeStatuses)
+      .limit(1);
+
+    if (args.treeId) {
+      query = query.eq("tree_id", args.treeId);
+    } else {
+      query = query.is("tree_id", null);
+    }
+
+    if (args.careProgramName) {
+      query = query.eq("care_program_name", args.careProgramName);
+    } else {
+      query = query.eq("operation_type", args.operationName);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    return (data || []).length > 0;
+  }
+
+  async function ensureNoDuplicateCareRequests(args: {
+    operationName: string;
+    careProgramName?: string | null;
+  }) {
+    if (!selectedForest) throw new Error("Please select a forest.");
+
+    if (scope === "FOREST") {
+      const duplicate = await hasDuplicateCareRequest({
+        operationName: args.operationName,
+        groupId: selectedForest.group_id,
+        treeId: null,
+        careProgramName: args.careProgramName || null,
+      });
+
+      if (duplicate) {
+        throw new Error("This care request is already active for this forest. Please wait for Admin/Gardener completion.");
+      }
+
+      return;
+    }
+
+    if (!selectedTree) throw new Error("Please select a seedling or choose entire forest.");
+
+    const duplicate = await hasDuplicateCareRequest({
+      operationName: args.operationName,
+      groupId: selectedForest.group_id,
+      treeId: selectedTree.tree_id,
+      careProgramName: args.careProgramName || null,
+    });
+
+    if (duplicate) {
+      throw new Error("This care request is already active for this tree. Please wait for Admin/Gardener completion.");
+    }
+  }
+
   async function submitServiceRequest() {
     setMessage("");
 
@@ -730,6 +875,15 @@ export default function TreeOperationsPage() {
       return;
     }
 
+    try {
+      await ensureNoDuplicateCareRequests({
+        operationName: operation.name,
+      });
+    } catch (error: any) {
+      setMessage(error?.message || "Duplicate care request check failed.");
+      return;
+    }
+
     setProcessing(true);
 
     const operationFee = Number(operation.price || 0);
@@ -738,6 +892,7 @@ export default function TreeOperationsPage() {
 
     let previousBalance: number | null = null;
     let inventorySnapshot: { id: string; previousQty: number } | null = null;
+    let createdRequestId: string | null = null;
 
     try {
       previousBalance = await deductWallet(totalAmount);
@@ -759,6 +914,14 @@ export default function TreeOperationsPage() {
         throw new Error(requestError?.message || "Forest care request creation failed.");
       }
 
+      createdRequestId = createdRequest.id;
+
+      await insertPlatformTreasury({
+        amount: platformFee,
+        referenceNo: createdRequest.id,
+        description: "Platform fee for care request",
+      });
+
       await createWalletTransactionLog({
         amount: -Math.abs(totalAmount),
         description: `${operation.name} request for ${targetLabel}`,
@@ -767,14 +930,15 @@ export default function TreeOperationsPage() {
 
       setNote("");
       setMessage(
-        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, and request is waiting for admin assignment.`
+        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
       );
 
       await loadData(selectedForestId, selectedTreeId);
     } catch (error: any) {
+      if (createdRequestId) await rollbackCreatedRequests([createdRequestId]);
       if (previousBalance !== null) await restoreWallet(previousBalance);
       await restoreInventory(inventorySnapshot);
-      setMessage(error?.message || "Forest care request failed. Wallet/inventory restored when possible.");
+      setMessage(error?.message || "Forest care request failed. Wallet, request, and inventory were rolled back when possible.");
     } finally {
       setProcessing(false);
     }
@@ -791,16 +955,31 @@ export default function TreeOperationsPage() {
       return setMessage("Please choose a Forest Protection Plan.");
     }
 
+    try {
+      await ensureNoDuplicateCareRequests({
+        operationName: operation.name,
+        careProgramName: operation.name,
+      });
+    } catch (error: any) {
+      setMessage(error?.message || "Duplicate care request check failed.");
+      return;
+    }
+
     setProcessing(true);
 
-    const startedAt = new Date().toISOString();
     const nextRenewalDate = getNextRenewalDate(operation.duration || "Program");
     const programPrice = Number(operation.price || 0);
     const actionLabel = autoRenewEnabled ? "Subscribe" : "Buy Once";
 
     let previousBalance: number | null = null;
+    let createdRequestId: string | null = null;
+    let createdSubscriptionId: string | null = null;
+    let treeSnapshots: Array<Record<string, any>> = [];
 
     try {
+      const treeIdsToUpdate = scope === "FOREST" ? selectedForestTrees.map((tree) => tree.tree_id) : [selectedTree!.tree_id];
+
+      treeSnapshots = await getTreeCareSnapshots(treeIdsToUpdate);
       previousBalance = await deductWallet(programPrice);
 
       const { data: createdRequest, error: requestError } = await supabase
@@ -822,7 +1001,33 @@ export default function TreeOperationsPage() {
         throw new Error(requestError?.message || "Protection plan request creation failed.");
       }
 
-      const treeIdsToUpdate = scope === "FOREST" ? selectedForestTrees.map((tree) => tree.tree_id) : [selectedTree!.tree_id];
+      createdRequestId = createdRequest.id;
+
+      if (autoRenewEnabled && scope === "TREE" && selectedTree) {
+        const subscriptionPayload = {
+          profile_id: profile.id,
+          tree_id: selectedTree.tree_id,
+          care_program_name: operation.name,
+          care_program_price: programPrice,
+          care_program_duration: operation.duration || "Program",
+          status: "PENDING",
+          auto_renew_enabled: true,
+          started_at: null,
+          next_renewal_date: nextRenewalDate,
+        };
+
+        const { data: createdSubscription, error: subscriptionError } = await supabase
+          .from("care_program_subscriptions")
+          .insert(subscriptionPayload)
+          .select("id")
+          .single();
+
+        if (subscriptionError || !createdSubscription) {
+          throw new Error(subscriptionError?.message || "Subscription record failed.");
+        }
+
+        createdSubscriptionId = createdSubscription.id;
+      }
 
       if (treeIdsToUpdate.length > 0) {
         const { error: treeUpdateError } = await supabase
@@ -848,28 +1053,6 @@ export default function TreeOperationsPage() {
         }
       }
 
-      if (autoRenewEnabled && scope === "TREE" && selectedTree) {
-        const subscriptionPayload = {
-          profile_id: profile.id,
-          tree_id: selectedTree.tree_id,
-          care_program_name: operation.name,
-          care_program_price: programPrice,
-          care_program_duration: operation.duration || "Program",
-          status: "PENDING",
-          auto_renew_enabled: true,
-          started_at: null,
-          next_renewal_date: nextRenewalDate,
-        };
-
-        const { error: subscriptionError } = await supabase
-          .from("care_program_subscriptions")
-          .insert(subscriptionPayload);
-
-        if (subscriptionError) {
-          throw new Error(`Subscription record failed: ${subscriptionError.message}`);
-        }
-      }
-
       await createWalletTransactionLog({
         amount: -Math.abs(programPrice),
         description: `${actionLabel}: ${operation.name} for ${targetLabel}`,
@@ -880,11 +1063,14 @@ export default function TreeOperationsPage() {
       await loadData(selectedForestId, selectedTreeId);
 
       setMessage(
-        `${operation.name} ${autoRenewEnabled ? "subscription" : "buy once"} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
+        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
       );
     } catch (error: any) {
+      if (createdSubscriptionId) await rollbackCreatedSubscriptions([createdSubscriptionId]);
+      if (createdRequestId) await rollbackCreatedRequests([createdRequestId]);
+      await restoreTreeCareSnapshots(treeSnapshots);
       if (previousBalance !== null) await restoreWallet(previousBalance);
-      setMessage(error?.message || "Protection plan failed. Wallet restored when possible.");
+      setMessage(error?.message || "Protection plan failed. Wallet, request, subscription, and tree status were rolled back when possible.");
       await loadData(selectedForestId, selectedTreeId);
     } finally {
       setProcessing(false);
