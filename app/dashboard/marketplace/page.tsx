@@ -55,6 +55,17 @@ type InventoryItem = {
   status: string | null;
 };
 
+type TreeGroup = {
+  id: string;
+  customer_profile_id: string | null;
+  forest_name: string | null;
+  group_name: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type ForestMode = "NEW" | "EXISTING";
+
 const SUPPLY_CATEGORIES: SupplyCategory[] = [
   "All Supplies",
   "Fertilizers",
@@ -80,7 +91,6 @@ const PACKAGE_ALLOWED_NAMES = [
   "100 young seedlings",
 ];
 
-
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -93,6 +103,17 @@ function normalize(value: string | null | undefined) {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+function getProfileFirstName(profile: Profile | null) {
+  const raw = String(profile?.full_name || profile?.email || "My").trim();
+  const first = raw.split(" ")[0]?.split("@")[0]?.trim();
+
+  return first || "My";
+}
+
+function getForestName(group: TreeGroup | null | undefined) {
+  return group?.forest_name || group?.group_name || "Unnamed Forest";
 }
 
 function isTreeAllowed(product: MarketplaceProduct) {
@@ -108,7 +129,7 @@ function isPackageAllowed(product: MarketplaceProduct) {
   const type = String(product.product_type || "").trim().toUpperCase();
   const name = normalize(product.name);
 
-  if (type !== "PACKAGE") return false;
+  if (type !== "PACKAGE" && type !== "TREE_PACKAGE") return false;
 
   return PACKAGE_ALLOWED_NAMES.includes(name);
 }
@@ -180,20 +201,31 @@ function normalizeSupplyCategory(category: string | null | undefined): SupplyCat
 }
 
 function getProductType(product: MarketplaceProduct): ProductType {
-  const type = String(product.product_type || "").toUpperCase();
+  const type = String(product.product_type || "").trim().toUpperCase();
 
-  if (type === "PACKAGE") return "PACKAGE";
-  if (type === "SUPPLY") return "SUPPLY";
+  if (type === "TREE") return "TREE";
+  if (type === "PACKAGE" || type === "TREE_PACKAGE") return "PACKAGE";
+  if (type === "CARE_PACKAGE" || type === "SUPPLY") return "SUPPLY";
+
+  if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "SUPPLY";
+
   return "TREE";
+}
+
+function isTreePurchaseProduct(product: MarketplaceProduct) {
+  const productType = getProductType(product);
+  const category = normalizeSupplyCategory(product.category);
+
+  return category !== "Tree Care Programs" && (productType === "TREE" || productType === "PACKAGE");
 }
 
 function getProductIcon(product: MarketplaceProduct) {
   const type = getProductType(product);
 
   if (product.icon) return product.icon;
+  if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "🌿";
   if (type === "TREE") return "🌳";
   if (type === "PACKAGE") return "📦";
-  if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "🌿";
   return "🌱";
 }
 
@@ -202,9 +234,19 @@ function getPrimaryActionLabel(product: MarketplaceProduct) {
   const type = getProductType(product);
 
   if (category === "Tree Care Programs") return "View Program";
-  if (type === "TREE") return "View Tree";
-  if (type === "PACKAGE") return "View Package";
+  if (type === "TREE") return "Choose Forest";
+  if (type === "PACKAGE") return "Choose Forest";
   return "View Supply";
+}
+
+function getCardBuyLabel(product: MarketplaceProduct) {
+  const category = normalizeSupplyCategory(product.category);
+  const type = getProductType(product);
+
+  if (category === "Tree Care Programs") return "View Program";
+  if (type === "TREE") return `Buy Tree • ${peso(Number(product.price || 0))}`;
+  if (type === "PACKAGE") return `Buy Package • ${peso(Number(product.price || 0))}`;
+  return `Buy Now • ${peso(Number(product.price || 0))}`;
 }
 
 function getProgramDuration(product: MarketplaceProduct) {
@@ -344,10 +386,7 @@ function inventoryNameMatchesRequirement(item: InventoryItem, requirement: strin
   }
 
   if (target === "premium nutrients") {
-    return (
-      itemName.includes("premium") &&
-      (itemName.includes("nutrient") || itemName.includes("booster"))
-    );
+    return itemName.includes("premium") && (itemName.includes("nutrient") || itemName.includes("booster"));
   }
 
   if (target === "advanced pest control") {
@@ -389,7 +428,6 @@ function checkProgramInventory(product: MarketplaceProduct, inventoryItems: Inve
   };
 }
 
-
 function getPurchaseQuantity(product: MarketplaceProduct) {
   const name = normalize(product.name);
   const found = name.match(/^(\d+)/);
@@ -397,22 +435,6 @@ function getPurchaseQuantity(product: MarketplaceProduct) {
   if (found) return Number(found[1] || 1);
 
   return 1;
-}
-
-function getTreeStageFromProduct(product: MarketplaceProduct) {
-  const name = normalize(product.name);
-
-  if (name.includes("young seedling")) return "Young Seedling";
-  if (name.includes("seedling")) return "Seedling";
-  return "Seed";
-}
-
-function getTreeLabelFromProduct(product: MarketplaceProduct) {
-  const name = normalize(product.name);
-
-  if (name.includes("young seedling")) return "Young Seedling";
-  if (name.includes("seedling")) return "Agarwood Seedling";
-  return "Agarwood Seed";
 }
 
 function getStarterStockQty(product: MarketplaceProduct) {
@@ -423,40 +445,6 @@ function getStarterStockQty(product: MarketplaceProduct) {
   if (quantity >= 10) return 2;
 
   return 1;
-}
-
-function makeTreeCode() {
-  const stamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).slice(2, 7).toUpperCase();
-
-  return `AGW-${stamp}-${random}`;
-}
-
-function buildTreeRows(profileId: string, product: MarketplaceProduct, count: number) {
-  const stage = getTreeStageFromProduct(product);
-  const label = getTreeLabelFromProduct(product);
-
-  return Array.from({ length: count }).map(() => ({
-    profile_id: profileId,
-    tree_code: makeTreeCode(),
-    tree_type: label,
-    stage,
-    growth_stage: stage,
-    current_stage: stage,
-    status: "ACTIVE",
-    source: "MARKETPLACE",
-    purchase_price: Number(product.price || 0) / Math.max(count, 1),
-    marketplace_product_id: product.id,
-  }));
-}
-
-function buildMinimalTreeRows(profileId: string, product: MarketplaceProduct, count: number) {
-  const label = getTreeLabelFromProduct(product);
-
-  return Array.from({ length: count }).map(() => ({
-    profile_id: profileId,
-    tree_code: makeTreeCode(),
-  }));
 }
 
 function getInventoryUnit(product: MarketplaceProduct) {
@@ -506,9 +494,9 @@ export default function MarketplacePage() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [products, setProducts] = useState<MarketplaceProduct[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [treeGroups, setTreeGroups] = useState<TreeGroup[]>([]);
   const [activeTab, setActiveTab] = useState<ProductType>("TREE");
-  const [activeSupplyCategory, setActiveSupplyCategory] =
-    useState<SupplyCategory>("All Supplies");
+  const [activeSupplyCategory, setActiveSupplyCategory] = useState<SupplyCategory>("All Supplies");
   const [selectedProduct, setSelectedProduct] = useState<MarketplaceProduct | null>(null);
   const [selectedProgramAction, setSelectedProgramAction] = useState<"BUY_ONCE" | "SUBSCRIBE" | null>(null);
   const [inventoryCheckResult, setInventoryCheckResult] = useState<{
@@ -516,9 +504,14 @@ export default function MarketplacePage() {
     missingSupplies: string[];
     requirements: string[];
   } | null>(null);
+  const [forestMode, setForestMode] = useState<ForestMode>("NEW");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [newForestName, setNewForestName] = useState("");
+  const [treeQuantity, setTreeQuantity] = useState(1);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [purchaseProcessing, setPurchaseProcessing] = useState(false);
+  const [platformFeePercent, setPlatformFeePercent] = useState(3);
 
   async function loadMarketplace() {
     setLoading(true);
@@ -583,9 +576,49 @@ export default function MarketplacePage() {
       .select("id, profile_id, item_name, category, unit, remaining_qty, status")
       .eq("profile_id", currentProfile.id);
 
+    const { data: groupRows } = await supabase
+      .from("tree_groups")
+      .select("id, customer_profile_id, forest_name, group_name, status, created_at")
+      .eq("customer_profile_id", currentProfile.id)
+      .order("created_at", { ascending: true });
+
+    const { data: platformSettingsRow, error: platformSettingsError } = await supabase
+      .from("platform_settings")
+      .select("platform_fee_percent")
+      .limit(1)
+      .maybeSingle();
+
+    const loadedPlatformFeePercent = Number(
+      (platformSettingsRow as { platform_fee_percent?: number | string | null } | null)
+        ?.platform_fee_percent
+    );
+
+    setPlatformFeePercent(
+      Number.isFinite(loadedPlatformFeePercent) && loadedPlatformFeePercent >= 0
+        ? loadedPlatformFeePercent
+        : 3
+    );
+
+    if (platformSettingsError) {
+      console.warn("Platform fee settings unavailable. Using fallback 3%.", platformSettingsError.message);
+    }
+
+    const currentGroups = (groupRows || []) as TreeGroup[];
+
     setWallet((walletRows?.[0] as Wallet) || null);
     setProducts((productRows || []) as MarketplaceProduct[]);
     setInventoryItems((inventoryRows || []) as InventoryItem[]);
+    setTreeGroups(currentGroups);
+
+    if (currentGroups.length > 0) {
+      setForestMode("EXISTING");
+      setSelectedGroupId((previous) => previous || currentGroups[0].id);
+    } else {
+      setForestMode("NEW");
+      setSelectedGroupId("");
+    }
+
+    setNewForestName((previous) => previous || `${getProfileFirstName(currentProfile)} Forest`);
     setLoading(false);
   }
 
@@ -638,12 +671,36 @@ export default function MarketplacePage() {
     setSelectedProduct(product);
     setSelectedProgramAction(null);
     setInventoryCheckResult(null);
+
+    if (isTreePurchaseProduct(product)) {
+      setTreeQuantity(1);
+
+      if (treeGroups.length > 0) {
+        setForestMode("EXISTING");
+        setSelectedGroupId((previous) => previous || treeGroups[0].id);
+      } else {
+        setForestMode("NEW");
+        setSelectedGroupId("");
+      }
+
+      if (!newForestName.trim()) {
+        setNewForestName(`${getProfileFirstName(profile)} Forest`);
+      }
+    }
   }
 
-  function handleProgramAction(
-    product: MarketplaceProduct,
-    action: "BUY_ONCE" | "SUBSCRIBE"
-  ) {
+  function handleCardBuy(product: MarketplaceProduct) {
+    const category = normalizeSupplyCategory(product.category);
+
+    if (category === "Tree Care Programs" || isTreePurchaseProduct(product)) {
+      openProductDetails(product);
+      return;
+    }
+
+    purchaseProduct(product);
+  }
+
+  function handleProgramAction(product: MarketplaceProduct, action: "BUY_ONCE" | "SUBSCRIBE") {
     const result = checkProgramInventory(product, inventoryItems);
 
     setSelectedProduct(product);
@@ -657,6 +714,56 @@ export default function MarketplacePage() {
     setInventoryCheckResult(null);
   }
 
+  function getSelectedTreeQuantity(product: MarketplaceProduct) {
+    if (getProductType(product) === "PACKAGE") return getPurchaseQuantity(product);
+
+    const safeQuantity = Math.max(1, Math.floor(Number(treeQuantity || 1)));
+
+    return safeQuantity;
+  }
+
+  function getSelectedPurchaseSubtotal(product: MarketplaceProduct) {
+    const price = Number(product.price || 0);
+
+    if (!isTreePurchaseProduct(product)) return price;
+
+    if (getProductType(product) === "PACKAGE") return price;
+
+    return price * getSelectedTreeQuantity(product);
+  }
+
+  function getSelectedPlatformFeeAmount(product: MarketplaceProduct) {
+    if (!isTreePurchaseProduct(product)) return 0;
+
+    const subtotal = getSelectedPurchaseSubtotal(product);
+    const safePercent = Number.isFinite(Number(platformFeePercent))
+      ? Math.max(Number(platformFeePercent), 0)
+      : 3;
+
+    return Math.round(((subtotal * safePercent) / 100) * 100) / 100;
+  }
+
+  function getSelectedPurchaseTotal(product: MarketplaceProduct) {
+    return getSelectedPurchaseSubtotal(product) + getSelectedPlatformFeeAmount(product);
+  }
+
+  function getSelectedUnitPrice(product: MarketplaceProduct) {
+    const price = Number(product.price || 0);
+
+    if (getProductType(product) === "PACKAGE") {
+      return price / Math.max(getPurchaseQuantity(product), 1);
+    }
+
+    return price;
+  }
+
+  function getSelectedForestLabel() {
+    if (forestMode === "NEW") return newForestName.trim() || "New Forest";
+
+    const group = treeGroups.find((item) => item.id === selectedGroupId);
+
+    return getForestName(group);
+  }
 
   async function deductWallet(amount: number) {
     if (!wallet) throw new Error("Wallet not found.");
@@ -800,18 +907,47 @@ export default function MarketplacePage() {
     }
   }
 
-  async function addTreesFromProduct(product: MarketplaceProduct, quantity: number) {
+  async function buyTreesWithForest(product: MarketplaceProduct) {
     if (!profile) throw new Error("Profile not found.");
 
-    const fullRows = buildTreeRows(profile.id, product, quantity);
-    const { error } = await supabase.from("trees").insert(fullRows);
+    const quantity = getSelectedTreeQuantity(product);
+    const unitPrice = getSelectedUnitPrice(product);
+    const referenceNo = `TREEBUY-${Date.now()}`;
+    const forestName = forestMode === "NEW" ? newForestName.trim() : "";
+
+    if (quantity <= 0) throw new Error("Invalid tree quantity.");
+
+    if (forestMode === "NEW" && !forestName) {
+      throw new Error("Please enter a forest name.");
+    }
+
+    if (forestMode === "EXISTING" && !selectedGroupId) {
+      throw new Error("Please select an existing forest or create a new forest.");
+    }
+
+    const { data, error } = await supabase.rpc("arganwood_buy_trees", {
+      p_customer_profile_id: profile.id,
+      p_quantity: quantity,
+      p_purchase_price_each: unitPrice,
+      p_forest_name: forestName || "My Forest",
+      p_existing_group_id: forestMode === "EXISTING" ? selectedGroupId : null,
+      p_platform_fee_amount: getSelectedPlatformFeeAmount(product),
+      p_reference_no: referenceNo,
+    });
 
     if (error) {
-      const minimalRows = buildMinimalTreeRows(profile.id, product, quantity);
-      const { error: fallbackError } = await supabase.from("trees").insert(minimalRows);
-
-      if (fallbackError) throw fallbackError;
+      throw new Error(`Tree purchase failed: ${error.message}`);
     }
+
+    if (getProductType(product) === "PACKAGE") {
+      try {
+        await addStarterStock(product);
+      } catch (starterError: any) {
+        console.warn("Starter stock insert skipped:", starterError?.message || starterError);
+      }
+    }
+
+    return data;
   }
 
   async function purchaseProduct(product: MarketplaceProduct) {
@@ -822,38 +958,38 @@ export default function MarketplacePage() {
     if (purchaseProcessing) return;
 
     const productType = getProductType(product);
-
+    const category = normalizeSupplyCategory(product.category);
     const price = Number(product.price || 0);
+    const totalPrice = getSelectedPurchaseTotal(product);
     const currentBalance = Number(wallet.balance || 0);
 
+    if (category === "Tree Care Programs") {
+      return setMessage("Care Program activation belongs to Tree Operations so Admin and Gardener sync stay complete.");
+    }
+
     if (price <= 0) return setMessage("Invalid product price.");
-    if (currentBalance < price) return setMessage("Insufficient wallet balance.");
+    if (totalPrice <= 0) return setMessage("Invalid purchase amount.");
+    if (currentBalance < totalPrice) return setMessage("Insufficient wallet balance.");
 
     setPurchaseProcessing(true);
 
     let previousBalance: number | null = null;
 
     try {
-      previousBalance = await deductWallet(price);
+      if (isTreePurchaseProduct(product)) {
+        await buyTreesWithForest(product);
+        setMessage(
+          `${product.name || "Tree"} purchased. ${getSelectedTreeQuantity(product)} tree(s) added to ${getSelectedForestLabel()}, wallet deducted, wallet transaction recorded, and platform fee ${peso(getSelectedPlatformFeeAmount(product))} posted.`
+        );
+      }
 
-      if (productType === "SUPPLY") {
+      if (productType === "SUPPLY" && category !== "Tree Care Programs") {
+        previousBalance = await deductWallet(totalPrice);
         await addInventoryStock(product, 1);
-        await createMarketplaceWalletTransaction(product, price, "SUPPLY");
-        setMessage(`${product.name || "Supply"} purchased. Wallet deducted, transaction recorded, and inventory stock added.`);
-      }
-
-      if (productType === "TREE") {
-        await addTreesFromProduct(product, 1);
-        await createMarketplaceWalletTransaction(product, price, "TREE");
-        setMessage(`${product.name || "Tree"} purchased. Wallet deducted, transaction recorded, and tree added.`);
-      }
-
-      if (productType === "PACKAGE") {
-        const quantity = getPurchaseQuantity(product);
-        await addTreesFromProduct(product, quantity);
-        await addStarterStock(product);
-        await createMarketplaceWalletTransaction(product, price, "TREE_PACKAGE");
-        setMessage(`${product.name || "Tree Package"} purchased. Wallet deducted, transaction recorded, ${quantity} trees added, and starter stock added to inventory.`);
+        await createMarketplaceWalletTransaction(product, totalPrice, "SUPPLY");
+        setMessage(
+          `${product.name || "Supply"} purchased. Wallet deducted, transaction recorded, and inventory stock added.`
+        );
       }
 
       closeModal();
@@ -869,9 +1005,14 @@ export default function MarketplacePage() {
     }
   }
 
-  const selectedCategory = selectedProduct
-    ? normalizeSupplyCategory(selectedProduct.category)
-    : "All Supplies";
+  const selectedCategory = selectedProduct ? normalizeSupplyCategory(selectedProduct.category) : "All Supplies";
+  const selectedProductType = selectedProduct ? getProductType(selectedProduct) : "TREE";
+  const selectedIsTreePurchase = selectedProduct ? isTreePurchaseProduct(selectedProduct) : false;
+  const selectedQuantity = selectedProduct ? getSelectedTreeQuantity(selectedProduct) : 1;
+  const selectedSubtotal = selectedProduct ? getSelectedPurchaseSubtotal(selectedProduct) : 0;
+  const selectedPlatformFee = selectedProduct ? getSelectedPlatformFeeAmount(selectedProduct) : 0;
+  const selectedTotal = selectedProduct ? getSelectedPurchaseTotal(selectedProduct) : 0;
+  const selectedUnitPrice = selectedProduct ? getSelectedUnitPrice(selectedProduct) : 0;
 
   return (
     <main className="page">
@@ -881,11 +1022,11 @@ export default function MarketplacePage() {
             ← Back to Dashboard
           </Link>
 
-          <p className="eyebrow">Agarwood Marketplace V5</p>
-          <h1>Buy Trees, Tree Packages, Care Packages & Supplies</h1>
+          <p className="eyebrow">Arganwood Marketplace V6</p>
+          <h1>Buy Trees, Forest Packages, Care Packages & Supplies</h1>
           <span>
-            Choose Arganwood planting products, tree bundles, care packages, and care supplies.
-            Marketplace purchases now deduct wallet, record wallet_transactions, and sync inventory or trees.
+            Choose a forest before buying trees. Purchases create friendly Seedling names, deduct wallet, record
+            wallet_transactions, and prepare Admin/Gardener sync through the V6 forest system.
           </span>
         </div>
 
@@ -899,10 +1040,7 @@ export default function MarketplacePage() {
       {message && <div className="message">{message}</div>}
 
       <section className="tabs">
-        <button
-          className={activeTab === "TREE" ? "active" : ""}
-          onClick={() => setActiveTab("TREE")}
-        >
+        <button className={activeTab === "TREE" ? "active" : ""} onClick={() => setActiveTab("TREE")}>
           <span className="tabIcon">🌳</span>
           <span>
             Buy Trees
@@ -932,10 +1070,7 @@ export default function MarketplacePage() {
           </span>
         </button>
 
-        <button
-          className={activeTab === "SUPPLY" ? "active" : ""}
-          onClick={() => setActiveTab("SUPPLY")}
-        >
+        <button className={activeTab === "SUPPLY" ? "active" : ""} onClick={() => setActiveTab("SUPPLY")}>
           <span className="tabIcon">🌱</span>
           <span>
             Buy Supplies
@@ -995,9 +1130,9 @@ export default function MarketplacePage() {
               </div>
 
               <div className="modeNote">
-                {activeTab === "TREE" && "Only Seed, Seedling, and Young Seedling."}
-                {activeTab === "TREE_PACKAGE" && "Bulk tree quantities are separated here."}
-                {activeTab === "CARE_PACKAGE" && "Care packages are separated from tree packages."}
+                {activeTab === "TREE" && "Pick quantity and forest before purchase."}
+                {activeTab === "TREE_PACKAGE" && "Bulk trees auto-name as Seedling 1, 2, 3..."}
+                {activeTab === "CARE_PACKAGE" && "Activation stays in Tree Operations."}
                 {activeTab === "SUPPLY" && "Supplies are grouped by sidebar category."}
               </div>
             </div>
@@ -1010,15 +1145,13 @@ export default function MarketplacePage() {
                   const type = getProductType(product);
                   const category = normalizeSupplyCategory(product.category);
                   const isProgram = category === "Tree Care Programs";
+                  const treePurchase = isTreePurchaseProduct(product);
 
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
                       <div className="imageBox">
                         {product.image_url ? (
-                          <img
-                            src={product.image_url}
-                            alt={product.name || "Marketplace product"}
-                          />
+                          <img src={product.image_url} alt={product.name || "Marketplace product"} />
                         ) : (
                           <div className="icon">{getProductIcon(product)}</div>
                         )}
@@ -1026,7 +1159,7 @@ export default function MarketplacePage() {
                       </div>
 
                       <div className="cardHead">
-                        <small>{type}</small>
+                        <small>{isProgram ? "CARE PACKAGE" : type}</small>
                         <small>{product.unit || (isProgram ? "Program" : "Unit")}</small>
                       </div>
 
@@ -1039,37 +1172,31 @@ export default function MarketplacePage() {
                         <small>{product.category || type}</small>
                       </div>
 
+                      {treePurchase && (
+                        <div className="forestHint">
+                          <b>Forest Required</b>
+                          <span>Create new forest or add to existing forest before checkout.</span>
+                        </div>
+                      )}
+
                       {isProgram && (
                         <div className="programActions">
-                          <button
-                            type="button"
-                            onClick={() => handleProgramAction(product, "BUY_ONCE")}
-                          >
+                          <button type="button" onClick={() => handleProgramAction(product, "BUY_ONCE")}>
                             Buy Once
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleProgramAction(product, "SUBSCRIBE")}
-                          >
+                          <button type="button" onClick={() => handleProgramAction(product, "SUBSCRIBE")}>
                             {getProgramSubscribeLabel(product)}
                           </button>
                         </div>
                       )}
 
                       {!isProgram && (
-                        <button
-                          className="buyBtn"
-                          disabled={purchaseProcessing}
-                          onClick={() => purchaseProduct(product)}
-                        >
-                          {purchaseProcessing ? "Processing..." : `Buy Now • ${peso(Number(product.price || 0))}`}
+                        <button className="buyBtn" disabled={purchaseProcessing} onClick={() => handleCardBuy(product)}>
+                          {purchaseProcessing ? "Processing..." : getCardBuyLabel(product)}
                         </button>
                       )}
 
-                      <button
-                        className="viewBtn"
-                        onClick={() => openProductDetails(product)}
-                      >
+                      <button className="viewBtn" onClick={() => openProductDetails(product)}>
                         {getPrimaryActionLabel(product)}
                       </button>
                     </article>
@@ -1090,10 +1217,7 @@ export default function MarketplacePage() {
 
             <div className="modalIcon">
               {selectedProduct.image_url ? (
-                <img
-                  src={selectedProduct.image_url}
-                  alt={selectedProduct.name || "Marketplace product"}
-                />
+                <img src={selectedProduct.image_url} alt={selectedProduct.name || "Marketplace product"} />
               ) : (
                 getProductIcon(selectedProduct)
               )}
@@ -1111,7 +1235,7 @@ export default function MarketplacePage() {
             <div className="detailGrid">
               <div>
                 <small>Type</small>
-                <b>{getProductType(selectedProduct)}</b>
+                <b>{selectedCategory === "Tree Care Programs" ? "CARE PACKAGE" : selectedProductType}</b>
               </div>
               <div>
                 <small>Category</small>
@@ -1127,26 +1251,122 @@ export default function MarketplacePage() {
               </div>
             </div>
 
+            {selectedIsTreePurchase && (
+              <div className="forestPurchaseBox">
+                <div className="forestPurchaseHead">
+                  <div>
+                    <small>V6 Forest Checkout</small>
+                    <b>Choose where these trees will live</b>
+                  </div>
+                  <span>{selectedQuantity} tree(s)</span>
+                </div>
+
+                {selectedProductType === "TREE" && (
+                  <label className="fieldLabel">
+                    Quantity
+                    <input
+                      type="number"
+                      min={1}
+                      max={251}
+                      value={treeQuantity}
+                      onChange={(event) => setTreeQuantity(Math.max(1, Math.floor(Number(event.target.value || 1))))}
+                    />
+                  </label>
+                )}
+
+                {selectedProductType === "PACKAGE" && (
+                  <div className="packageQuantityBox">
+                    <small>Package Quantity</small>
+                    <b>{selectedQuantity} tree(s)</b>
+                    <p>These will be created as friendly names like Seedling 1, Seedling 2, Seedling 3.</p>
+                  </div>
+                )}
+
+                <div className="forestModeGrid">
+                  <button
+                    type="button"
+                    className={forestMode === "NEW" ? "active" : ""}
+                    onClick={() => setForestMode("NEW")}
+                  >
+                    <strong>Create New Forest</strong>
+                    <span>Best for first purchase</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={forestMode === "EXISTING" ? "active" : ""}
+                    onClick={() => {
+                      setForestMode("EXISTING");
+                      setSelectedGroupId((previous) => previous || treeGroups[0]?.id || "");
+                    }}
+                    disabled={treeGroups.length === 0}
+                  >
+                    <strong>Add to Existing Forest</strong>
+                    <span>{treeGroups.length} forest(s) available</span>
+                  </button>
+                </div>
+
+                {forestMode === "NEW" && (
+                  <label className="fieldLabel">
+                    New Forest Name
+                    <input
+                      type="text"
+                      value={newForestName}
+                      onChange={(event) => setNewForestName(event.target.value)}
+                      placeholder="Example: Robert Forest"
+                    />
+                  </label>
+                )}
+
+                {forestMode === "EXISTING" && (
+                  <label className="fieldLabel">
+                    Existing Forest
+                    <select value={selectedGroupId} onChange={(event) => setSelectedGroupId(event.target.value)}>
+                      <option value="">Select forest</option>
+                      {treeGroups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {getForestName(group)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <div className="checkoutSummary">
+                  <div>
+                    <small>Forest</small>
+                    <b>{getSelectedForestLabel()}</b>
+                  </div>
+                  <div>
+                    <small>Tree Name Style</small>
+                    <b>Seedling 1, Seedling 2...</b>
+                  </div>
+                  <div>
+                    <small>Unit Price</small>
+                    <b>{peso(selectedUnitPrice)}</b>
+                  </div>
+                  <div>
+                    <small>Subtotal</small>
+                    <b>{peso(selectedSubtotal)}</b>
+                  </div>
+                  <div>
+                    <small>Platform Fee ({platformFeePercent}%)</small>
+                    <b>{peso(selectedPlatformFee)}</b>
+                  </div>
+                  <div>
+                    <small>Total Charged</small>
+                    <b>{peso(selectedTotal)}</b>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {selectedCategory === "Tree Care Programs" && (
               <>
                 {selectedProgramAction && inventoryCheckResult && (
-                  <div
-                    className={
-                      inventoryCheckResult.allowed
-                        ? "selectedActionBox allowedBox"
-                        : "selectedActionBox blockedBox"
-                    }
-                  >
-                    <small>
-                      {inventoryCheckResult.allowed
-                        ? "Inventory Check Passed"
-                        : "Inventory Check Blocked"}
-                    </small>
-                    <b>
-                      {selectedProgramAction === "BUY_ONCE"
-                        ? "Buy Once"
-                        : getProgramSubscribeLabel(selectedProduct)}
-                    </b>
+                  <div className={inventoryCheckResult.allowed ? "selectedActionBox allowedBox" : "selectedActionBox blockedBox"}>
+                    <small>{inventoryCheckResult.allowed ? "Inventory Check Passed" : "Inventory Check Blocked"}</small>
+                    <b>{selectedProgramAction === "BUY_ONCE" ? "Buy Once" : getProgramSubscribeLabel(selectedProduct)}</b>
                     <p>
                       {inventoryCheckResult.allowed
                         ? "Required supplies are available. This is validation display only. Activate care programs from Tree Operations."
@@ -1210,7 +1430,7 @@ export default function MarketplacePage() {
                     <b>Program Duration</b>
                     <strong>{getProgramDuration(selectedProduct)}</strong>
                     <p>
-                      Buy Once and Subscribe are validation previews here. Actual care program activation belongs to Tree Operations.
+                      Care program purchase is not completed in Marketplace because every care action must sync to Admin and Gardener.
                     </p>
                   </section>
                 </div>
@@ -1218,20 +1438,15 @@ export default function MarketplacePage() {
                 <div className="careBox">
                   <b>Care Program Actions</b>
                   <p>
-                    These buttons are still for care program inventory validation only. Care program activation stays in Tree Operations Step 6B. No marketplace billing, subscription table, auto-renew processing, cron job, or background job runs here.
+                    These buttons are for inventory validation only. Actual care activation belongs to Tree Operations so
+                    Customer → Admin → Gardener → Admin → Customer sync stays complete.
                   </p>
 
                   <div className="careButtons">
-                    <button
-                      type="button"
-                      onClick={() => handleProgramAction(selectedProduct, "BUY_ONCE")}
-                    >
+                    <button type="button" onClick={() => handleProgramAction(selectedProduct, "BUY_ONCE")}>
                       Buy Once
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleProgramAction(selectedProduct, "SUBSCRIBE")}
-                    >
+                    <button type="button" onClick={() => handleProgramAction(selectedProduct, "SUBSCRIBE")}>
                       {getProgramSubscribeLabel(selectedProduct)}
                     </button>
                   </div>
@@ -1241,7 +1456,7 @@ export default function MarketplacePage() {
 
             {selectedCategory === "Tree Care Programs" ? (
               <button className="disabledBuy" disabled>
-                Care Program activation belongs to Tree Operations Step 6B
+                Activate Care from Tree Operations
               </button>
             ) : (
               <button
@@ -1249,9 +1464,7 @@ export default function MarketplacePage() {
                 disabled={purchaseProcessing}
                 onClick={() => purchaseProduct(selectedProduct)}
               >
-                {purchaseProcessing
-                  ? "Processing Purchase..."
-                  : `Buy Now • ${peso(Number(selectedProduct.price || 0))}`}
+                {purchaseProcessing ? "Processing Purchase..." : `Confirm Purchase • ${peso(selectedTotal)}`}
               </button>
             )}
           </div>
@@ -1613,6 +1826,28 @@ export default function MarketplacePage() {
           font-size: 24px;
         }
 
+        .forestHint {
+          border-radius: 16px;
+          padding: 12px;
+          margin: 0 0 12px;
+          background: rgba(36,69,54,.08);
+          border: 1px solid rgba(36,69,54,.10);
+        }
+
+        .forestHint b {
+          display: block;
+          color: #10281f;
+          font-size: 13px;
+          margin-bottom: 3px;
+        }
+
+        .forestHint span {
+          color: #667064;
+          font-size: 12px;
+          line-height: 1.35;
+          font-weight: 800;
+        }
+
         .programActions {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -1679,7 +1914,7 @@ export default function MarketplacePage() {
 
         .modal {
           position: relative;
-          width: min(680px, 100%);
+          width: min(760px, 100%);
           max-height: 92vh;
           overflow: auto;
           border-radius: 32px;
@@ -1757,7 +1992,10 @@ export default function MarketplacePage() {
           background: #f3ead8;
         }
 
-        .detailGrid small {
+        .detailGrid small,
+        .checkoutSummary small,
+        .packageQuantityBox small,
+        .forestPurchaseHead small {
           display: block;
           color: #8c6a3c;
           font-size: 11px;
@@ -1768,6 +2006,144 @@ export default function MarketplacePage() {
         }
 
         .detailGrid b {
+          color: #10281f;
+        }
+
+        .forestPurchaseBox {
+          border-radius: 26px;
+          padding: 18px;
+          margin: 18px 0;
+          background:
+            radial-gradient(circle at 92% 8%, rgba(255, 222, 139, .32), transparent 28%),
+            rgba(36,69,54,.08);
+          border: 1px solid rgba(36,69,54,.12);
+        }
+
+        .forestPurchaseHead {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: flex-start;
+          margin-bottom: 14px;
+        }
+
+        .forestPurchaseHead b {
+          display: block;
+          color: #10281f;
+          font-size: 20px;
+        }
+
+        .forestPurchaseHead span {
+          border-radius: 999px;
+          padding: 8px 12px;
+          background: #244536;
+          color: white;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .fieldLabel {
+          display: grid;
+          gap: 8px;
+          color: #10281f;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+          margin: 12px 0;
+        }
+
+        .fieldLabel input,
+        .fieldLabel select {
+          width: 100%;
+          border: 1px solid rgba(36,69,54,.16);
+          border-radius: 16px;
+          padding: 14px;
+          background: rgba(255,253,246,.92);
+          color: #10281f;
+          outline: none;
+          font-size: 15px;
+          font-weight: 900;
+          text-transform: none;
+          letter-spacing: 0;
+        }
+
+        .packageQuantityBox {
+          border-radius: 18px;
+          padding: 14px;
+          margin-bottom: 12px;
+          background: rgba(255,253,246,.70);
+          border: 1px solid rgba(36,69,54,.10);
+        }
+
+        .packageQuantityBox b {
+          display: block;
+          color: #10281f;
+          font-size: 22px;
+        }
+
+        .packageQuantityBox p {
+          margin: 6px 0 0;
+          min-height: 0;
+          color: #667064;
+          font-weight: 800;
+        }
+
+        .forestModeGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin: 12px 0;
+        }
+
+        .forestModeGrid button {
+          border: 1px solid rgba(36,69,54,.12);
+          border-radius: 18px;
+          padding: 14px;
+          background: rgba(255,253,246,.72);
+          color: #244536;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .forestModeGrid button.active {
+          background: #244536;
+          color: white;
+          border-color: #244536;
+        }
+
+        .forestModeGrid button:disabled {
+          opacity: .45;
+          cursor: not-allowed;
+        }
+
+        .forestModeGrid strong {
+          display: block;
+          font-size: 14px;
+          margin-bottom: 4px;
+        }
+
+        .forestModeGrid span {
+          font-size: 12px;
+          font-weight: 800;
+          opacity: .78;
+        }
+
+        .checkoutSummary {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          margin-top: 14px;
+        }
+
+        .checkoutSummary div {
+          border-radius: 18px;
+          padding: 14px;
+          background: rgba(255,253,246,.76);
+          border: 1px solid rgba(36,69,54,.10);
+        }
+
+        .checkoutSummary b {
           color: #10281f;
         }
 
@@ -1964,7 +2340,9 @@ export default function MarketplacePage() {
           .detailGrid,
           .programModalGrid,
           .careButtons,
-          .programActions {
+          .programActions,
+          .forestModeGrid,
+          .checkoutSummary {
             display: grid;
             grid-template-columns: 1fr;
           }
@@ -1981,7 +2359,8 @@ export default function MarketplacePage() {
             position: static;
           }
 
-          .sectionHead {
+          .sectionHead,
+          .forestPurchaseHead {
             align-items: start;
           }
         }
