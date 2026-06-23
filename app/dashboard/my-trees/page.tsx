@@ -1,1230 +1,1654 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "@/lib/supabase";
 
-type TreeRow = Record<string, any>;
-type UpdateRow = Record<string, any>;
+type AlertStatus = "PROTECTED" | "ATTENTION" | "CRITICAL" | string;
 
-type PanelType = "NONE" | "PHOTOS" | "GPS" | "HEALTH" | "QR" | "RENAME";
+type Profile = {
+  id: string;
+  full_name: string | null;
+  display_name?: string | null;
+  email: string | null;
+};
 
-const STAGES = ["Seedling", "Sapling", "Young Tree", "Mature Tree", "Harvest Ready"];
+type ForestSummary = {
+  group_id: string;
+  customer_profile_id: string | null;
+  forest_name: string | null;
+  total_trees: number | null;
+  protected_count: number | null;
+  attention_count: number | null;
+  critical_count: number | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type TreeDetail = {
+  tree_id: string;
+  customer_profile_id: string | null;
+  group_id: string | null;
+  forest_name: string | null;
+  customer_tree_name: string | null;
+  custom_name: string | null;
+  display_name: string | null;
+  tree_code: string | null;
+  tree_qr_url: string | null;
+  purchase_price: number | null;
+  care_status: string | null;
+  care_started_at: string | null;
+  care_expires_at: string | null;
+  alert_status: AlertStatus | null;
+  alert_reason: string | null;
+  valuation_status: string | null;
+  official_valuation_amount: number | null;
+  latest_photo_at: string | null;
+  latest_photo_url: string | null;
+  latest_image_url: string | null;
+  latest_gps_at: string | null;
+  latest_latitude: number | null;
+  latest_longitude: number | null;
+  latest_map_url: string | null;
+  latest_gps_url: string | null;
+  latest_health_at: string | null;
+  latest_health_status: string | null;
+  latest_issue_severity: string | null;
+  latest_issue_summary: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type PhotoEvidence = {
+  id: string;
+  photo_url: string | null;
+  image_url: string | null;
+  caption: string | null;
+  notes: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type GpsEvidence = {
+  id: string;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy_meters: number | null;
+  gps_url: string | null;
+  map_url: string | null;
+  location_note: string | null;
+  notes: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type HealthEvidence = {
+  id: string;
+  health_status: string | null;
+  issue_severity: string | null;
+  issue_summary: string | null;
+  report_notes: string | null;
+  notes: string | null;
+  status: string | null;
+  created_at: string | null;
+};
+
+type EvidenceMode = "PHOTOS" | "GPS" | "HEALTH";
+
+function peso(value: number | null | undefined) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "No update yet";
+
+  try {
+    return new Intl.DateTimeFormat("en-PH", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return "No update yet";
+  }
+}
+
+function formatShortDate(value: string | null | undefined) {
+  if (!value) return "No update yet";
+
+  try {
+    return new Intl.DateTimeFormat("en-PH", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return "No update yet";
+  }
+}
+
+function normalizeStatus(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .toUpperCase();
+}
+
+function customerTreeName(tree: TreeDetail | null | undefined) {
+  return tree?.custom_name || tree?.customer_tree_name || tree?.display_name || "Seedling";
+}
+
+function forestName(forest: ForestSummary | null | undefined) {
+  return forest?.forest_name || "Unnamed Forest";
+}
+
+function treeForestName(tree: TreeDetail | null | undefined) {
+  return tree?.forest_name || "Unnamed Forest";
+}
+
+function alertLabel(status: AlertStatus | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "Protected";
+  if (normalized === "ATTENTION") return "Attention";
+  if (normalized === "CRITICAL") return "Critical";
+
+  return "Attention";
+}
+
+function alertIcon(status: AlertStatus | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "🟢";
+  if (normalized === "ATTENTION") return "🟡";
+  if (normalized === "CRITICAL") return "🔴";
+
+  return "🟡";
+}
+
+function alertClass(status: AlertStatus | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "PROTECTED") return "protected";
+  if (normalized === "ATTENTION") return "attention";
+  if (normalized === "CRITICAL") return "critical";
+
+  return "attention";
+}
+
+function careLabel(status: string | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "ACTIVE" || normalized === "SUBSCRIBED" || normalized === "PROTECTED") {
+    return "Subscribed";
+  }
+
+  if (normalized === "EXPIRED") return "Expired";
+  if (normalized === "CANCELLED" || normalized === "CANCELED") return "Cancelled";
+  if (normalized === "INACTIVE") return "Inactive";
+
+  return "Not Subscribed";
+}
+
+function valuationLabel(status: string | null | undefined, amount: number | null | undefined) {
+  const normalized = normalizeStatus(status);
+
+  if (normalized === "APPROVED" && amount) return `Official Value: ${peso(amount)}`;
+  if (normalized === "APPROVED") return "Approved";
+  if (normalized === "PENDING_ADMIN_VALUATION") return "Pending Admin Valuation";
+  if (normalized === "PENDING" || normalized === "REQUESTED") return "Pending Admin Valuation";
+  if (normalized === "ASSIGNED") return "Assigned for Inspection";
+  if (normalized === "INSPECTION_SUBMITTED") return "Inspection Submitted";
+
+  return "Not Requested";
+}
+
+function getQrPath(tree: TreeDetail) {
+  return tree.tree_qr_url || `/tree/verify/${tree.tree_id}`;
+}
+
+function getQrValue(tree: TreeDetail) {
+  const path = getQrPath(tree);
+
+  if (typeof window === "undefined") return path;
+
+  return `${window.location.origin}${path}`;
+}
+
+function getMapLink(gps: GpsEvidence | TreeDetail) {
+  const direct = "map_url" in gps ? gps.map_url : gps.latest_map_url;
+  const gpsUrl = "gps_url" in gps ? gps.gps_url : gps.latest_gps_url;
+  const lat = "latitude" in gps ? gps.latitude : gps.latest_latitude;
+  const lng = "longitude" in gps ? gps.longitude : gps.latest_longitude;
+
+  if (direct) return direct;
+  if (gpsUrl) return gpsUrl;
+  if (lat && lng) return `https://maps.google.com/?q=${lat},${lng}`;
+
+  return "";
+}
 
 export default function MyTreesPage() {
-  const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [forests, setForests] = useState<ForestSummary[]>([]);
+  const [trees, setTrees] = useState<TreeDetail[]>([]);
+  const [selectedForestId, setSelectedForestId] = useState("");
+  const [selectedTree, setSelectedTree] = useState<TreeDetail | null>(null);
+  const [qrTree, setQrTree] = useState<TreeDetail | null>(null);
+  const [renameTree, setRenameTree] = useState<TreeDetail | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [evidenceTree, setEvidenceTree] = useState<TreeDetail | null>(null);
+  const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("PHOTOS");
+  const [photoEvidence, setPhotoEvidence] = useState<PhotoEvidence[]>([]);
+  const [gpsEvidence, setGpsEvidence] = useState<GpsEvidence[]>([]);
+  const [healthEvidence, setHealthEvidence] = useState<HealthEvidence[]>([]);
+  const [loadingEvidence, setLoadingEvidence] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [selectedTree, setSelectedTree] = useState<TreeRow | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState<"TREES" | "GROUPS">("TREES");
-  const [stageFilter, setStageFilter] = useState("ALL");
-
-  const [activePanel, setActivePanel] = useState<PanelType>("NONE");
-  const [renameValue, setRenameValue] = useState("");
-
-  const [photoUpdates, setPhotoUpdates] = useState<UpdateRow[]>([]);
-  const [gpsLogs, setGpsLogs] = useState<UpdateRow[]>([]);
-  const [healthReports, setHealthReports] = useState<UpdateRow[]>([]);
-  const [panelLoading, setPanelLoading] = useState(false);
-
-  async function loadTrees() {
-    setLoading(true);
-    setMessage("");
-
+  async function resolveProfile() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
       window.location.href = "/login";
-      return;
+      return null;
     }
 
     const email = user.email?.trim().toLowerCase() || "";
 
     const { data: profileById } = await supabase
       .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
+      .select("id, full_name, display_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
     const { data: profileByEmail } = await supabase
       .from("profiles")
-      .select("id, email, full_name, membership_status, kyc_status")
+      .select("id, full_name, display_name, email")
       .eq("email", email)
       .maybeSingle();
 
-    const profile = profileById || profileByEmail;
+    return (profileById || profileByEmail) as Profile | null;
+  }
 
-    if (!profile) {
+  async function loadMyTrees(keepSelectedForestId?: string) {
+    setLoading(true);
+    setMessage("");
+
+    const currentProfile = await resolveProfile();
+
+    if (!currentProfile) {
       setMessage("Profile not found.");
       setLoading(false);
       return;
     }
 
-    const { data: treeData, error: treeError } = await supabase
-      .from("trees")
-      .select("*")
-      .eq("profile_id", profile.id)
-      .order("created_at", { ascending: false });
+    setProfile(currentProfile);
 
-    if (treeError) {
-      setMessage(treeError.message);
+    const { data: forestRows, error: forestError } = await supabase
+      .from("v_customer_forest_view")
+      .select("*")
+      .eq("customer_profile_id", currentProfile.id)
+      .order("created_at", { ascending: true });
+
+    if (forestError) {
+      setMessage(`Forest view failed: ${forestError.message}`);
       setLoading(false);
       return;
     }
 
-    const rows = treeData || [];
+    const { data: treeRows, error: treeError } = await supabase
+      .from("v_customer_tree_detail")
+      .select("*")
+      .eq("customer_profile_id", currentProfile.id)
+      .order("created_at", { ascending: true });
 
-    setTrees(rows);
+    if (treeError) {
+      setMessage(`Tree detail view failed: ${treeError.message}`);
+      setLoading(false);
+      return;
+    }
 
-    setSelectedTree((current) => {
-      if (current) {
-        const refreshed = rows.find((tree) => tree.id === current.id);
-        if (refreshed) return refreshed;
-      }
+    const nextForests = (forestRows || []) as ForestSummary[];
+    const nextTrees = (treeRows || []) as TreeDetail[];
 
-      return rows[0] || null;
+    setForests(nextForests);
+    setTrees(nextTrees);
+
+    const preferredForestId = keepSelectedForestId || selectedForestId;
+
+    if (preferredForestId && nextForests.some((forest) => forest.group_id === preferredForestId)) {
+      setSelectedForestId(preferredForestId);
+    } else {
+      setSelectedForestId(nextForests[0]?.group_id || "");
+    }
+
+    setSelectedTree((previous) => {
+      if (!previous) return null;
+
+      return nextTrees.find((tree) => tree.tree_id === previous.tree_id) || null;
     });
 
     setLoading(false);
   }
 
   useEffect(() => {
-    loadTrees();
+    loadMyTrees();
   }, []);
 
-  async function loadTreeUpdates(tree: TreeRow) {
-    setPanelLoading(true);
-    setPhotoUpdates([]);
-    setGpsLogs([]);
-    setHealthReports([]);
+  const totals = useMemo(() => {
+    return forests.reduce(
+      (sum, forest) => {
+        sum.total += Number(forest.total_trees || 0);
+        sum.protected += Number(forest.protected_count || 0);
+        sum.attention += Number(forest.attention_count || 0);
+        sum.critical += Number(forest.critical_count || 0);
 
-    const treeId = String(tree.id || "");
-    const treeCode = String(tree.tree_code || tree.code || "");
+        return sum;
+      },
+      {
+        total: 0,
+        protected: 0,
+        attention: 0,
+        critical: 0,
+      }
+    );
+  }, [forests]);
 
-    const photoQuery = supabase
-      .from("tree_photo_updates")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const selectedForest = useMemo(() => {
+    return forests.find((forest) => forest.group_id === selectedForestId) || null;
+  }, [forests, selectedForestId]);
 
-    const gpsQuery = supabase
-      .from("tree_gps_logs")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const selectedForestTrees = useMemo(() => {
+    return trees.filter((tree) => tree.group_id === selectedForestId);
+  }, [trees, selectedForestId]);
 
-    const healthQuery = supabase
-      .from("tree_health_reports")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const criticalTrees = useMemo(() => {
+    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "CRITICAL");
+  }, [selectedForestTrees]);
 
-    const [{ data: photos }, { data: gps }, { data: health }] = await Promise.all([
-      photoQuery,
-      gpsQuery,
-      healthQuery,
-    ]);
+  const attentionTrees = useMemo(() => {
+    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "ATTENTION");
+  }, [selectedForestTrees]);
 
-    const matchesTree = (row: UpdateRow) => {
-      const rowTreeId = String(row.tree_id || "");
-      return rowTreeId === treeId || rowTreeId === treeCode;
-    };
+  const protectedTrees = useMemo(() => {
+    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "PROTECTED");
+  }, [selectedForestTrees]);
 
-    setPhotoUpdates((photos || []).filter(matchesTree));
-    setGpsLogs((gps || []).filter(matchesTree));
-    setHealthReports((health || []).filter(matchesTree));
-    setPanelLoading(false);
+  async function openEvidence(tree: TreeDetail, mode: EvidenceMode) {
+    setEvidenceTree(tree);
+    setEvidenceMode(mode);
+    setLoadingEvidence(true);
+    setPhotoEvidence([]);
+    setGpsEvidence([]);
+    setHealthEvidence([]);
+
+    if (mode === "PHOTOS") {
+      const { data, error } = await supabase
+        .from("tree_photo_updates")
+        .select("id, photo_url, image_url, caption, notes, status, created_at")
+        .eq("tree_id", tree.tree_id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setMessage(`Photo updates failed: ${error.message}`);
+      } else {
+        setPhotoEvidence((data || []) as PhotoEvidence[]);
+      }
+    }
+
+    if (mode === "GPS") {
+      const { data, error } = await supabase
+        .from("tree_gps_logs")
+        .select("id, latitude, longitude, accuracy_meters, gps_url, map_url, location_note, notes, status, created_at")
+        .eq("tree_id", tree.tree_id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setMessage(`GPS updates failed: ${error.message}`);
+      } else {
+        setGpsEvidence((data || []) as GpsEvidence[]);
+      }
+    }
+
+    if (mode === "HEALTH") {
+      const { data, error } = await supabase
+        .from("tree_health_reports")
+        .select("id, health_status, issue_severity, issue_summary, report_notes, notes, status, created_at")
+        .eq("tree_id", tree.tree_id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setMessage(`Health reports failed: ${error.message}`);
+      } else {
+        setHealthEvidence((data || []) as HealthEvidence[]);
+      }
+    }
+
+    setLoadingEvidence(false);
   }
 
-  const stats = useMemo(() => {
-    const owned = trees.length;
-    const totalSpent = trees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
-    const estimatedValue = trees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
-    const profit = estimatedValue - totalSpent;
-
-    return { owned, totalSpent, estimatedValue, profit };
-  }, [trees]);
-
-  const filteredTrees = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return trees.filter((tree) => {
-      const stage = String(tree.stage || tree.growth_stage || "").toLowerCase();
-      const code = String(tree.tree_code || tree.code || tree.id || "").toLowerCase();
-      const name = String(tree.custom_name || tree.name || "").toLowerCase();
-      const group = String(tree.tree_group_name || "Ungrouped Trees").toLowerCase();
-
-      const matchesSearch =
-        !q || code.includes(q) || name.includes(q) || group.includes(q) || stage.includes(q);
-
-      const matchesStage =
-        stageFilter === "ALL" ||
-        stage === stageFilter.toLowerCase() ||
-        normalizeStage(stage).toLowerCase() === stageFilter.toLowerCase();
-
-      return matchesSearch && matchesStage;
-    });
-  }, [trees, search, stageFilter]);
-
-  const groups = useMemo(() => {
-    const map: Record<string, TreeRow[]> = {};
-
-    filteredTrees.forEach((tree) => {
-      const groupName = tree.tree_group_name || "Ungrouped Trees";
-      if (!map[groupName]) map[groupName] = [];
-      map[groupName].push(tree);
-    });
-
-    return Object.entries(map).map(([name, groupTrees]) => {
-      const totalSpent = groupTrees.reduce((sum, tree) => sum + getTotalSpent(tree), 0);
-      const estimatedValue = groupTrees.reduce((sum, tree) => sum + getEstimatedValue(tree), 0);
-      const profit = estimatedValue - totalSpent;
-
-      return { name, trees: groupTrees, totalSpent, estimatedValue, profit };
-    });
-  }, [filteredTrees]);
-
-  const selectedMath = selectedTree
-    ? getTreeMath(selectedTree)
-    : { totalSpent: 0, estimatedValue: 0, profit: 0, roi: 0 };
-
-  const selectedQrUrl = selectedTree
-    ? selectedTree.tree_qr_url || `/tree/${selectedTree.id}`
-    : "";
-
-  async function openPanel(panel: PanelType) {
-    if (!selectedTree) return;
-
-    if (panel === "RENAME") {
-      setRenameValue(selectedTree.custom_name || selectedTree.name || "Agarwood Tree");
-    }
-
-    if (panel === "PHOTOS" || panel === "GPS" || panel === "HEALTH") {
-      await loadTreeUpdates(selectedTree);
-    }
-
-    setActivePanel(panel);
+  function startRename(tree: TreeDetail) {
+    setRenameTree(tree);
+    setRenameValue(customerTreeName(tree));
   }
 
   async function saveRename() {
-    setMessage("");
-
-    if (!selectedTree) return;
+    if (!profile || !renameTree || actionLoading) return;
 
     const cleanName = renameValue.trim();
 
     if (!cleanName) {
-      setMessage("Tree name cannot be empty.");
+      setMessage("Please enter a friendly tree name.");
       return;
     }
+
+    setActionLoading(true);
+    setMessage("");
 
     const { error } = await supabase
       .from("trees")
-      .update({ custom_name: cleanName })
-      .eq("id", selectedTree.id);
+      .update({
+        custom_name: cleanName,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", renameTree.tree_id)
+      .eq("customer_profile_id", profile.id);
 
     if (error) {
-      setMessage(error.message);
+      setMessage(`Rename failed: ${error.message}`);
+      setActionLoading(false);
       return;
     }
 
-    setActivePanel("NONE");
-    setMessage("Tree renamed successfully. Tree code and QR identity did not change.");
-    await loadTrees();
+    setRenameTree(null);
+    setRenameValue("");
+    await loadMyTrees(selectedForestId);
+    setMessage("Tree renamed successfully.");
+    setActionLoading(false);
+  }
+
+  function requestCare(tree: TreeDetail) {
+    const params = new URLSearchParams();
+
+    params.set("tree_id", tree.tree_id);
+
+    if (tree.group_id) {
+      params.set("group_id", tree.group_id);
+    }
+
+    window.location.href = `/dashboard/tree-operations?${params.toString()}`;
+  }
+
+  async function requestValuation(tree: TreeDetail) {
+    if (!profile || actionLoading) return;
+
+    setActionLoading(true);
+    setMessage("");
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("tree_valuation_requests")
+      .select("id, status")
+      .eq("customer_profile_id", profile.id)
+      .eq("tree_id", tree.tree_id)
+      .in("status", ["PENDING", "REQUESTED", "ASSIGNED", "INSPECTION_SUBMITTED"])
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (existingError) {
+      setMessage(`Valuation check failed: ${existingError.message}`);
+      setActionLoading(false);
+      return;
+    }
+
+    if ((existingRows || []).length > 0) {
+      setMessage("Valuation request already pending for this tree.");
+      setActionLoading(false);
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("tree_valuation_requests").insert({
+      customer_profile_id: profile.id,
+      tree_id: tree.tree_id,
+      group_id: tree.group_id,
+      status: "PENDING",
+      customer_notes: `Customer requested valuation for ${customerTreeName(tree)} in ${treeForestName(tree)}.`,
+      requested_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    if (insertError) {
+      setMessage(`Valuation request failed: ${insertError.message}`);
+      setActionLoading(false);
+      return;
+    }
+
+    await supabase
+      .from("trees")
+      .update({
+        valuation_status: "PENDING",
+        valuation_requested_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", tree.tree_id)
+      .eq("customer_profile_id", profile.id);
+
+    await loadMyTrees(selectedForestId);
+    setMessage("Valuation requested. Admin will assign a gardener for inspection.");
+    setActionLoading(false);
+  }
+
+  function renderTreeMiniCard(tree: TreeDetail) {
+    return (
+      <button className={`treeMini ${alertClass(tree.alert_status)}`} key={tree.tree_id} onClick={() => setSelectedTree(tree)}>
+        <span className="treeMiniIcon">{alertIcon(tree.alert_status)}</span>
+        <span>
+          <b>{customerTreeName(tree)}</b>
+          <small>{tree.alert_reason || alertLabel(tree.alert_status)}</small>
+        </span>
+      </button>
+    );
   }
 
   return (
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Portfolio</p>
-          <h1>My Trees</h1>
+          <Link href="/dashboard" className="back">
+            ← Back to Dashboard
+          </Link>
+
+          <p className="eyebrow">Arganwood V6 Forest View</p>
+          <h1>My Forests</h1>
           <span>
-            Search, group, rename, verify QR identity, track caretaker photos,
-            GPS logs, health reports, care program sync, spending, and profit/loss.
+            Your trees are grouped by forest. Open a forest to see which seedlings are protected, need attention, or are critical.
           </span>
+        </div>
+
+        <div className="heroStats">
+          <div>
+            <small>Total Trees</small>
+            <b>{totals.total}</b>
+          </div>
+          <div>
+            <small>Protected</small>
+            <b>{totals.protected}</b>
+          </div>
+          <div>
+            <small>Attention</small>
+            <b>{totals.attention}</b>
+          </div>
+          <div>
+            <small>Critical</small>
+            <b>{totals.critical}</b>
+          </div>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       {loading ? (
-        <div className="empty">Loading your trees...</div>
-      ) : trees.length === 0 ? (
-        <div className="empty">
-          You do not own any trees yet. Visit Marketplace to purchase your first agarwood tree.
-        </div>
+        <div className="empty">Loading your forests...</div>
+      ) : forests.length === 0 ? (
+        <section className="emptyState">
+          <div className="emptyIcon">🌳</div>
+          <p className="eyebrow">No forest yet</p>
+          <h2>Create your first forest</h2>
+          <p>
+            Buy trees from Marketplace and choose Create New Forest. Your trees will appear here as friendly names like
+            Seedling 1, Seedling 2, and Seedling 3.
+          </p>
+          <Link href="/dashboard/marketplace">Go to Marketplace</Link>
+        </section>
       ) : (
         <>
-          <section className="stats">
-            <Stat label="Owned Trees" value={String(stats.owned)} />
-            <Stat label="Total Spent" value={peso(stats.totalSpent)} />
-            <Stat label="Estimated Value" value={peso(stats.estimatedValue)} />
-            <Stat label="Projected Profit" value={peso(stats.profit)} good={stats.profit >= 0} />
+          <section className="forestGrid">
+            {forests.map((forest) => {
+              const isActive = selectedForestId === forest.group_id;
+
+              return (
+                <button
+                  key={forest.group_id}
+                  className={isActive ? "forestCard active" : "forestCard"}
+                  onClick={() => setSelectedForestId(forest.group_id)}
+                >
+                  <div className="forestTop">
+                    <div>
+                      <small>🌳 Forest</small>
+                      <b>{forestName(forest)}</b>
+                    </div>
+                    <span>{Number(forest.total_trees || 0)} Trees</span>
+                  </div>
+
+                  <div className="forestCounts">
+                    <div className="protected">
+                      <small>Protected</small>
+                      <b>{Number(forest.protected_count || 0)}</b>
+                    </div>
+                    <div className="attention">
+                      <small>Attention</small>
+                      <b>{Number(forest.attention_count || 0)}</b>
+                    </div>
+                    <div className="critical">
+                      <small>Critical</small>
+                      <b>{Number(forest.critical_count || 0)}</b>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </section>
 
-          <section className="layout">
-            <aside className="treeList">
-              <div className="searchBox">
-                <label>Search Trees</label>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Tree code, name, group, stage..."
-                />
+          {selectedForest && (
+            <section className="forestDetail">
+              <div className="forestDetailHead">
+                <div>
+                  <p className="eyebrow">Open Forest</p>
+                  <h2>{forestName(selectedForest)}</h2>
+                  <span>
+                    {Number(selectedForest.total_trees || 0)} trees • {Number(selectedForest.protected_count || 0)} protected •{" "}
+                    {Number(selectedForest.attention_count || 0)} attention • {Number(selectedForest.critical_count || 0)} critical
+                  </span>
+                </div>
+
+                <Link href="/dashboard/marketplace" className="addTreeBtn">
+                  Add Trees
+                </Link>
               </div>
 
-              <div className="viewSwitch">
-                <button
-                  className={viewMode === "TREES" ? "active" : ""}
-                  onClick={() => setViewMode("TREES")}
-                >
-                  Trees
-                </button>
-                <button
-                  className={viewMode === "GROUPS" ? "active" : ""}
-                  onClick={() => setViewMode("GROUPS")}
-                >
-                  Groups
-                </button>
-              </div>
+              <div className="treeSections">
+                <section className="treeSection criticalBox">
+                  <div className="treeSectionHead">
+                    <b>🔴 Critical</b>
+                    <span>{criticalTrees.length}</span>
+                  </div>
 
-              <div className="stageFilters">
-                {["ALL", ...STAGES].map((stage) => (
-                  <button
-                    key={stage}
-                    className={stageFilter === stage ? "active" : ""}
-                    onClick={() => setStageFilter(stage)}
-                  >
-                    {stage}
-                  </button>
-                ))}
-              </div>
-
-              {viewMode === "TREES" ? (
-                <div className="listItems">
-                  {filteredTrees.length === 0 ? (
-                    <div className="empty small">No matching trees.</div>
+                  {criticalTrees.length === 0 ? (
+                    <div className="softEmpty">No critical trees.</div>
                   ) : (
-                    filteredTrees.map((tree) => {
-                      const math = getTreeMath(tree);
-                      const active = selectedTree?.id === tree.id;
-
-                      return (
-                        <button
-                          key={tree.id}
-                          className={`treeItem ${active ? "active" : ""}`}
-                          onClick={() => setSelectedTree(tree)}
-                        >
-                          <div>
-                            <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                            <p>{tree.custom_name || tree.name || "Agarwood Tree"}</p>
-                            <small>{tree.tree_group_name || "Ungrouped Trees"}</small>
-                          </div>
-                          <span className={math.profit >= 0 ? "gain" : "loss"}>
-                            {peso(math.profit)}
-                          </span>
-                        </button>
-                      );
-                    })
+                    <div className="treeList">{criticalTrees.map(renderTreeMiniCard)}</div>
                   )}
-                </div>
-              ) : (
-                <div className="listItems">
-                  {groups.length === 0 ? (
-                    <div className="empty small">No matching groups.</div>
+                </section>
+
+                <section className="treeSection attentionBox">
+                  <div className="treeSectionHead">
+                    <b>🟡 Needs Attention</b>
+                    <span>{attentionTrees.length}</span>
+                  </div>
+
+                  {attentionTrees.length === 0 ? (
+                    <div className="softEmpty">No attention warnings.</div>
                   ) : (
-                    groups.map((group) => (
-                      <button
-                        key={group.name}
-                        className="groupItem"
-                        onClick={() => setSelectedTree(group.trees[0])}
-                      >
-                        <div>
-                          <strong>{group.name}</strong>
-                          <p>{group.trees.length} tree{group.trees.length === 1 ? "" : "s"}</p>
-                          <small>Value: {peso(group.estimatedValue)}</small>
-                        </div>
-                        <span className={group.profit >= 0 ? "gain" : "loss"}>
-                          {peso(group.profit)}
-                        </span>
-                      </button>
-                    ))
+                    <div className="treeList">{attentionTrees.map(renderTreeMiniCard)}</div>
                   )}
-                </div>
-              )}
-            </aside>
-
-            {selectedTree && (
-              <section className="detail">
-                <div className="detailTop">
-                  <div>
-                    <p className="eyebrow">Tree Asset</p>
-                    <h2>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</h2>
-                    <span>{selectedTree.tree_code || selectedTree.code || selectedTree.id}</span>
-                    <p className="groupName">{selectedTree.tree_group_name || "Ungrouped Trees"}</p>
-                  </div>
-
-                  <div className="identityBox">
-                    <strong>Tree Identity</strong>
-                    <p>{selectedTree.tree_code || selectedTree.id}</p>
-                    <div className="identityActions">
-                      <button onClick={() => openPanel("RENAME")}>Rename</button>
-                      <button onClick={() => openPanel("QR")}>View QR</button>
-                    </div>
-                  </div>
-                </div>
-
-                <section className="growth">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Growth Guide</h3>
-                      <p>Current stage is based on the tree record from Supabase.</p>
-                    </div>
-                  </div>
-
-                  <div className="stageLine">
-                    {STAGES.map((stage, index) => {
-                      const current = normalizeStage(selectedTree.stage || selectedTree.growth_stage);
-                      const foundIndex = STAGES.findIndex(
-                        (item) => item.toLowerCase() === current.toLowerCase()
-                      );
-                      const currentIndex = foundIndex >= 0 ? foundIndex : 0;
-
-                      return (
-                        <div
-                          key={stage}
-                          className={`stage ${index <= currentIndex ? "done" : ""} ${
-                            index === currentIndex ? "current" : ""
-                          }`}
-                        >
-                          <span>{index + 1}</span>
-                          <strong>{stage}</strong>
-                        </div>
-                      );
-                    })}
-                  </div>
                 </section>
 
-                <section className="cards">
-                  <Mini label="Stage" value={selectedTree.stage || selectedTree.growth_stage || "—"} />
-                  <Mini label="Age" value={getAgeText(selectedTree)} />
-                  <Mini label="GPS Status" value={selectedTree.gps_status || selectedTree.gpsStatus || "Pending"} />
-                  <Mini label="Care Plan" value={selectedTree.care_plan || selectedTree.carePlan || "Not Enrolled"} />
-                  <Mini label="Program Status" value={selectedTree.care_program_status || "NOT_ENROLLED"} />
-                  <Mini label="Coverage" value={selectedTree.care_program_coverage || "No active coverage"} />
-                  <Mini label="Next Renewal" value={formatDate(selectedTree.care_program_next_renewal)} />
-                  <Mini label="Auto Renew" value={selectedTree.auto_renew_enabled ? "ON - Display Only" : "OFF"} />
-                  <Mini label="Program Cost" value={peso(Number(selectedTree.care_program_price || 0))} />
-                  <Mini label="Valuation" value={selectedTree.valuation_status || "Awaiting Valuation"} />
-                  <Mini label="Availability" value={selectedTree.availability_status || "Owned"} />
-                </section>
-
-                <section className="moneyBox">
-                  <div className="panelHead">
-                    <div>
-                      <h3>Tree Cost Tracker</h3>
-                      <p>Shows if this tree is currently projected as profit or loss.</p>
-                    </div>
+                <section className="treeSection protectedBox">
+                  <div className="treeSectionHead">
+                    <b>🟢 Protected / Healthy</b>
+                    <span>{protectedTrees.length}</span>
                   </div>
 
-                  <div className="moneyGrid">
-                    <Money label="Purchase Price" value={getPurchasePrice(selectedTree)} />
-                    <Money label="Operation Cost" value={getOperationCost(selectedTree)} />
-                    <Money label="Care Program Cost" value={getCareProgramCost(selectedTree)} />
-                    <Money label="GPS / Photo Fees" value={getVerificationCost(selectedTree)} />
-                    <Money label="Total Spent" value={selectedMath.totalSpent} strong />
-                    <Money label="Estimated Sell Value" value={selectedMath.estimatedValue} />
-                    <Money label="Projected Profit / Loss" value={selectedMath.profit} strong good={selectedMath.profit >= 0} />
-                    <Money label="ROI" value={selectedMath.roi} percent good={selectedMath.roi >= 0} />
-                  </div>
+                  {protectedTrees.length === 0 ? (
+                    <div className="softEmpty">No protected trees yet.</div>
+                  ) : (
+                    <div className="treeList">{protectedTrees.map(renderTreeMiniCard)}</div>
+                  )}
                 </section>
+              </div>
+            </section>
+          )}
+        </>
+      )}
 
-                <section className="actions">
-                  <button onClick={() => openPanel("PHOTOS")}>View Photos</button>
-                  <button onClick={() => openPanel("GPS")}>View GPS</button>
-                  <button onClick={() => openPanel("HEALTH")}>View Health</button>
-                  <button onClick={() => (window.location.href = "/dashboard/tree-operations")}>
-                    Request Care
-                  </button>
-                </section>
-              </section>
-            )}
-          </section>
+      {selectedTree && (
+        <div className="modalOverlay" onClick={() => setSelectedTree(null)}>
+          <div className="modal treeDetailModal" onClick={(event) => event.stopPropagation()}>
+            <button className="closeBtn" onClick={() => setSelectedTree(null)}>
+              ×
+            </button>
 
-          {activePanel !== "NONE" && selectedTree && (
-            <div className="modal">
-              <div className="modalCard">
-                {activePanel === "PHOTOS" && (
-                  <>
-                    <h3>Tree Photos</h3>
-                    <p>Live caretaker photo updates for this tree.</p>
+            <div className={`detailStatus ${alertClass(selectedTree.alert_status)}`}>
+              <span>{alertIcon(selectedTree.alert_status)}</span>
+              <b>{alertLabel(selectedTree.alert_status)}</b>
+            </div>
 
-                    {panelLoading ? (
-                      <div className="empty small">Loading photos...</div>
-                    ) : photoUpdates.length === 0 ? (
-                      <div className="empty small">No caretaker photo uploaded yet.</div>
-                    ) : (
-                      <div className="updateList">
-                        {photoUpdates.map((item) => (
-                          <div key={item.id} className="updateCard">
-                            <strong>{item.caption || "Tree Photo Update"}</strong>
-                            <p>{item.notes || "No notes."}</p>
-                            <small>{formatDateTime(item.created_at)}</small>
+            <p className="eyebrow">Tree Detail</p>
+            <h2>{customerTreeName(selectedTree)}</h2>
+            <p className="detailSubtitle">{treeForestName(selectedTree)}</p>
 
-                            <div className="photoLinks">
-                              {item.photo_url && (
-                                <a href={item.photo_url} target="_blank" rel="noreferrer">
-                                  Open Main Photo
-                                </a>
-                              )}
-                              {item.before_photo_url && (
-                                <a href={item.before_photo_url} target="_blank" rel="noreferrer">
-                                  Before
-                                </a>
-                              )}
-                              {item.after_photo_url && (
-                                <a href={item.after_photo_url} target="_blank" rel="noreferrer">
-                                  After
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "GPS" && (
-                  <>
-                    <h3>GPS Verification</h3>
-                    <p>Live GPS logs submitted by gardener or field staff.</p>
-
-                    {panelLoading ? (
-                      <div className="empty small">Loading GPS logs...</div>
-                    ) : gpsLogs.length === 0 ? (
-                      <div className="empty small">No GPS log uploaded yet.</div>
-                    ) : (
-                      <div className="updateList">
-                        {gpsLogs.map((item) => {
-                          const lat = item.latitude;
-                          const lng = item.longitude;
-                          const mapUrl =
-                            lat && lng
-                              ? `https://www.google.com/maps?q=${lat},${lng}`
-                              : "";
-
-                          return (
-                            <div key={item.id} className="updateCard">
-                              <strong>GPS Verification</strong>
-                              <p>Latitude: {lat || "—"}</p>
-                              <p>Longitude: {lng || "—"}</p>
-                              <p>Accuracy: {item.accuracy_meters || "—"} meters</p>
-                              <p>{item.gps_note || item.notes || "No GPS note."}</p>
-                              <small>{formatDateTime(item.created_at)}</small>
-
-                              {mapUrl && (
-                                <div className="photoLinks">
-                                  <a href={mapUrl} target="_blank" rel="noreferrer">
-                                    Open Google Maps
-                                  </a>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "HEALTH" && (
-                  <>
-                    <h3>Tree Health Reports</h3>
-                    <p>Live health reports submitted by gardener.</p>
-
-                    {panelLoading ? (
-                      <div className="empty small">Loading health reports...</div>
-                    ) : healthReports.length === 0 ? (
-                      <div className="empty small">No health report submitted yet.</div>
-                    ) : (
-                      <div className="updateList">
-                        {healthReports.map((item) => (
-                          <div key={item.id} className="updateCard">
-                            <strong>{item.health_status || "Health Report"}</strong>
-                            <p>Disease Found: {item.disease_found ? "YES" : "NO"}</p>
-                            <p>Pest Found: {item.pest_found ? "YES" : "NO"}</p>
-                            <p>Issue Notes: {item.issue_notes || "—"}</p>
-                            <p>Recommendation: {item.recommendation || "—"}</p>
-                            <small>{formatDateTime(item.created_at)}</small>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <ModalActions close={() => setActivePanel("NONE")} />
-                  </>
-                )}
-
-                {activePanel === "QR" && (
-                  <>
-                    <h3>Tree QR Identity</h3>
-                    <p>
-                      This QR identity is for the real tree tag. Scanning opens the official tree
-                      verification page.
-                    </p>
-
-                    <div className="qrPreview">
-                      <div className="fakeQr">
-                        <span>QR</span>
-                      </div>
-
-                      <div>
-                        <strong>{selectedTree.tree_code || selectedTree.id}</strong>
-                        <p>{selectedTree.custom_name || selectedTree.name || "Agarwood Tree"}</p>
-                        <small>{selectedQrUrl}</small>
-                      </div>
-                    </div>
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Close</button>
-                      <button className="primary" onClick={() => window.open(selectedQrUrl, "_blank")}>
-                        Open Verification Page
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {activePanel === "RENAME" && (
-                  <>
-                    <h3>Rename Tree</h3>
-                    <p>
-                      Rename only changes the display name. Tree code and QR identity remain permanent.
-                    </p>
-
-                    <label>New Tree Name</label>
-                    <input
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      placeholder="Example: Retirement Tree A"
-                    />
-
-                    <div className="modalActions">
-                      <button onClick={() => setActivePanel("NONE")}>Cancel</button>
-                      <button className="primary" onClick={saveRename}>
-                        Save Name
-                      </button>
-                    </div>
-                  </>
-                )}
+            <div className="detailGrid">
+              <div>
+                <small>Care Status</small>
+                <b>{careLabel(selectedTree.care_status)}</b>
+              </div>
+              <div>
+                <small>Alert Reason</small>
+                <b>{selectedTree.alert_reason || alertLabel(selectedTree.alert_status)}</b>
+              </div>
+              <div>
+                <small>Last Photo</small>
+                <b>{formatShortDate(selectedTree.latest_photo_at)}</b>
+              </div>
+              <div>
+                <small>Last GPS</small>
+                <b>{formatShortDate(selectedTree.latest_gps_at)}</b>
+              </div>
+              <div>
+                <small>Last Health Report</small>
+                <b>{selectedTree.latest_health_status || formatShortDate(selectedTree.latest_health_at)}</b>
+              </div>
+              <div>
+                <small>Valuation</small>
+                <b>{valuationLabel(selectedTree.valuation_status, selectedTree.official_valuation_amount)}</b>
               </div>
             </div>
-          )}
 
-<style>{`
-        * { box-sizing: border-box; }
+            {selectedTree.latest_issue_summary && (
+              <div className="warningNote">
+                <b>Health Note</b>
+                <p>{selectedTree.latest_issue_summary}</p>
+              </div>
+            )}
+
+            <div className="actionGrid">
+              <button onClick={() => openEvidence(selectedTree, "PHOTOS")}>View Photos</button>
+              <button onClick={() => openEvidence(selectedTree, "GPS")}>View GPS</button>
+              <button onClick={() => openEvidence(selectedTree, "HEALTH")}>View Health</button>
+              <button onClick={() => requestCare(selectedTree)}>Request Care</button>
+              <button disabled={actionLoading} onClick={() => requestValuation(selectedTree)}>
+                Request Valuation
+              </button>
+              <button onClick={() => setQrTree(selectedTree)}>View QR</button>
+              <button onClick={() => startRename(selectedTree)}>Rename</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {qrTree && (
+        <div className="modalOverlay" onClick={() => setQrTree(null)}>
+          <div className="modal qrModal" onClick={(event) => event.stopPropagation()}>
+            <button className="closeBtn" onClick={() => setQrTree(null)}>
+              ×
+            </button>
+
+            <div className="tagCard">
+              <p>ARGANWOOD TREE TAG</p>
+              <div className="tagRows">
+                <div>
+                  <small>Customer</small>
+                  <b>{profile?.full_name || profile?.display_name || "Customer"}</b>
+                </div>
+                <div>
+                  <small>Forest</small>
+                  <b>{treeForestName(qrTree)}</b>
+                </div>
+                <div>
+                  <small>Tree</small>
+                  <b>{customerTreeName(qrTree)}</b>
+                </div>
+                <div>
+                  <small>Care</small>
+                  <b>{careLabel(qrTree.care_status)}</b>
+                </div>
+              </div>
+
+              <div className="qrBox">
+                <QRCodeCanvas value={getQrValue(qrTree)} size={210} includeMargin />
+              </div>
+
+              <small className="qrPath">{getQrPath(qrTree)}</small>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameTree && (
+        <div className="modalOverlay" onClick={() => setRenameTree(null)}>
+          <div className="modal renameModal" onClick={(event) => event.stopPropagation()}>
+            <button className="closeBtn" onClick={() => setRenameTree(null)}>
+              ×
+            </button>
+
+            <p className="eyebrow">Friendly Name</p>
+            <h2>Rename Tree</h2>
+            <p className="detailSubtitle">This changes the customer-visible name only. QR identity stays the same.</p>
+
+            <label className="fieldLabel">
+              Tree Name
+              <input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} placeholder="Seedling 1" />
+            </label>
+
+            <button className="primaryBtn" disabled={actionLoading} onClick={saveRename}>
+              {actionLoading ? "Saving..." : "Save Name"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {evidenceTree && (
+        <div className="modalOverlay" onClick={() => setEvidenceTree(null)}>
+          <div className="modal evidenceModal" onClick={(event) => event.stopPropagation()}>
+            <button className="closeBtn" onClick={() => setEvidenceTree(null)}>
+              ×
+            </button>
+
+            <p className="eyebrow">{evidenceMode}</p>
+            <h2>{customerTreeName(evidenceTree)}</h2>
+            <p className="detailSubtitle">{treeForestName(evidenceTree)}</p>
+
+            {loadingEvidence ? (
+              <div className="softEmpty">Loading evidence...</div>
+            ) : (
+              <>
+                {evidenceMode === "PHOTOS" && (
+                  <div className="evidenceList">
+                    {photoEvidence.length === 0 ? (
+                      <div className="softEmpty">No photo updates yet.</div>
+                    ) : (
+                      photoEvidence.map((item) => {
+                        const src = item.photo_url || item.image_url || "";
+
+                        return (
+                          <article className="evidenceCard" key={item.id}>
+                            {src ? <img src={src} alt={item.caption || "Tree photo update"} /> : <div className="imageFallback">🌳</div>}
+                            <div>
+                              <b>{item.caption || item.status || "Photo Update"}</b>
+                              <small>{formatDate(item.created_at)}</small>
+                              <p>{item.notes || "No notes provided."}</p>
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                {evidenceMode === "GPS" && (
+                  <div className="evidenceList">
+                    {gpsEvidence.length === 0 ? (
+                      <div className="softEmpty">No GPS updates yet.</div>
+                    ) : (
+                      gpsEvidence.map((item) => {
+                        const mapLink = getMapLink(item);
+
+                        return (
+                          <article className="evidenceCard gpsCard" key={item.id}>
+                            <div className="gpsIcon">📍</div>
+                            <div>
+                              <b>{item.location_note || item.status || "GPS Update"}</b>
+                              <small>{formatDate(item.created_at)}</small>
+                              <p>
+                                {item.latitude && item.longitude
+                                  ? `${item.latitude}, ${item.longitude}`
+                                  : item.notes || "Coordinates not provided."}
+                              </p>
+                              {mapLink && (
+                                <a href={mapLink} target="_blank" rel="noreferrer">
+                                  Open Map
+                                </a>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                {evidenceMode === "HEALTH" && (
+                  <div className="evidenceList">
+                    {healthEvidence.length === 0 ? (
+                      <div className="softEmpty">No health reports yet.</div>
+                    ) : (
+                      healthEvidence.map((item) => (
+                        <article className="evidenceCard healthCard" key={item.id}>
+                          <div className="gpsIcon">💚</div>
+                          <div>
+                            <b>{item.health_status || "Health Report"}</b>
+                            <small>{formatDate(item.created_at)}</small>
+                            <p>{item.issue_summary || item.report_notes || item.notes || "No health notes provided."}</p>
+                            {item.issue_severity && <span className="severity">{item.issue_severity}</span>}
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        * {
+          box-sizing: border-box;
+        }
 
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #18261d;
+          color: #102017;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 14% 7%, rgba(255, 222, 145, .50), transparent 25%),
+            radial-gradient(circle at 90% 0%, rgba(255,255,255,.70), transparent 32%),
+            linear-gradient(180deg, #f8f4e9 0%, #eee2cc 48%, #dfc9a8 100%);
         }
 
         .hero {
-          margin-bottom: 22px;
+          display: grid;
+          grid-template-columns: 1fr 460px;
+          gap: 18px;
+          align-items: stretch;
+          margin-bottom: 20px;
+        }
+
+        .back {
+          display: inline-block;
+          margin-bottom: 14px;
+          color: #8a6739;
+          font-weight: 900;
+          text-decoration: none;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
+          color: #8a6739;
           font-weight: 900;
-          letter-spacing: .5px;
           text-transform: uppercase;
+          letter-spacing: .12em;
           font-size: 12px;
         }
 
-        .hero h1 {
+        h1 {
           margin: 0;
-          font-size: 44px;
-          letter-spacing: -1.6px;
-          color: #101a14;
+          font-size: 54px;
+          letter-spacing: -2px;
+          color: #0b1b12;
         }
 
         .hero span {
           display: block;
           margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
-          max-width: 850px;
+          max-width: 780px;
+          color: #627064;
+          font-weight: 800;
           line-height: 1.6;
         }
 
+        .heroStats {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+
+        .heroStats div,
         .message,
         .empty,
-        .stat,
-        .treeList,
-        .detail,
-        .growth,
-        .moneyBox,
-        .history {
-          border-radius: 26px;
+        .forestCard,
+        .forestDetail,
+        .emptyState {
+          border-radius: 28px;
           background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
+          border: 1px solid rgba(81, 61, 32, .08);
+          box-shadow: 0 20px 50px rgba(79, 55, 20, .10);
+        }
+
+        .heroStats div {
+          padding: 18px;
+        }
+
+        .heroStats small {
+          display: block;
+          color: #8a6739;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .10em;
+          margin-bottom: 5px;
+        }
+
+        .heroStats b {
+          display: block;
+          color: #244536;
+          font-size: 30px;
         }
 
         .message,
         .empty {
-          padding: 20px;
-          color: #31553d;
+          padding: 18px;
+          margin-bottom: 18px;
+          color: #244536;
           font-weight: 900;
         }
 
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
+        .emptyState {
+          min-height: 440px;
+          display: grid;
+          place-items: center;
+          text-align: center;
+          padding: 40px;
         }
 
-        .stats {
+        .emptyState h2 {
+          margin: 0;
+          font-size: 34px;
+          color: #0b1b12;
+        }
+
+        .emptyState p {
+          max-width: 560px;
+          color: #627064;
+          font-weight: 800;
+          line-height: 1.65;
+        }
+
+        .emptyState a {
+          display: inline-flex;
+          margin-top: 8px;
+          padding: 14px 20px;
+          border-radius: 16px;
+          color: white;
+          background: linear-gradient(135deg, #244536, #10281f);
+          text-decoration: none;
+          font-weight: 900;
+        }
+
+        .emptyIcon {
+          font-size: 72px;
+          margin-bottom: 10px;
+        }
+
+        .forestGrid {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 16px;
           margin-bottom: 18px;
         }
 
-        .stat {
-          padding: 22px;
-        }
-
-        .stat p {
-          margin: 0;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .stat h3 {
-          margin: 10px 0 0;
-          color: #244536;
-          font-size: 28px;
-        }
-
-        .stat.good h3 {
-          color: #176b3a;
-        }
-
-        .layout {
-          display: grid;
-          grid-template-columns: 380px 1fr;
-          gap: 18px;
-          align-items: start;
-        }
-
-        .treeList {
-          padding: 14px;
-          display: grid;
-          gap: 12px;
-          max-height: 840px;
-          overflow: auto;
-        }
-
-        .searchBox {
-          display: grid;
-          gap: 8px;
-        }
-
-        .searchBox label,
-        .modalCard label {
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        input {
-          width: 100%;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 14px;
-          padding: 13px 14px;
-          background: rgba(255,253,246,.94);
-          color: #101a14;
-          outline: none;
-          font-weight: 800;
-        }
-
-        .viewSwitch {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-        }
-
-        .viewSwitch button,
-        .stageFilters button {
-          border: 1px solid rgba(92,70,35,.12);
-          border-radius: 999px;
-          padding: 11px 12px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
+        .forestCard {
           cursor: pointer;
-        }
-
-        .viewSwitch button.active,
-        .stageFilters button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          border-color: transparent;
-        }
-
-        .stageFilters {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .listItems {
-          display: grid;
-          gap: 10px;
-        }
-
-        .treeItem,
-        .groupItem {
-          border: 1px solid rgba(92,70,35,.08);
-          border-radius: 20px;
-          padding: 16px;
-          background: #f3ead8;
+          border: 1px solid rgba(81, 61, 32, .08);
           text-align: left;
-          cursor: pointer;
+          padding: 18px;
+          transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+        }
+
+        .forestCard:hover,
+        .forestCard.active {
+          transform: translateY(-3px);
+          border-color: rgba(36,69,54,.25);
+          box-shadow: 0 24px 60px rgba(36,69,54,.16);
+        }
+
+        .forestCard.active {
+          background:
+            radial-gradient(circle at 86% 10%, rgba(255, 222, 145, .36), transparent 32%),
+            rgba(255,253,246,.95);
+        }
+
+        .forestTop {
           display: flex;
           justify-content: space-between;
           gap: 12px;
+          align-items: flex-start;
+          margin-bottom: 16px;
         }
 
-        .treeItem.active {
-          background: linear-gradient(135deg, #244536, #10281f);
+        .forestTop small {
+          display: block;
+          color: #8a6739;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .10em;
+          margin-bottom: 4px;
+        }
+
+        .forestTop b {
+          display: block;
+          color: #0b1b12;
+          font-size: 24px;
+          line-height: 1.12;
+        }
+
+        .forestTop span {
+          white-space: nowrap;
+          border-radius: 999px;
+          padding: 8px 11px;
           color: white;
+          background: #244536;
+          font-size: 12px;
+          font-weight: 900;
         }
 
-        .treeItem strong,
-        .groupItem strong {
+        .forestCounts {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+        }
+
+        .forestCounts div {
+          border-radius: 18px;
+          padding: 12px;
+          background: #f2ead9;
+        }
+
+        .forestCounts small {
           display: block;
-          font-size: 15px;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+          margin-bottom: 4px;
         }
 
-        .treeItem p,
-        .groupItem p {
-          margin: 6px 0 0;
-          color: inherit;
-          opacity: .75;
-          font-size: 13px;
-          font-weight: 800;
+        .forestCounts b {
+          font-size: 22px;
         }
 
-        .treeItem small,
-        .groupItem small {
+        .protected small,
+        .protected b {
+          color: #245f39;
+        }
+
+        .attention small,
+        .attention b {
+          color: #8a6739;
+        }
+
+        .critical small,
+        .critical b {
+          color: #8b2d20;
+        }
+
+        .forestDetail {
+          padding: 22px;
+        }
+
+        .forestDetailHead {
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: center;
+          margin-bottom: 18px;
+        }
+
+        .forestDetailHead h2 {
+          margin: 0;
+          color: #0b1b12;
+          font-size: 36px;
+          letter-spacing: -1px;
+        }
+
+        .forestDetailHead span {
           display: block;
-          margin-top: 6px;
-          color: inherit;
-          opacity: .65;
-          font-weight: 800;
+          margin-top: 7px;
+          color: #627064;
+          font-weight: 900;
         }
 
-        .treeItem span,
-        .groupItem span {
+        .addTreeBtn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 16px;
+          padding: 14px 18px;
+          color: white;
+          background: linear-gradient(135deg, #244536, #10281f);
+          text-decoration: none;
           font-weight: 900;
           white-space: nowrap;
         }
 
-        .gain { color: #176b3a; }
-        .loss { color: #a33c2a; }
-        .treeItem.active .gain,
-        .treeItem.active .loss { color: #d9b45f; }
-
-        .detail {
-          padding: 24px;
+        .treeSections {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+          align-items: start;
         }
 
-        .detailTop {
+        .treeSection {
+          border-radius: 24px;
+          padding: 14px;
+          min-height: 220px;
+        }
+
+        .criticalBox {
+          background: linear-gradient(180deg, rgba(139,45,32,.10), rgba(139,45,32,.04));
+          border: 1px solid rgba(139,45,32,.14);
+        }
+
+        .attentionBox {
+          background: linear-gradient(180deg, rgba(178,129,45,.14), rgba(178,129,45,.04));
+          border: 1px solid rgba(178,129,45,.16);
+        }
+
+        .protectedBox {
+          background: linear-gradient(180deg, rgba(36,95,57,.12), rgba(36,95,57,.04));
+          border: 1px solid rgba(36,95,57,.14);
+        }
+
+        .treeSectionHead {
           display: flex;
           justify-content: space-between;
-          gap: 18px;
-          margin-bottom: 18px;
-        }
-
-        .detailTop h2 {
-          margin: 0;
-          font-size: 36px;
-          color: #101a14;
-        }
-
-        .detailTop span {
-          display: block;
-          margin-top: 8px;
-          color: #6b6b62;
-          font-weight: 900;
-        }
-
-        .groupName {
-          margin: 8px 0 0;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .identityBox {
-          min-width: 240px;
-          border-radius: 24px;
-          padding: 18px;
-          color: white;
-          background: linear-gradient(135deg, #244536, #10281f);
-        }
-
-        .identityBox strong {
-          display: block;
-          color: rgba(255,255,255,.7);
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .identityBox p {
-          margin: 8px 0 14px;
-          font-size: 22px;
-          font-weight: 900;
-        }
-
-        .identityActions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-        }
-
-        .identityActions button {
-          border: 0;
-          border-radius: 999px;
-          padding: 10px;
-          background: rgba(255,255,255,.13);
-          color: white;
-          font-weight: 900;
-          cursor: pointer;
-        }
-
-        .growth,
-        .moneyBox,
-        .history {
-          padding: 20px;
-          margin-top: 18px;
-        }
-
-        .panelHead h3 {
-          margin: 0;
-          font-size: 24px;
-          color: #101a14;
-        }
-
-        .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
-          font-size: 14px;
-        }
-
-        .stageLine {
-          display: grid;
-          grid-template-columns: repeat(5, 1fr);
           gap: 12px;
-          margin-top: 18px;
+          align-items: center;
+          margin-bottom: 12px;
         }
 
-        .stage {
-          border-radius: 20px;
-          padding: 16px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
+        .treeSectionHead b {
+          color: #0b1b12;
+          font-size: 18px;
+        }
+
+        .treeSectionHead span {
+          display: inline-grid;
+          place-items: center;
+          min-width: 30px;
+          height: 30px;
+          border-radius: 999px;
+          color: white;
+          background: #244536;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .treeList {
+          display: grid;
+          gap: 9px;
+        }
+
+        .treeMini {
+          width: 100%;
+          border: 0;
+          border-radius: 18px;
+          padding: 12px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          text-align: left;
+          cursor: pointer;
+          background: rgba(255,253,246,.78);
+          box-shadow: 0 10px 24px rgba(79, 55, 20, .06);
+        }
+
+        .treeMiniIcon {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 38px;
+          border-radius: 14px;
+          background: rgba(36,69,54,.08);
+          flex: 0 0 auto;
+        }
+
+        .treeMini b {
+          display: block;
+          color: #0b1b12;
+          font-size: 15px;
+          margin-bottom: 3px;
+        }
+
+        .treeMini small {
+          color: #687467;
+          font-weight: 800;
+          line-height: 1.3;
+        }
+
+        .treeMini.critical {
+          border: 1px solid rgba(139,45,32,.16);
+        }
+
+        .treeMini.attention {
+          border: 1px solid rgba(178,129,45,.16);
+        }
+
+        .treeMini.protected {
+          border: 1px solid rgba(36,95,57,.16);
+        }
+
+        .softEmpty {
+          border-radius: 18px;
+          padding: 14px;
+          color: #687467;
+          background: rgba(255,253,246,.58);
+          font-weight: 900;
           text-align: center;
         }
 
-        .stage span {
-          width: 34px;
-          height: 34px;
-          border-radius: 50%;
+        .modalOverlay {
+          position: fixed;
+          inset: 0;
+          z-index: 80;
           display: grid;
           place-items: center;
-          margin: 0 auto 10px;
-          background: rgba(214,178,94,.25);
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .stage strong {
-          font-size: 13px;
-          color: #6b6b62;
-        }
-
-        .stage.done {
-          background: rgba(49,85,61,.12);
-        }
-
-        .stage.done span {
-          background: #244536;
-          color: white;
-        }
-
-        .stage.current {
-          outline: 3px solid rgba(214,178,94,.45);
-        }
-
-        .cards,
-        .modalGrid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .mini,
-        .money,
-        .requestRow {
-          border-radius: 18px;
-          background: #f3ead8;
-          padding: 14px;
-          border: 1px solid rgba(92,70,35,.08);
-        }
-
-        .mini span,
-        .money span {
-          display: block;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .1em;
-        }
-
-        .mini strong,
-        .money strong {
-          display: block;
-          margin-top: 7px;
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .moneyGrid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .money.strong {
-          background: linear-gradient(135deg, #244536, #10281f);
-        }
-
-        .money.strong span,
-        .money.strong strong {
-          color: white;
-        }
-
-        .money.good strong {
-          color: #176b3a;
-        }
-
-        .money.strong.good strong {
-          color: #d9b45f;
-        }
-
-        .actions {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 12px;
-          margin-top: 18px;
-        }
-
-        .actions button {
-          border: 0;
-          border-radius: 18px;
-          padding: 15px;
-          background: #f3ead8;
-          color: #244536;
-          font-weight: 900;
-          cursor: pointer;
+          padding: 20px;
+          background: rgba(10, 18, 13, .55);
+          backdrop-filter: blur(8px);
         }
 
         .modal {
-          position: fixed;
-          inset: 0;
-          z-index: 100;
-          padding: 24px;
-          background: rgba(0,0,0,.55);
-          display: grid;
-          place-items: center;
-        }
-
-        .modalCard {
-          width: min(720px, 100%);
-          max-height: 88vh;
+          position: relative;
+          width: min(760px, 100%);
+          max-height: 92vh;
           overflow: auto;
-          border-radius: 28px;
-          padding: 24px;
-          background: #fffdf6;
-          box-shadow: 0 24px 70px rgba(0,0,0,.22);
+          border-radius: 34px;
+          padding: 26px;
+          background:
+            radial-gradient(circle at 90% 8%, rgba(255, 222, 145, .36), transparent 30%),
+            #fffdf6;
+          box-shadow: 0 30px 90px rgba(0,0,0,.28);
+          border: 1px solid rgba(81, 61, 32, .10);
         }
 
-        .modalCard h3 {
-          margin: 0;
-          font-size: 28px;
-          color: #101a14;
-        }
-
-        .modalCard p {
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
-
-        .modalActions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-          margin-top: 18px;
-        }
-
-        .modalActions button {
+        .closeBtn {
+          position: absolute;
+          top: 16px;
+          right: 16px;
+          width: 42px;
+          height: 42px;
           border: 0;
-          border-radius: 16px;
-          padding: 14px;
-          background: #f3ead8;
+          border-radius: 999px;
+          background: #f2ead9;
           color: #244536;
+          font-size: 26px;
           font-weight: 900;
           cursor: pointer;
         }
 
-        .modalActions .primary {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-        }
-
-        .updateList {
-          display: grid;
-          gap: 12px;
-          margin-top: 16px;
-        }
-
-        .updateCard {
-          border-radius: 18px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-          padding: 15px;
-        }
-
-        .updateCard strong {
-          color: #101a14;
-          font-size: 16px;
-        }
-
-        .updateCard p {
-          margin: 7px 0 0;
-          color: #5f665e;
-          font-size: 13px;
-        }
-
-        .updateCard small {
-          display: block;
-          margin-top: 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-        }
-
-        .photoLinks {
-          display: flex;
-          flex-wrap: wrap;
+        .detailStatus {
+          display: inline-flex;
+          align-items: center;
           gap: 8px;
-          margin-top: 12px;
-        }
-
-        .photoLinks a {
           border-radius: 999px;
           padding: 9px 12px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          text-decoration: none;
-          font-size: 12px;
+          margin-bottom: 14px;
+          font-size: 13px;
           font-weight: 900;
         }
 
-        .qrPreview {
-          display: grid;
-          grid-template-columns: 150px 1fr;
-          gap: 16px;
-          align-items: center;
-          padding: 18px;
-          border-radius: 22px;
-          background: #f3ead8;
-          margin-top: 18px;
+        .detailStatus.protected {
+          background: rgba(36,95,57,.12);
+          color: #245f39;
         }
 
-        .fakeQr {
-          width: 150px;
-          height: 150px;
+        .detailStatus.attention {
+          background: rgba(178,129,45,.14);
+          color: #8a6739;
+        }
+
+        .detailStatus.critical {
+          background: rgba(139,45,32,.12);
+          color: #8b2d20;
+        }
+
+        .modal h2 {
+          margin: 0;
+          color: #0b1b12;
+          font-size: 38px;
+          letter-spacing: -1px;
+        }
+
+        .detailSubtitle {
+          margin: 8px 0 18px;
+          color: #627064;
+          font-weight: 900;
+        }
+
+        .detailGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          margin: 18px 0;
+        }
+
+        .detailGrid div {
           border-radius: 18px;
+          padding: 14px;
+          background: #f2ead9;
+        }
+
+        .detailGrid small,
+        .tagRows small,
+        .fieldLabel {
+          display: block;
+          color: #8a6739;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .09em;
+          margin-bottom: 5px;
+        }
+
+        .detailGrid b,
+        .tagRows b {
+          display: block;
+          color: #102017;
+          font-size: 15px;
+          line-height: 1.35;
+        }
+
+        .warningNote {
+          border-radius: 18px;
+          padding: 14px;
+          margin: 0 0 18px;
+          background: rgba(139,45,32,.08);
+          border: 1px solid rgba(139,45,32,.12);
+        }
+
+        .warningNote b {
+          color: #8b2d20;
+        }
+
+        .warningNote p {
+          margin: 6px 0 0;
+          color: #6f3c32;
+          font-weight: 800;
+          line-height: 1.5;
+        }
+
+        .actionGrid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+        }
+
+        .actionGrid button,
+        .primaryBtn {
+          border: 0;
+          border-radius: 16px;
+          padding: 14px;
+          color: white;
+          background: linear-gradient(135deg, #244536, #10281f);
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .actionGrid button:disabled,
+        .primaryBtn:disabled {
+          opacity: .55;
+          cursor: not-allowed;
+        }
+
+        .qrModal {
+          width: min(460px, 100%);
+        }
+
+        .tagCard {
+          border-radius: 28px;
+          padding: 22px;
+          text-align: center;
+          background:
+            radial-gradient(circle at 50% 0%, rgba(255, 222, 145, .38), transparent 30%),
+            #f8f1df;
+          border: 1px solid rgba(81, 61, 32, .12);
+        }
+
+        .tagCard p {
+          margin: 0 0 16px;
+          color: #0b1b12;
+          font-size: 18px;
+          font-weight: 900;
+          letter-spacing: .10em;
+        }
+
+        .tagRows {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-bottom: 18px;
+          text-align: left;
+        }
+
+        .tagRows div {
+          border-radius: 16px;
+          padding: 12px;
+          background: rgba(255,253,246,.78);
+        }
+
+        .qrBox {
+          display: inline-grid;
+          place-items: center;
+          padding: 14px;
+          border-radius: 22px;
+          background: white;
+          box-shadow: 0 14px 34px rgba(79, 55, 20, .12);
+        }
+
+        .qrPath {
+          display: block;
+          margin-top: 12px;
+          color: #687467;
+          font-weight: 900;
+          word-break: break-word;
+        }
+
+        .fieldLabel {
+          display: grid;
+          gap: 8px;
+          margin: 18px 0;
+        }
+
+        .fieldLabel input {
+          width: 100%;
+          border: 1px solid rgba(36,69,54,.16);
+          border-radius: 16px;
+          padding: 14px;
+          background: rgba(255,253,246,.92);
+          color: #102017;
+          outline: none;
+          font-size: 16px;
+          font-weight: 900;
+          text-transform: none;
+          letter-spacing: 0;
+        }
+
+        .evidenceList {
+          display: grid;
+          gap: 12px;
+        }
+
+        .evidenceCard {
+          display: grid;
+          grid-template-columns: 130px 1fr;
+          gap: 14px;
+          border-radius: 22px;
+          padding: 12px;
+          background: #f2ead9;
+          align-items: center;
+        }
+
+        .evidenceCard img,
+        .imageFallback {
+          width: 130px;
+          height: 100px;
+          border-radius: 18px;
+          object-fit: cover;
+          background: rgba(36,69,54,.10);
           display: grid;
           place-items: center;
-          background:
-            linear-gradient(90deg, #10281f 12px, transparent 12px) 0 0 / 30px 30px,
-            linear-gradient(#10281f 12px, transparent 12px) 0 0 / 30px 30px,
-            white;
-          border: 8px solid white;
+          font-size: 36px;
         }
 
-        .fakeQr span {
-          border-radius: 999px;
-          padding: 8px 12px;
-          background: white;
+        .evidenceCard b {
+          display: block;
+          color: #102017;
+          font-size: 18px;
+        }
+
+        .evidenceCard small {
+          display: block;
+          margin-top: 4px;
+          color: #8a6739;
+          font-weight: 900;
+        }
+
+        .evidenceCard p {
+          margin: 8px 0 0;
+          color: #627064;
+          font-weight: 800;
+          line-height: 1.5;
+        }
+
+        .evidenceCard a {
+          display: inline-flex;
+          margin-top: 8px;
           color: #244536;
           font-weight: 900;
         }
 
-        .qrPreview strong {
-          display: block;
-          color: #101a14;
-          font-size: 20px;
+        .gpsIcon {
+          display: grid;
+          place-items: center;
+          width: 74px;
+          height: 74px;
+          border-radius: 24px;
+          background: rgba(36,69,54,.10);
+          font-size: 36px;
         }
 
-        .qrPreview p {
-          margin: 8px 0;
+        .gpsCard,
+        .healthCard {
+          grid-template-columns: 74px 1fr;
         }
 
-        .qrPreview small {
-          display: block;
-          color: #6b6b62;
-          word-break: break-all;
-          font-weight: 800;
+        .severity {
+          display: inline-flex;
+          margin-top: 8px;
+          border-radius: 999px;
+          padding: 7px 10px;
+          color: #8b2d20;
+          background: rgba(139,45,32,.10);
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
         }
 
         @media (max-width: 1180px) {
-          .stats,
-          .stageLine,
-          .cards,
-          .moneyGrid,
-          .actions,
-          .modalGrid {
-            grid-template-columns: repeat(2, 1fr);
+          .hero,
+          .forestGrid,
+          .treeSections {
+            grid-template-columns: 1fr;
           }
 
-          .layout {
-            grid-template-columns: 1fr;
+          .heroStats {
+            grid-template-columns: repeat(4, 1fr);
           }
         }
 
@@ -1233,254 +1657,34 @@ export default function MyTreesPage() {
             padding: 18px;
           }
 
-          .hero h1 {
-            font-size: 34px;
+          h1 {
+            font-size: 38px;
           }
 
-          .stats,
-          .stageLine,
-          .cards,
-          .moneyGrid,
-          .actions,
-          .modalActions,
-          .qrPreview,
-          .modalGrid {
+          .heroStats,
+          .forestCounts,
+          .forestDetailHead,
+          .detailGrid,
+          .actionGrid,
+          .tagRows,
+          .evidenceCard,
+          .gpsCard,
+          .healthCard {
+            display: grid;
             grid-template-columns: 1fr;
           }
 
-          .detailTop {
-            flex-direction: column;
+          .forestDetailHead {
+            align-items: start;
           }
 
-          .identityBox {
+          .evidenceCard img,
+          .imageFallback {
             width: 100%;
-          }
-
-          .fakeQr {
-            width: 100%;
+            height: 180px;
           }
         }
       `}</style>
-        </>
-      )}
     </main>
   );
-}
-
-function Stat({
-  label,
-  value,
-  good,
-}: {
-  label: string;
-  value: string;
-  good?: boolean;
-}) {
-  return (
-    <div className={`stat ${good ? "good" : ""}`}>
-      <p>{label}</p>
-      <h3>{value}</h3>
-    </div>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="mini">
-      <span>{label}</span>
-      <strong>{value || "—"}</strong>
-    </div>
-  );
-}
-
-function Money({
-  label,
-  value,
-  strong,
-  good,
-  percent,
-}: {
-  label: string;
-  value: number;
-  strong?: boolean;
-  good?: boolean;
-  percent?: boolean;
-}) {
-  return (
-    <div className={`money ${strong ? "strong" : ""} ${good ? "good" : ""}`}>
-      <span>{label}</span>
-      <strong>{percent ? `${Number(value || 0).toFixed(2)}%` : peso(value)}</strong>
-    </div>
-  );
-}
-
-function ModalActions({ close }: { close: () => void }) {
-  return (
-    <div className="modalActions">
-      <button onClick={close}>Close</button>
-      <button className="primary" onClick={close}>
-        Done
-      </button>
-    </div>
-  );
-}
-
-function normalizeStage(stage: any) {
-  const value = String(stage || "").trim().toLowerCase();
-
-  if (!value) return "Seedling";
-  if (value.includes("harvest")) return "Harvest Ready";
-  if (value.includes("mature")) return "Mature Tree";
-  if (value.includes("young")) return "Young Tree";
-  if (value.includes("sapling")) return "Sapling";
-  if (value.includes("seed")) return "Seedling";
-
-  return String(stage || "Seedling");
-}
-
-function getPurchasePrice(tree: TreeRow) {
-  return Number(
-    tree.purchase_price ||
-      tree.price ||
-      tree.tree_price ||
-      tree.base_price ||
-      tree.amount_paid ||
-      0
-  );
-}
-
-function getOperationCost(tree: TreeRow) {
-  return Number(
-    tree.operation_cost ||
-      tree.total_operation_cost ||
-      tree.care_operation_cost ||
-      tree.service_cost ||
-      0
-  );
-}
-
-function getCareProgramCost(tree: TreeRow) {
-  return Number(
-    tree.care_program_total_cost ||
-      tree.care_program_cost ||
-      tree.care_program_price ||
-      tree.subscription_total ||
-      0
-  );
-}
-
-function getVerificationCost(tree: TreeRow) {
-  return Number(
-    tree.verification_cost ||
-      tree.gps_fee ||
-      tree.photo_fee ||
-      tree.gps_photo_fee ||
-      0
-  );
-}
-
-function getTotalSpent(tree: TreeRow) {
-  return (
-    getPurchasePrice(tree) +
-    getOperationCost(tree) +
-    getCareProgramCost(tree) +
-    getVerificationCost(tree)
-  );
-}
-
-function getEstimatedValue(tree: TreeRow) {
-  const explicit = Number(
-    tree.estimated_value ||
-      tree.estimated_sell_value ||
-      tree.market_value ||
-      tree.current_value ||
-      tree.valuation_amount ||
-      0
-  );
-
-  if (explicit > 0) return explicit;
-
-  const purchase = getPurchasePrice(tree);
-  const stage = normalizeStage(tree.stage || tree.growth_stage).toLowerCase();
-
-  if (stage === "harvest ready") return purchase * 4;
-  if (stage === "mature tree") return purchase * 3;
-  if (stage === "young tree") return purchase * 2;
-  if (stage === "sapling") return purchase * 1.35;
-
-  return purchase;
-}
-
-function getTreeMath(tree: TreeRow) {
-  const totalSpent = getTotalSpent(tree);
-  const estimatedValue = getEstimatedValue(tree);
-  const profit = estimatedValue - totalSpent;
-  const roi = totalSpent > 0 ? (profit / totalSpent) * 100 : 0;
-
-  return { totalSpent, estimatedValue, profit, roi };
-}
-
-function getAgeText(tree: TreeRow) {
-  const plantedDate = tree.planted_at || tree.planted_date || tree.created_at;
-
-  if (!plantedDate) return "—";
-
-  const start = new Date(plantedDate);
-  const now = new Date();
-
-  if (Number.isNaN(start.getTime())) return "—";
-
-  const diffMs = now.getTime() - start.getTime();
-  const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-
-  if (diffDays < 30) return `${diffDays} day${diffDays === 1 ? "" : "s"}`;
-  if (diffDays < 365) {
-    const months = Math.floor(diffDays / 30);
-    return `${months} month${months === 1 ? "" : "s"}`;
-  }
-
-  const years = Math.floor(diffDays / 365);
-  const months = Math.floor((diffDays % 365) / 30);
-
-  if (months <= 0) return `${years} year${years === 1 ? "" : "s"}`;
-
-  return `${years}y ${months}m`;
-}
-
-function formatDate(value: any) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return date.toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatDateTime(value: any) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return date.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function peso(value: any) {
-  const amount = Number(value || 0);
-
-  return new Intl.NumberFormat("en-PH", {
-    style: "currency",
-    currency: "PHP",
-    maximumFractionDigits: 0,
-  }).format(amount);
 }

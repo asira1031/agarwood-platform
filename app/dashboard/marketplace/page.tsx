@@ -957,8 +957,9 @@ export default function MarketplacePage() {
     if (!wallet) return setMessage("Wallet not found.");
     if (purchaseProcessing) return;
 
-    const productType = getProductType(product);
     const category = normalizeSupplyCategory(product.category);
+    const isTreePurchase = isTreePurchaseProduct(product);
+    const isSupplyPurchase = !isTreePurchase && category !== "Tree Care Programs";
     const price = Number(product.price || 0);
     const totalPrice = getSelectedPurchaseTotal(product);
     const currentBalance = Number(wallet.balance || 0);
@@ -976,14 +977,14 @@ export default function MarketplacePage() {
     let previousBalance: number | null = null;
 
     try {
-      if (isTreePurchaseProduct(product)) {
+      if (isTreePurchase) {
         await buyTreesWithForest(product);
         setMessage(
           `${product.name || "Tree"} purchased. ${getSelectedTreeQuantity(product)} tree(s) added to ${getSelectedForestLabel()}, wallet deducted, wallet transaction recorded, and platform fee ${peso(getSelectedPlatformFeeAmount(product))} posted.`
         );
       }
 
-      if (productType === "SUPPLY" && category !== "Tree Care Programs") {
+      if (isSupplyPurchase) {
         previousBalance = await deductWallet(totalPrice);
         await addInventoryStock(product, 1);
         await createMarketplaceWalletTransaction(product, totalPrice, "SUPPLY");
