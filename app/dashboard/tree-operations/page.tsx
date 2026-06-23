@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type TreeRow = Record<string, any>;
+type CareScope = "FOREST" | "TREE";
 
 type Profile = {
   id: string;
   full_name: string | null;
+  display_name?: string | null;
   email: string | null;
 };
 
@@ -16,6 +17,46 @@ type Wallet = {
   id: string;
   profile_id: string;
   balance: number | null;
+};
+
+type ForestSummary = {
+  group_id: string;
+  customer_profile_id: string | null;
+  forest_name: string | null;
+  total_trees: number | null;
+  protected_count: number | null;
+  attention_count: number | null;
+  critical_count: number | null;
+  status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type TreeDetail = {
+  tree_id: string;
+  customer_profile_id: string | null;
+  group_id: string | null;
+  forest_name: string | null;
+  customer_tree_name: string | null;
+  custom_name: string | null;
+  display_name: string | null;
+  tree_code: string | null;
+  tree_qr_url: string | null;
+  purchase_price: number | null;
+  care_status: string | null;
+  care_started_at: string | null;
+  care_expires_at: string | null;
+  alert_status: string | null;
+  alert_reason: string | null;
+  valuation_status: string | null;
+  official_valuation_amount: number | null;
+  latest_photo_at: string | null;
+  latest_gps_at: string | null;
+  latest_health_at: string | null;
+  latest_health_status: string | null;
+  latest_issue_summary: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 type InventoryItem = {
@@ -34,8 +75,10 @@ type InventoryItem = {
 
 type OperationRequest = {
   id: string;
-  profile_id: string;
+  profile_id?: string | null;
+  customer_profile_id?: string | null;
   tree_id: string | null;
+  group_id?: string | null;
   operation_type: string | null;
   operation_fee: number | null;
   platform_fee: number | null;
@@ -87,6 +130,7 @@ type OperationItem = {
   category: "Service" | "Inventory Use" | "Care Program";
   price: number;
   description: string;
+  icon: string;
   requiredInventoryCategory?: string;
   requiredQty?: number;
   duration?: string;
@@ -100,25 +144,29 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Photo Update",
     category: "Service",
     price: 100,
-    description: "Request a real caretaker photo update for the selected tree.",
+    icon: "📸",
+    description: "Request a real caretaker photo update for the selected seedling or forest.",
   },
   {
     name: "GPS Verification",
     category: "Service",
     price: 80,
-    description: "Request field verification of QR tag and plantation GPS location.",
+    icon: "📍",
+    description: "Request QR tag and plantation GPS verification from the field team.",
   },
   {
     name: "Watering Service",
     category: "Service",
     price: 150,
+    icon: "💧",
     description: "Request watering support from the plantation operation team.",
   },
   {
     name: "Apply Fertilizer",
     category: "Inventory Use",
     price: 45,
-    description: "Request fertilizer application for the selected tree.",
+    icon: "🌿",
+    description: "Request fertilizer application using your available inventory.",
     requiredInventoryCategory: "Fertilizer",
     requiredQty: 1,
   },
@@ -126,6 +174,7 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Apply Fungicide",
     category: "Inventory Use",
     price: 45,
+    icon: "🛡️",
     description: "Request fungicide application for fungal prevention or treatment.",
     requiredInventoryCategory: "Fungicide",
     requiredQty: 1,
@@ -134,226 +183,136 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Apply Insecticide",
     category: "Inventory Use",
     price: 45,
+    icon: "🐞",
     description: "Request insecticide application when field team confirms need.",
     requiredInventoryCategory: "Insecticide",
     requiredQty: 1,
   },
 ];
 
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not set";
+
+  return new Date(value).toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function normalize(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .toUpperCase();
+}
+
+function statusClass(value: string | null | undefined) {
+  return String(value || "pending").toLowerCase().replaceAll(" ", "_");
+}
+
+function getForestName(forest: ForestSummary | null | undefined) {
+  return forest?.forest_name || "Unnamed Forest";
+}
+
+function getTreeName(tree: TreeDetail | null | undefined) {
+  return tree?.custom_name || tree?.customer_tree_name || tree?.display_name || "Seedling";
+}
+
+function alertClass(value: string | null | undefined) {
+  const status = normalize(value);
+
+  if (status === "PROTECTED") return "protected";
+  if (status === "CRITICAL") return "critical";
+
+  return "attention";
+}
+
+function alertIcon(value: string | null | undefined) {
+  const status = normalize(value);
+
+  if (status === "PROTECTED") return "🟢";
+  if (status === "CRITICAL") return "🔴";
+
+  return "🟡";
+}
+
+function getProgramDuration(program: MarketplaceProduct) {
+  const name = String(program.name || "").toLowerCase();
+  const unit = String(program.unit || "").toLowerCase();
+
+  if (name.includes("1 week") || unit.includes("week")) return "1 Week";
+  if (name.includes("premium")) return "Monthly";
+  if (name.includes("standard")) return "Monthly";
+
+  return program.unit || "Program";
+}
+
+function getProgramCoverage(program: MarketplaceProduct) {
+  const name = String(program.name || "").toLowerCase();
+
+  if (name.includes("premium")) {
+    return "Premium monthly protection with advanced pest control, health booster, plantation monitoring, and priority support.";
+  }
+
+  if (name.includes("standard")) {
+    return "Standard monthly protection with fertilizer, nutrients, fungicide protection, pest control, monitoring, and health assessment.";
+  }
+
+  return "Weekly care coverage with organic fertilizer, tree nutrients, basic tree health check, and growth monitoring.";
+}
+
+function getNextRenewalDate(duration: string) {
+  const nextDate = new Date();
+  const normalized = String(duration || "").toLowerCase();
+
+  if (normalized.includes("week")) {
+    nextDate.setDate(nextDate.getDate() + 7);
+  } else {
+    nextDate.setMonth(nextDate.getMonth() + 1);
+  }
+
+  return nextDate.toISOString();
+}
+
+function getOperationIcon(item: OperationItem) {
+  return item.icon || (item.category === "Care Program" ? "🛡️" : "🌿");
+}
+
 export default function TreeOperationsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [trees, setTrees] = useState<TreeRow[]>([]);
+  const [forests, setForests] = useState<ForestSummary[]>([]);
+  const [trees, setTrees] = useState<TreeDetail[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [requests, setRequests] = useState<OperationRequest[]>([]);
   const [carePrograms, setCarePrograms] = useState<MarketplaceProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
+  const [selectedForestId, setSelectedForestId] = useState("");
+  const [scope, setScope] = useState<CareScope>("TREE");
   const [selectedTreeId, setSelectedTreeId] = useState("");
   const [selectedOperation, setSelectedOperation] = useState("Photo Update");
   const [note, setNote] = useState("");
   const [processing, setProcessing] = useState(false);
   const [autoRenewProcessing, setAutoRenewProcessing] = useState(false);
 
-  async function createAutoRenewWalletTransaction(
-    currentProfile: Profile,
-    walletId: string | null,
-    amount: number,
-    description: string
-  ) {
-    const referenceNo = `AUTO-RENEW-${Date.now()}`;
-
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: currentProfile.id,
-      transaction_type: "DEBIT",
-      amount: Math.abs(amount),
-      reference_no: referenceNo,
-      description,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
-  async function createAutoRenewLog(
-    subscription: CareProgramSubscription,
-    amount: number,
-    previousRenewalDate: string | null,
-    nextRenewalDate: string,
-    status: "COMPLETED" | "FAILED",
-    notes: string
-  ) {
-    const payload = {
-      profile_id: subscription.profile_id,
-      tree_id: subscription.tree_id,
-      subscription_id: subscription.id,
-      care_program_name: subscription.care_program_name,
-      care_program_price: amount,
-      previous_renewal_date: previousRenewalDate,
-      next_renewal_date: nextRenewalDate,
-      status,
-      notes,
-    };
-
-    await supabase.from("care_program_renewal_logs").insert(payload);
-  }
-
-  async function runAutoRenewEngine(
-    currentProfile: Profile,
-    currentWallet: Wallet | null
-  ) {
-    if (!currentWallet) {
-      setMessage("Wallet not found. Auto-renew was not processed.");
-      return;
-    }
-
-    const today = new Date().toISOString();
-
-    const { data: dueSubscriptions, error: subscriptionError } = await supabase
-      .from("care_program_subscriptions")
-      .select(
-        "id, profile_id, tree_id, care_program_name, care_program_price, care_program_duration, status, auto_renew_enabled, started_at, next_renewal_date, created_at"
-      )
-      .eq("profile_id", currentProfile.id)
-      .eq("status", "ACTIVE")
-      .eq("auto_renew_enabled", true)
-      .lte("next_renewal_date", today);
-
-    if (subscriptionError) {
-      console.warn("Auto-renew subscription check error:", subscriptionError.message);
-      setMessage(subscriptionError.message);
-      return;
-    }
-
-    const subscriptions = (dueSubscriptions || []) as CareProgramSubscription[];
-
-    if (subscriptions.length === 0) {
-      setMessage("No due auto-renew subscriptions found.");
-      return;
-    }
-
-    let runningBalance = Number(currentWallet.balance || 0);
-    let renewedCount = 0;
-
-    for (const subscription of subscriptions) {
-      const amount = Number(subscription.care_program_price || 0);
-      const previousBalance = runningBalance;
-      const nextRenewalDate = getNextRenewalDate(
-        subscription.care_program_duration || "Program"
-      );
-
-      if (amount <= 0) continue;
-      if (runningBalance < amount) continue;
-
-      const deductedBalance = runningBalance - amount;
-
-      const { error: walletError } = await supabase
-        .from("wallets")
-        .update({ balance: deductedBalance })
-        .eq("id", currentWallet.id)
-        .eq("profile_id", currentProfile.id);
-
-      if (walletError) {
-        console.warn("Auto-renew wallet deduction error:", walletError.message);
-        continue;
-      }
-
-      runningBalance = deductedBalance;
-
-      try {
-        await createAutoRenewWalletTransaction(
-          currentProfile,
-          currentWallet.id,
-          amount,
-          `Auto-renew: ${subscription.care_program_name || "Tree Care Program"}`
-        );
-      } catch (error: any) {
-        await supabase
-          .from("wallets")
-          .update({ balance: previousBalance })
-          .eq("id", currentWallet.id)
-          .eq("profile_id", currentProfile.id);
-
-        runningBalance = previousBalance;
-        console.warn(error?.message || "Auto-renew transaction log failed.");
-        continue;
-      }
-
-      const { error: updateSubscriptionError } = await supabase
-        .from("care_program_subscriptions")
-        .update({
-          next_renewal_date: nextRenewalDate,
-          auto_renew_enabled: true,
-          status: "ACTIVE",
-        })
-        .eq("id", subscription.id)
-        .eq("profile_id", currentProfile.id);
-
-      if (updateSubscriptionError) {
-        console.warn(
-          "Auto-renew subscription update error:",
-          updateSubscriptionError.message
-        );
-        continue;
-      }
-
-      await createAutoRenewLog(
-        subscription,
-        amount,
-        subscription.next_renewal_date,
-        nextRenewalDate,
-        "COMPLETED",
-        "Manual auto-renew completed from Tree Operations."
-      );
-
-      renewedCount += 1;
-    }
-
-    if (renewedCount > 0) {
-      setWallet({ ...currentWallet, balance: runningBalance });
-      setMessage(`Auto-renew completed for ${renewedCount} care program subscription(s).`);
-    } else {
-      setMessage("No subscriptions were renewed. Check due dates or wallet balance.");
-    }
-  }
-
-  async function handleManualAutoRenew() {
-    setMessage("");
-
-    if (!profile) {
-      setMessage("Profile not found.");
-      return;
-    }
-
-    if (!wallet) {
-      setMessage("Wallet not found. Auto-renew was not processed.");
-      return;
-    }
-
-    setAutoRenewProcessing(true);
-
-    try {
-      await runAutoRenewEngine(profile, wallet);
-    } catch (error: any) {
-      setMessage(error?.message || "Auto-renew failed.");
-    } finally {
-      setAutoRenewProcessing(false);
-    }
-  }
-
-  async function loadData() {
-    setLoading(true);
-    setMessage("");
-
+  async function resolveProfile() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
       window.location.href = "/login";
-      return;
+      return null;
     }
 
     const email = user.email?.trim() || "";
@@ -361,138 +320,116 @@ export default function TreeOperationsPage() {
 
     const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
-      .select("id, full_name, email")
+      .select("id, full_name, display_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (profileByIdError) {
-      setMessage(profileByIdError.message);
-      setLoading(false);
-      return;
-    }
+    if (profileByIdError) throw profileByIdError;
 
-    const { data: profileByExactEmail, error: profileByExactEmailError } = await supabase
+    const { data: profileByEmail, error: profileByEmailError } = await supabase
       .from("profiles")
-      .select("id, full_name, email")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (profileByExactEmailError) {
-      setMessage(profileByExactEmailError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: profileByLowerEmail, error: profileByLowerEmailError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email")
+      .select("id, full_name, display_name, email")
       .eq("email", normalizedEmail)
       .maybeSingle();
 
-    if (profileByLowerEmailError) {
-      setMessage(profileByLowerEmailError.message);
-      setLoading(false);
-      return;
-    }
+    if (profileByEmailError) throw profileByEmailError;
 
-    const { data: profileByEmailFallback, error: profileByEmailFallbackError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email")
-      .ilike("email", email)
-      .maybeSingle();
+    return (profileById || profileByEmail) as Profile | null;
+  }
 
-    if (profileByEmailFallbackError) {
-      setMessage(profileByEmailFallbackError.message);
-      setLoading(false);
-      return;
-    }
+  async function loadData(keepForestId?: string, keepTreeId?: string) {
+    setLoading(true);
+    setMessage("");
 
-    const currentProfile =
-      profileById ||
-      profileByExactEmail ||
-      profileByLowerEmail ||
-      profileByEmailFallback;
+    try {
+      const currentProfile = await resolveProfile();
 
-    if (!currentProfile) {
-      setMessage("Profile not found.");
-      setLoading(false);
-      return;
-    }
+      if (!currentProfile) {
+        setMessage("Profile not found.");
+        setLoading(false);
+        return;
+      }
 
-    setProfile(currentProfile);
+      setProfile(currentProfile);
 
-    const { data: walletRows } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance, created_at")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const { data: treeData, error: treeError } = await supabase
-      .from("trees")
-      .select("*")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
-
-    if (treeError) {
-      setMessage(treeError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: inventoryData, error: inventoryError } = await supabase
-      .from("inventory")
-      .select("*")
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
-
-    if (inventoryError) {
-      console.warn("Inventory load error:", inventoryError.message);
-    }
-
-    const { data: requestData } = await supabase
-      .from("tree_operation_requests")
-      .select(
-        "id, profile_id, tree_id, operation_type, operation_fee, platform_fee, total_amount, notes, status, created_at, care_program_name, care_program_price, care_program_duration, care_program_status, next_renewal_date, auto_renew_enabled"
-      )
-      .eq("profile_id", currentProfile.id)
-      .order("created_at", { ascending: false });
-
-    const { data: programData, error: programError } = await supabase
-      .from("marketplace_products")
-      .select(
-        "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at"
-      )
-      .eq("category", "Tree Care Programs")
-      .eq("status", "ACTIVE")
-      .order("price", { ascending: true });
-
-    if (programError) {
-      console.warn("Care program load error:", programError.message);
-    }
-
-    const ownedTrees = treeData || [];
-    let currentWallet = (walletRows?.[0] as Wallet) || null;
-
-
-    if (currentWallet) {
-      const { data: refreshedWalletRows } = await supabase
+      const { data: walletRows } = await supabase
         .from("wallets")
         .select("id, profile_id, balance, created_at")
         .eq("profile_id", currentProfile.id)
         .order("created_at", { ascending: false })
         .limit(1);
 
-      currentWallet = (refreshedWalletRows?.[0] as Wallet) || currentWallet;
-    }
+      const { data: forestRows, error: forestError } = await supabase
+        .from("v_customer_forest_view")
+        .select("*")
+        .eq("customer_profile_id", currentProfile.id)
+        .order("created_at", { ascending: true });
 
-    setWallet(currentWallet);
-    setTrees(ownedTrees);
-    setInventory(inventoryError ? [] : ((inventoryData as InventoryItem[]) || []));
-    setRequests((requestData as OperationRequest[]) || []);
-    setCarePrograms((programData as MarketplaceProduct[]) || []);
-    setSelectedTreeId((current) => current || ownedTrees[0]?.id || "");
-    setLoading(false);
+      if (forestError) throw forestError;
+
+      const { data: treeRows, error: treeError } = await supabase
+        .from("v_customer_tree_detail")
+        .select("*")
+        .eq("customer_profile_id", currentProfile.id)
+        .order("created_at", { ascending: true });
+
+      if (treeError) throw treeError;
+
+      const { data: inventoryRows, error: inventoryError } = await supabase
+        .from("inventory")
+        .select("*")
+        .eq("profile_id", currentProfile.id)
+        .order("created_at", { ascending: false });
+
+      if (inventoryError) console.warn("Inventory load error:", inventoryError.message);
+
+      const { data: requestRows } = await supabase
+        .from("tree_operation_requests")
+        .select(
+          "id, profile_id, customer_profile_id, tree_id, group_id, operation_type, operation_fee, platform_fee, total_amount, notes, status, created_at, care_program_name, care_program_price, care_program_duration, care_program_status, next_renewal_date, auto_renew_enabled"
+        )
+        .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
+        .order("created_at", { ascending: false });
+
+      const { data: programRows, error: programError } = await supabase
+        .from("marketplace_products")
+        .select(
+          "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at"
+        )
+        .eq("category", "Tree Care Programs")
+        .eq("status", "ACTIVE")
+        .order("price", { ascending: true });
+
+      if (programError) console.warn("Care program load error:", programError.message);
+
+      const nextForests = (forestRows || []) as ForestSummary[];
+      const nextTrees = (treeRows || []) as TreeDetail[];
+      const nextForestId =
+        keepForestId && nextForests.some((forest) => forest.group_id === keepForestId)
+          ? keepForestId
+          : nextForests[0]?.group_id || "";
+
+      const forestTrees = nextTrees.filter((tree) => tree.group_id === nextForestId);
+      const nextTreeId =
+        keepTreeId && forestTrees.some((tree) => tree.tree_id === keepTreeId)
+          ? keepTreeId
+          : forestTrees[0]?.tree_id || "";
+
+      setWallet((walletRows?.[0] as Wallet) || null);
+      setForests(nextForests);
+      setTrees(nextTrees);
+      setInventory(inventoryError ? [] : ((inventoryRows || []) as InventoryItem[]));
+      setRequests((requestRows || []) as OperationRequest[]);
+      setCarePrograms((programRows || []) as MarketplaceProduct[]);
+      setSelectedForestId(nextForestId);
+      setSelectedTreeId(nextTreeId);
+
+      if (!nextTreeId && nextForestId) setScope("FOREST");
+      setLoading(false);
+    } catch (error: any) {
+      setMessage(error?.message || "Forest Care failed to load.");
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -505,6 +442,7 @@ export default function TreeOperationsPage() {
         name: program.name || "Tree Care Program",
         category: "Care Program",
         price: Number(program.price || 0),
+        icon: program.icon || "🛡️",
         description: program.note || "Marketplace Tree Care Program.",
         duration: getProgramDuration(program),
         coverage: getProgramCoverage(program),
@@ -518,9 +456,17 @@ export default function TreeOperationsPage() {
     return [...BASE_OPERATIONS, ...careProgramOperations];
   }, [careProgramOperations]);
 
+  const selectedForest = useMemo(() => {
+    return forests.find((forest) => forest.group_id === selectedForestId) || null;
+  }, [forests, selectedForestId]);
+
+  const selectedForestTrees = useMemo(() => {
+    return trees.filter((tree) => tree.group_id === selectedForestId);
+  }, [trees, selectedForestId]);
+
   const selectedTree = useMemo(() => {
-    return trees.find((tree) => tree.id === selectedTreeId) || null;
-  }, [trees, selectedTreeId]);
+    return selectedForestTrees.find((tree) => tree.tree_id === selectedTreeId) || null;
+  }, [selectedForestTrees, selectedTreeId]);
 
   const operation = useMemo<OperationItem | undefined>(() => {
     return operations.find((item) => item.name === selectedOperation) || operations[0];
@@ -552,157 +498,72 @@ export default function TreeOperationsPage() {
   const baseOperationFee = Number(operation?.price || 0);
   const platformFeePreview = operation?.category === "Care Program" ? 0 : baseOperationFee * 0.02;
   const totalPreview = baseOperationFee + platformFeePreview;
+  const targetLabel =
+    scope === "FOREST"
+      ? getForestName(selectedForest)
+      : selectedTree
+      ? getTreeName(selectedTree)
+      : "Select Seedling";
 
   const activeSameRequest = useMemo(() => {
-    if (!selectedTree || !operation) return null;
+    if (!operation || !selectedForest) return null;
+    if (scope === "TREE" && !selectedTree) return null;
 
     const activeStatuses = ["PENDING", "ASSIGNED", "IN_PROGRESS", "PROCESSING"];
     const operationName = String(operation.name || "").trim().toUpperCase();
 
     return (
       requests.find((request) => {
-        const requestTreeId = String(request.tree_id || "");
-        const requestName = String(
-          request.care_program_name || request.operation_type || ""
-        )
+        const requestName = String(request.care_program_name || request.operation_type || "")
           .trim()
           .toUpperCase();
         const requestStatus = String(request.status || "PENDING").toUpperCase();
 
-        return (
-          requestTreeId === String(selectedTree.id) &&
-          requestName === operationName &&
-          activeStatuses.includes(requestStatus)
-        );
+        if (!activeStatuses.includes(requestStatus)) return false;
+        if (requestName !== operationName) return false;
+
+        if (scope === "FOREST") {
+          return String(request.group_id || "") === String(selectedForest.group_id || "") && !request.tree_id;
+        }
+
+        return String(request.tree_id || "") === String(selectedTree?.tree_id || "");
       }) || null
     );
-  }, [requests, selectedTree, operation]);
+  }, [requests, selectedForest, selectedTree, operation, scope]);
 
   const hasActiveSameRequest = !!activeSameRequest;
 
   const stats = useMemo(() => {
-    const pending = requests.filter(
-      (item) => (item.status || "PENDING").toUpperCase() === "PENDING"
-    ).length;
-    const completed = requests.filter(
-      (item) => (item.status || "").toUpperCase() === "COMPLETED"
-    ).length;
+    const pending = requests.filter((item) => normalize(item.status || "PENDING") === "PENDING").length;
+    const completed = requests.filter((item) => normalize(item.status || "") === "COMPLETED").length;
     const totalSpent = requests
-      .filter((item) =>
-        ["APPROVED", "COMPLETED", "PENDING"].includes((item.status || "").toUpperCase())
-      )
-      .reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+      .filter((item) => ["APPROVED", "COMPLETED", "PENDING", "ASSIGNED"].includes(normalize(item.status || "")))
+      .reduce((sum, item) => sum + Number(item.total_amount || item.care_program_price || 0), 0);
 
     return {
-      ownedTrees: trees.length,
+      forests: forests.length,
+      trees: trees.length,
       pending,
       completed,
       totalSpent,
     };
-  }, [trees, requests]);
+  }, [forests, trees, requests]);
+
+  function handleSelectForest(forestId: string) {
+    const forestTrees = trees.filter((tree) => tree.group_id === forestId);
+
+    setSelectedForestId(forestId);
+    setSelectedTreeId(forestTrees[0]?.tree_id || "");
+
+    if (forestTrees.length === 0) setScope("FOREST");
+  }
 
   function handleChooseOperation(item: OperationItem) {
     setSelectedOperation(item.name);
-
-    if (item.category === "Care Program") {
-      setMessage(
-        `${item.name} selected. Step 10 creates a paid care program action. Wallet balance is checked, wallet is deducted, the request is saved, the selected tree is updated, a subscription record is created only when Subscribe is selected, then wallet transaction is recorded last.`
-      );
-      return;
-    }
-
     setMessage("");
   }
 
-  async function deductCareProgramWallet(amount: number) {
-    if (!wallet) throw new Error("Wallet not found.");
-
-    const currentBalance = Number(wallet.balance || 0);
-
-    if (amount <= 0) {
-      throw new Error("Invalid care program price.");
-    }
-
-    if (currentBalance < amount) {
-      throw new Error("Insufficient wallet balance.");
-    }
-
-    const newBalance = currentBalance - amount;
-
-    const { error } = await supabase
-      .from("wallets")
-      .update({ balance: newBalance })
-      .eq("id", wallet.id)
-      .eq("profile_id", wallet.profile_id);
-
-    if (error) throw error;
-
-    setWallet({ ...wallet, balance: newBalance });
-
-    return currentBalance;
-  }
-
-  async function restoreCareProgramWallet(previousBalance: number) {
-    if (!wallet) return;
-
-    await supabase
-      .from("wallets")
-      .update({ balance: previousBalance })
-      .eq("id", wallet.id)
-      .eq("profile_id", wallet.profile_id);
-
-    setWallet({ ...wallet, balance: previousBalance });
-  }
-
-  async function createCareProgramWalletTransaction(
-    amount: number,
-    actionLabel: string,
-    treeLabel: string
-  ) {
-    if (!profile) throw new Error("Profile not found.");
-
-    const description = `${actionLabel}: ${operation?.name || "Tree Care Program"} for ${treeLabel}`;
-    const referenceNo = `CARE-${Date.now()}`;
-
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: profile.id,
-      transaction_type: "DEBIT",
-      amount: Math.abs(amount),
-      reference_no: referenceNo,
-      description,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
-  async function createWalletTransactionLog(args: {
-    amount: number;
-    transactionType: string;
-    description: string;
-    referenceId?: string | null;
-    category?: string;
-  }) {
-    if (!profile) throw new Error("Profile not found.");
-
-    const isDebit = args.amount < 0;
-    const referenceNo = args.referenceId || `${args.transactionType}-${Date.now()}`;
-
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: profile.id,
-      transaction_type: isDebit ? "DEBIT" : "CREDIT",
-      amount: Math.abs(args.amount),
-      reference_no: referenceNo,
-      description: args.description,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
-  async function deductServiceWallet(amount: number) {
+  async function deductWallet(amount: number) {
     if (!wallet) throw new Error("Wallet not found.");
 
     const currentBalance = Number(wallet.balance || 0);
@@ -721,10 +582,11 @@ export default function TreeOperationsPage() {
     if (error) throw error;
 
     setWallet({ ...wallet, balance: newBalance });
+
     return currentBalance;
   }
 
-  async function restoreServiceWallet(previousBalance: number) {
+  async function restoreWallet(previousBalance: number) {
     if (!wallet) return;
 
     await supabase
@@ -734,6 +596,28 @@ export default function TreeOperationsPage() {
       .eq("profile_id", wallet.profile_id);
 
     setWallet({ ...wallet, balance: previousBalance });
+  }
+
+  async function createWalletTransactionLog(args: {
+    amount: number;
+    description: string;
+    referenceId?: string | null;
+  }) {
+    if (!profile) throw new Error("Profile not found.");
+
+    const referenceNo = args.referenceId || `FOREST-CARE-${Date.now()}`;
+
+    const { error } = await supabase.from("wallet_transactions").insert({
+      profile_id: profile.id,
+      transaction_type: "DEBIT",
+      amount: Math.abs(args.amount),
+      reference_no: referenceNo,
+      description: args.description,
+      status: "COMPLETED",
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
   }
 
   async function deductInventoryForOperation() {
@@ -776,30 +660,73 @@ export default function TreeOperationsPage() {
       .eq("id", snapshot.id);
   }
 
-  async function createServiceOperationRequest() {
+  function buildRequestPayload(args: {
+    totalAmount: number;
+    operationFee: number;
+    platformFee: number;
+    autoRenewEnabled?: boolean;
+    careProgramStatus?: string | null;
+    nextRenewalDate?: string | null;
+  }) {
+    if (!profile || !selectedForest || !operation) {
+      throw new Error("Missing profile, forest, or operation.");
+    }
+
+    const treeId = scope === "TREE" ? selectedTree?.tree_id || null : null;
+    const operationType = operation.name;
+    const isCareProgram = operation.category === "Care Program";
+
+    return {
+      profile_id: profile.id,
+      customer_profile_id: profile.id,
+      tree_id: treeId,
+      group_id: selectedForest.group_id,
+      request_type: isCareProgram ? "CARE_PROGRAM" : "TREE_OPERATION",
+      service_name: operationType,
+      operation_type: operationType,
+      operation_fee: args.operationFee,
+      platform_fee: args.platformFee,
+      total_amount: args.totalAmount,
+      amount: args.totalAmount,
+      notes:
+        note.trim() ||
+        `${operationType} requested for ${scope === "FOREST" ? "entire forest" : targetLabel} in ${getForestName(
+          selectedForest
+        )}.`,
+      status: "PENDING",
+      requested_at: new Date().toISOString(),
+      care_program_name: isCareProgram ? operation.name : null,
+      care_program_price: isCareProgram ? operation.price : null,
+      care_program_duration: isCareProgram ? operation.duration || "Program" : null,
+      care_program_status: isCareProgram ? args.careProgramStatus || "PENDING" : null,
+      next_renewal_date: isCareProgram ? args.nextRenewalDate || null : null,
+      auto_renew_enabled: isCareProgram ? !!args.autoRenewEnabled : false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  async function submitServiceRequest() {
     setMessage("");
 
     if (!profile) return setMessage("Profile not found.");
     if (!wallet) return setMessage("Wallet not found.");
-    if (!selectedTree) return setMessage("Please select a tree.");
-    if (!operation) return setMessage("Please choose a service.");
+    if (!selectedForest) return setMessage("Please select a forest.");
+    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
+    if (!operation) return setMessage("Please choose a care service.");
 
     if (operation.category === "Care Program") {
-      setMessage("Use Buy Once or Subscribe for Tree Care Programs.");
+      setMessage("Use Buy Once or Subscribe for Forest Protection Plans.");
       return;
     }
 
     if (hasActiveSameRequest) {
-      setMessage(
-        `${operation.name} already has an active request for this tree. Wait until it is completed before buying again.`
-      );
+      setMessage(`${operation.name} already has an active request for ${targetLabel}.`);
       return;
     }
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
-      setMessage(
-        `${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`
-      );
+      setMessage(`${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`);
       return;
     }
 
@@ -808,72 +735,60 @@ export default function TreeOperationsPage() {
     const operationFee = Number(operation.price || 0);
     const platformFee = operationFee * 0.02;
     const totalAmount = operationFee + platformFee;
-    const treeLabel = selectedTree.tree_code || selectedTree.id;
 
     let previousBalance: number | null = null;
     let inventorySnapshot: { id: string; previousQty: number } | null = null;
 
     try {
-      previousBalance = await deductServiceWallet(totalAmount);
+      previousBalance = await deductWallet(totalAmount);
       inventorySnapshot = await deductInventoryForOperation();
-
-      const requestPayload = {
-        profile_id: profile.id,
-        tree_id: selectedTree.id,
-        operation_type: operation.name,
-        operation_fee: operationFee,
-        platform_fee: platformFee,
-        total_amount: totalAmount,
-        notes: note.trim() || null,
-        status: "PENDING",
-      };
 
       const { data: createdRequest, error: requestError } = await supabase
         .from("tree_operation_requests")
-        .insert(requestPayload)
+        .insert(
+          buildRequestPayload({
+            totalAmount,
+            operationFee,
+            platformFee,
+          })
+        )
         .select("id")
         .single();
 
       if (requestError || !createdRequest) {
-        throw new Error(requestError?.message || "Operation request creation failed.");
+        throw new Error(requestError?.message || "Forest care request creation failed.");
       }
 
       await createWalletTransactionLog({
         amount: -Math.abs(totalAmount),
-        transactionType: "TREE_OPERATION",
-        category: operation.category === "Inventory Use" ? "TREE_OPERATION_INVENTORY" : "TREE_OPERATION_SERVICE",
-        description: `${operation.name} request for ${treeLabel}`,
+        description: `${operation.name} request for ${targetLabel}`,
         referenceId: createdRequest.id,
       });
 
       setNote("");
       setMessage(
-        `${operation.name} request created for ${treeLabel}. Wallet deducted, transaction recorded, and ${
-          operation.category === "Inventory Use" ? "inventory was deducted." : "request is waiting for admin assignment."
-        }`
+        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, and request is waiting for admin assignment.`
       );
 
-      await loadData();
+      await loadData(selectedForestId, selectedTreeId);
     } catch (error: any) {
-      if (previousBalance !== null) await restoreServiceWallet(previousBalance);
+      if (previousBalance !== null) await restoreWallet(previousBalance);
       await restoreInventory(inventorySnapshot);
-      setMessage(error?.message || "Operation request failed. Wallet/inventory restored when possible.");
+      setMessage(error?.message || "Forest care request failed. Wallet/inventory restored when possible.");
     } finally {
       setProcessing(false);
     }
   }
 
-  async function createOperationRequest(autoRenewEnabled: boolean) {
+  async function submitCareProgram(autoRenewEnabled: boolean) {
     setMessage("");
 
     if (!profile) return setMessage("Profile not found.");
     if (!wallet) return setMessage("Wallet not found.");
-    if (!selectedTree) return setMessage("Please select a tree.");
-    if (!operation) return setMessage("Please choose a care program.");
-
-    if (operation.category !== "Care Program") {
-      setMessage("Step 10 is only for paid Tree Care Program activation on the selected tree.");
-      return;
+    if (!selectedForest) return setMessage("Please select a forest.");
+    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
+    if (!operation || operation.category !== "Care Program") {
+      return setMessage("Please choose a Forest Protection Plan.");
     }
 
     setProcessing(true);
@@ -881,400 +796,503 @@ export default function TreeOperationsPage() {
     const startedAt = new Date().toISOString();
     const nextRenewalDate = getNextRenewalDate(operation.duration || "Program");
     const programPrice = Number(operation.price || 0);
-    const programDuration = operation.duration || "Program";
-    const programCoverage = operation.coverage || "Program coverage pending";
-    const treeLabel = selectedTree.tree_code || selectedTree.id;
     const actionLabel = autoRenewEnabled ? "Subscribe" : "Buy Once";
 
     let previousBalance: number | null = null;
 
     try {
-      previousBalance = await deductCareProgramWallet(programPrice);
-    } catch (error: any) {
-      setProcessing(false);
-      setMessage(error?.message || "Wallet payment failed.");
-      return;
-    }
+      previousBalance = await deductWallet(programPrice);
 
-    const requestPayload = {
-      profile_id: profile.id,
-      tree_id: selectedTree.id,
-      operation_type: operation.name,
-      operation_fee: programPrice,
-      platform_fee: 0,
-      total_amount: programPrice,
-      notes: note.trim() || null,
-      status: "PENDING",
-      care_program_name: operation.name,
-      care_program_price: programPrice,
-      care_program_duration: programDuration,
-      care_program_status: "PENDING",
-      next_renewal_date: nextRenewalDate,
-      auto_renew_enabled: autoRenewEnabled,
-    };
+      const { data: createdRequest, error: requestError } = await supabase
+        .from("tree_operation_requests")
+        .insert(
+          buildRequestPayload({
+            totalAmount: programPrice,
+            operationFee: programPrice,
+            platformFee: 0,
+            autoRenewEnabled,
+            careProgramStatus: "PENDING",
+            nextRenewalDate,
+          })
+        )
+        .select("id")
+        .single();
 
-    const { error: requestError } = await supabase
-      .from("tree_operation_requests")
-      .insert(requestPayload);
-
-    if (requestError) {
-      if (previousBalance !== null) {
-        await restoreCareProgramWallet(previousBalance);
+      if (requestError || !createdRequest) {
+        throw new Error(requestError?.message || "Protection plan request creation failed.");
       }
 
-      setProcessing(false);
-      setMessage(`Wallet was restored because request creation failed: ${requestError.message}`);
-      return;
-    }
+      const treeIdsToUpdate = scope === "FOREST" ? selectedForestTrees.map((tree) => tree.tree_id) : [selectedTree!.tree_id];
 
-    const treeUpdatePayload = {
-      care_program_name: operation.name,
-      care_program_price: programPrice,
-      care_program_started_at: startedAt,
-      care_program_next_renewal: nextRenewalDate,
-      care_program_coverage: programCoverage,
-      care_program_status: "ACTIVE",
-      auto_renew_enabled: autoRenewEnabled,
-    };
+      if (treeIdsToUpdate.length > 0) {
+        const { error: treeUpdateError } = await supabase
+          .from("trees")
+          .update({
+            care_status: "PENDING_ACTIVATION",
+            care_started_at: null,
+            care_expires_at: null,
+            care_program_name: operation.name,
+            care_program_price: programPrice,
+            care_program_started_at: null,
+            care_program_next_renewal: nextRenewalDate,
+            care_program_coverage: operation.coverage || "Protection coverage pending",
+            care_program_status: "PENDING",
+            auto_renew_enabled: autoRenewEnabled,
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", treeIdsToUpdate)
+          .eq("customer_profile_id", profile.id);
 
-    const { error: treeUpdateError } = await supabase
-      .from("trees")
-      .update(treeUpdatePayload)
-      .eq("id", selectedTree.id)
-      .eq("profile_id", profile.id);
-
-    if (treeUpdateError) {
-      if (previousBalance !== null) {
-        await restoreCareProgramWallet(previousBalance);
-      }
-
-      setProcessing(false);
-      setMessage(
-        `Wallet was restored because selected tree update failed: ${treeUpdateError.message}`
-      );
-      await loadData();
-      return;
-    }
-
-    if (autoRenewEnabled) {
-      const subscriptionPayload = {
-        profile_id: profile.id,
-        tree_id: selectedTree.id,
-        care_program_name: operation.name,
-        care_program_price: programPrice,
-        care_program_duration: programDuration,
-        status: "ACTIVE",
-        auto_renew_enabled: true,
-        started_at: startedAt,
-        next_renewal_date: nextRenewalDate,
-      };
-
-      const { error: subscriptionError } = await supabase
-        .from("care_program_subscriptions")
-        .insert(subscriptionPayload);
-
-      if (subscriptionError) {
-        if (previousBalance !== null) {
-          await restoreCareProgramWallet(previousBalance);
+        if (treeUpdateError) {
+          throw new Error(`Tree care status update failed: ${treeUpdateError.message}`);
         }
-
-        setProcessing(false);
-        setMessage(
-          `Wallet was restored because subscription record failed: ${subscriptionError.message}`
-        );
-        await loadData();
-        return;
       }
+
+      if (autoRenewEnabled && scope === "TREE" && selectedTree) {
+        const subscriptionPayload = {
+          profile_id: profile.id,
+          tree_id: selectedTree.tree_id,
+          care_program_name: operation.name,
+          care_program_price: programPrice,
+          care_program_duration: operation.duration || "Program",
+          status: "PENDING",
+          auto_renew_enabled: true,
+          started_at: null,
+          next_renewal_date: nextRenewalDate,
+        };
+
+        const { error: subscriptionError } = await supabase
+          .from("care_program_subscriptions")
+          .insert(subscriptionPayload);
+
+        if (subscriptionError) {
+          throw new Error(`Subscription record failed: ${subscriptionError.message}`);
+        }
+      }
+
+      await createWalletTransactionLog({
+        amount: -Math.abs(programPrice),
+        description: `${actionLabel}: ${operation.name} for ${targetLabel}`,
+        referenceId: createdRequest.id,
+      });
+
+      setNote("");
+      await loadData(selectedForestId, selectedTreeId);
+
+      setMessage(
+        `${operation.name} ${autoRenewEnabled ? "subscription" : "buy once"} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
+      );
+    } catch (error: any) {
+      if (previousBalance !== null) await restoreWallet(previousBalance);
+      setMessage(error?.message || "Protection plan failed. Wallet restored when possible.");
+      await loadData(selectedForestId, selectedTreeId);
+    } finally {
+      setProcessing(false);
     }
+  }
+
+  async function createAutoRenewWalletTransaction(
+    currentProfile: Profile,
+    amount: number,
+    description: string
+  ) {
+    const referenceNo = `AUTO-RENEW-${Date.now()}`;
+
+    const { error } = await supabase.from("wallet_transactions").insert({
+      profile_id: currentProfile.id,
+      transaction_type: "DEBIT",
+      amount: Math.abs(amount),
+      reference_no: referenceNo,
+      description,
+      status: "COMPLETED",
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
+  }
+
+  async function createAutoRenewLog(
+    subscription: CareProgramSubscription,
+    amount: number,
+    previousRenewalDate: string | null,
+    nextRenewalDate: string,
+    status: "COMPLETED" | "FAILED",
+    notes: string
+  ) {
+    await supabase.from("care_program_renewal_logs").insert({
+      profile_id: subscription.profile_id,
+      tree_id: subscription.tree_id,
+      subscription_id: subscription.id,
+      care_program_name: subscription.care_program_name,
+      care_program_price: amount,
+      previous_renewal_date: previousRenewalDate,
+      next_renewal_date: nextRenewalDate,
+      status,
+      notes,
+    });
+  }
+
+  async function runAutoRenewEngine(currentProfile: Profile, currentWallet: Wallet | null) {
+    if (!currentWallet) {
+      setMessage("Wallet not found. Auto-renew was not processed.");
+      return;
+    }
+
+    const today = new Date().toISOString();
+
+    const { data: dueSubscriptions, error: subscriptionError } = await supabase
+      .from("care_program_subscriptions")
+      .select(
+        "id, profile_id, tree_id, care_program_name, care_program_price, care_program_duration, status, auto_renew_enabled, started_at, next_renewal_date, created_at"
+      )
+      .eq("profile_id", currentProfile.id)
+      .eq("status", "ACTIVE")
+      .eq("auto_renew_enabled", true)
+      .lte("next_renewal_date", today);
+
+    if (subscriptionError) {
+      setMessage(subscriptionError.message);
+      return;
+    }
+
+    const subscriptions = (dueSubscriptions || []) as CareProgramSubscription[];
+
+    if (subscriptions.length === 0) {
+      setMessage("No due auto-renew subscriptions found.");
+      return;
+    }
+
+    let runningBalance = Number(currentWallet.balance || 0);
+    let renewedCount = 0;
+
+    for (const subscription of subscriptions) {
+      const amount = Number(subscription.care_program_price || 0);
+      const previousBalance = runningBalance;
+      const nextRenewalDate = getNextRenewalDate(subscription.care_program_duration || "Program");
+
+      if (amount <= 0) continue;
+      if (runningBalance < amount) continue;
+
+      const deductedBalance = runningBalance - amount;
+
+      const { error: walletError } = await supabase
+        .from("wallets")
+        .update({ balance: deductedBalance })
+        .eq("id", currentWallet.id)
+        .eq("profile_id", currentProfile.id);
+
+      if (walletError) continue;
+
+      runningBalance = deductedBalance;
+
+      try {
+        await createAutoRenewWalletTransaction(
+          currentProfile,
+          amount,
+          `Auto-renew: ${subscription.care_program_name || "Forest Protection Plan"}`
+        );
+      } catch {
+        await supabase
+          .from("wallets")
+          .update({ balance: previousBalance })
+          .eq("id", currentWallet.id)
+          .eq("profile_id", currentProfile.id);
+
+        runningBalance = previousBalance;
+        continue;
+      }
+
+      const { error: updateSubscriptionError } = await supabase
+        .from("care_program_subscriptions")
+        .update({
+          next_renewal_date: nextRenewalDate,
+          auto_renew_enabled: true,
+          status: "ACTIVE",
+        })
+        .eq("id", subscription.id)
+        .eq("profile_id", currentProfile.id);
+
+      if (updateSubscriptionError) continue;
+
+      await createAutoRenewLog(
+        subscription,
+        amount,
+        subscription.next_renewal_date,
+        nextRenewalDate,
+        "COMPLETED",
+        "Manual auto-renew completed from Forest Care."
+      );
+
+      renewedCount += 1;
+    }
+
+    if (renewedCount > 0) {
+      setWallet({ ...currentWallet, balance: runningBalance });
+      setMessage(`Auto-renew completed for ${renewedCount} protection subscription(s).`);
+    } else {
+      setMessage("No subscriptions were renewed. Check due dates or wallet balance.");
+    }
+  }
+
+  async function handleManualAutoRenew() {
+    setMessage("");
+
+    if (!profile) {
+      setMessage("Profile not found.");
+      return;
+    }
+
+    if (!wallet) {
+      setMessage("Wallet not found. Auto-renew was not processed.");
+      return;
+    }
+
+    setAutoRenewProcessing(true);
 
     try {
-      await createCareProgramWalletTransaction(programPrice, actionLabel, treeLabel);
+      await runAutoRenewEngine(profile, wallet);
     } catch (error: any) {
-      setProcessing(false);
-      setMessage(
-        `${operation.name} main actions completed, but wallet transaction log failed: ${error?.message || "Wallet transaction failed."}`
-      );
-      await loadData();
-      return;
+      setMessage(error?.message || "Auto-renew failed.");
+    } finally {
+      setAutoRenewProcessing(false);
     }
-
-    setNote("");
-    setProcessing(false);
-
-    await loadData();
-
-    setMessage(
-      `${operation.name} activated for ${selectedTree.tree_code || selectedTree.id}. ${
-        autoRenewEnabled
-          ? "Subscribe selected: wallet deducted, wallet transaction recorded, request created, tree updated, and subscription record saved."
-          : "Buy Once selected: wallet deducted, wallet transaction recorded, request created, and tree updated only. No subscription record created."
-      } Wallet was deducted and wallet transaction was recorded. No inventory deduction, auto billing, auto-renew engine, cron job, or background job was run.`
-    );
   }
 
   function previewOperation() {
     setMessage("");
 
-    if (!selectedTree) return setMessage("Please select a tree.");
-    if (!operation) return setMessage("Please choose a service.");
+    if (!selectedForest) return setMessage("Please select a forest.");
+    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
+    if (!operation) return setMessage("Please choose a care service.");
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
-      setMessage(
-        `Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`
-      );
+      setMessage(`Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`);
       return;
     }
 
-    setMessage(
-      `${operation.name} preview checked for ${
-        selectedTree.tree_code || selectedTree.id
-      }. Total charge will be ${peso(totalPreview)}. Click Buy Request to submit this paid operation to admin.`
-    );
+    setMessage(`${operation.name} preview for ${targetLabel}. Total charge will be ${peso(totalPreview)}.`);
   }
 
   return (
     <main className="page">
       <section className="hero">
-        <div>
-          <p className="eyebrow">Tree Operations Step 10</p>
-          <h1>Request Tree Care Services</h1>
+        <div className="heroCopy">
+          <Link href="/dashboard" className="back">
+            ← Back to Dashboard
+          </Link>
+
+          <p className="eyebrow">Arganwood Forest Care</p>
+          <h1>Forest Care Center</h1>
           <span>
-            Select one of your owned trees, choose a service, and preview
-            operation details. Marketplace Tree Care Programs are synced from
-            marketplace_products. Step 10 keeps paid care programs active and checks due auto-renew subscriptions when Auto Renew is ON. No cron job or background job is added yet.
+            Protect your forest with care services, field verification, and protection plans. Choose an entire forest or
+            one seedling, then send the request to Admin for gardener assignment.
           </span>
         </div>
 
         <div className="walletCard">
           <p>Wallet Balance</p>
           <strong>{peso(walletBalance)}</strong>
-          <small>Paid care + auto-renew check</small>
+          <small>Care requests and protection plans</small>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       {loading ? (
-        <div className="empty">Loading tree operations...</div>
-      ) : trees.length === 0 ? (
-        <div className="empty">
-          You do not own any trees yet. Purchase or assign trees first before requesting operations.
-        </div>
+        <div className="empty">Loading Forest Care...</div>
+      ) : forests.length === 0 ? (
+        <section className="emptyState">
+          <div className="emptyIcon">🌳</div>
+          <h2>No forest yet</h2>
+          <p>Buy trees from Marketplace first. Your new forest will appear here for care and protection.</p>
+          <Link href="/dashboard/marketplace">Go to Marketplace</Link>
+        </section>
       ) : (
         <>
           <section className="stats">
-            <Stat label="Owned Trees" value={String(stats.ownedTrees)} />
-            <Stat label="Pending Requests" value={String(stats.pending)} />
-            <Stat label="Completed Services" value={String(stats.completed)} />
+            <Stat label="Forests" value={String(stats.forests)} />
+            <Stat label="Seedlings" value={String(stats.trees)} />
+            <Stat label="Pending Care" value={String(stats.pending)} />
             <Stat label="Recorded Spend" value={peso(stats.totalSpent)} />
           </section>
 
-          <section className="grid">
-            <section className="panel">
-              <PanelHead
-                title="1. Select Tree"
-                text="Only trees owned by your account are shown."
-              />
+          <section className="careLayout">
+            <section className="panel forestPanel">
+              <PanelHead title="1. Choose Forest" text="Start with the forest you want to protect." />
 
-              <div className="treeList">
-                {trees.map((tree) => {
-                  const active = selectedTreeId === tree.id;
+              <div className="forestList">
+                {forests.map((forest) => {
+                  const active = selectedForestId === forest.group_id;
 
                   return (
                     <button
-                      key={tree.id}
-                      className={`treeCard ${active ? "active" : ""}`}
-                      onClick={() => setSelectedTreeId(tree.id)}
+                      key={forest.group_id}
+                      className={active ? "forestCard active" : "forestCard"}
+                      onClick={() => handleSelectForest(forest.group_id)}
                     >
-                      <strong>{tree.tree_code || tree.code || tree.id}</strong>
-                      <p>
-                        {tree.custom_name ||
-                          tree.display_name ||
-                          tree.tree_code ||
-                          "Arganwood Tree"}
-                      </p>
-                      <small>
-                        {tree.stage || tree.growth_stage || tree.current_stage || "Stage Pending"} •{" "}
-                        {tree.tree_group_name || "Ungrouped"}
-                      </small>
+                      <div>
+                        <small>🌳 Forest</small>
+                        <b>{getForestName(forest)}</b>
+                      </div>
+                      <span>{Number(forest.total_trees || 0)} Trees</span>
+
+                      <div className="forestMiniStats">
+                        <em className="protected">{Number(forest.protected_count || 0)} Protected</em>
+                        <em className="attention">{Number(forest.attention_count || 0)} Attention</em>
+                        <em className="critical">{Number(forest.critical_count || 0)} Critical</em>
+                      </div>
                     </button>
                   );
                 })}
               </div>
             </section>
 
-            <section className="panel">
-              <PanelHead
-                title="2. Choose Service"
-                text="Care programs are read from Marketplace V5 products."
-              />
+            <section className="panel targetPanel">
+              <PanelHead title="2. Select Coverage" text="Care can apply to the whole forest or one seedling." />
+
+              {selectedForest && (
+                <div className="selectedForestHero">
+                  <small>Selected Forest</small>
+                  <b>{getForestName(selectedForest)}</b>
+                  <p>
+                    {Number(selectedForest.total_trees || 0)} trees • {Number(selectedForest.protected_count || 0)} protected •{" "}
+                    {Number(selectedForest.attention_count || 0)} attention • {Number(selectedForest.critical_count || 0)} critical
+                  </p>
+                </div>
+              )}
+
+              <div className="scopeGrid">
+                <button className={scope === "FOREST" ? "active" : ""} onClick={() => setScope("FOREST")}>
+                  <strong>🌳 Entire Forest</strong>
+                  <span>Best for protection plans and forest-wide maintenance.</span>
+                </button>
+
+                <button
+                  className={scope === "TREE" ? "active" : ""}
+                  disabled={selectedForestTrees.length === 0}
+                  onClick={() => setScope("TREE")}
+                >
+                  <strong>🌱 Single Seedling</strong>
+                  <span>Best for photo, GPS, health, or specific care requests.</span>
+                </button>
+              </div>
+
+              {scope === "TREE" && (
+                <div className="seedlingList">
+                  {selectedForestTrees.length === 0 ? (
+                    <div className="softEmpty">No seedlings found in this forest.</div>
+                  ) : (
+                    selectedForestTrees.map((tree) => (
+                      <button
+                        key={tree.tree_id}
+                        className={selectedTreeId === tree.tree_id ? "seedlingCard active" : "seedlingCard"}
+                        onClick={() => setSelectedTreeId(tree.tree_id)}
+                      >
+                        <span>{alertIcon(tree.alert_status)}</span>
+                        <div>
+                          <b>{getTreeName(tree)}</b>
+                          <small>{tree.alert_reason || tree.care_status || "Care status pending"}</small>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="panel actionPanel">
+              <PanelHead title="3. Choose Care" text="Pick a care service or protection plan." />
+
+              <div className="operationPreview">
+                <small>Care Target</small>
+                <b>{targetLabel}</b>
+                <p>{scope === "FOREST" ? "This request will include group_id." : "This request will include group_id and tree_id."}</p>
+              </div>
 
               <div className="serviceList">
                 {operations.map((item) => (
                   <button
                     key={`${item.category}-${item.name}`}
-                    className={`serviceCard ${
-                      selectedOperation === item.name ? "active" : ""
-                    } ${item.category === "Care Program" ? "program" : ""}`}
+                    className={`serviceCard ${selectedOperation === item.name ? "active" : ""} ${
+                      item.category === "Care Program" ? "program" : ""
+                    }`}
                     onClick={() => handleChooseOperation(item)}
                   >
-                    <span>{item.category}</span>
-                    <strong>{item.name}</strong>
-                    <p>{item.description}</p>
-                    <b>
-                      {item.category === "Care Program"
-                        ? `${peso(item.price)} • ${item.duration || "Program"}`
-                        : peso(item.price)}
-                    </b>
+                    <div className="serviceIcon">{getOperationIcon(item)}</div>
+                    <div>
+                      <span>{item.category === "Care Program" ? "Protection Plan" : item.category}</span>
+                      <strong>{item.name}</strong>
+                      <p>{item.description}</p>
+                      <b>{item.category === "Care Program" ? `${peso(item.price)} • ${item.duration || "Program"}` : peso(item.price)}</b>
+                    </div>
                   </button>
                 ))}
               </div>
-
-              {careProgramOperations.length === 0 && (
-                <div className="empty small">
-                  No active Tree Care Programs found in marketplace_products.
-                </div>
-              )}
             </section>
+          </section>
 
-            <section className="panel">
-              <PanelHead
-                title="3. Activate Program"
-                text="Creates the request first, then updates only the selected tree."
-              />
-
-              {selectedTree && (
-                <div className="selectedBox">
-                  <span>Selected Tree</span>
-                  <strong>{selectedTree.tree_code || selectedTree.id}</strong>
-                  <p>
-                    {selectedTree.custom_name ||
-                      selectedTree.display_name ||
-                      selectedTree.tree_code ||
-                      "Arganwood Tree"}
-                  </p>
-                </div>
-              )}
-
-              {selectedTree && (
-                <div className="currentProgramBox">
-                  <strong>Current Program on Tree</strong>
-
-                  <div className="programMiniGrid">
-                    <Mini label="Program" value={selectedTree.care_program_name || selectedTree.care_plan || "Not Enrolled"} />
-                    <Mini
-                      label="Status"
-                      value={String(selectedTree.care_program_status || "NOT_ENROLLED")}
-                    />
-                    <Mini
-                      label="Coverage"
-                      value={selectedTree.care_program_coverage || "No active coverage"}
-                    />
-                    <Mini
-                      label="Next Renewal"
-                      value={formatDate(selectedTree.care_program_next_renewal)}
-                    />
-                    <Mini
-                      label="Auto Renew"
-                      value={
-                        selectedTree.auto_renew_enabled
-                          ? "ON"
-                          : "OFF"
-                      }
-                    />
-                    <Mini
-                      label="Program Cost"
-                      value={peso(Number(selectedTree.care_program_price || 0))}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="operationBox">
-                <span>{operation?.category || "Service"}</span>
-                <h3>{operation?.name || "Tree Operation"}</h3>
-                <p>{operation?.description || "Operation preview."}</p>
+          <section className="checkout panel">
+            <div className="checkoutHead">
+              <div>
+                <p className="eyebrow">Confirm Care Request</p>
+                <h2>{operation?.name || "Forest Care"}</h2>
+                <span>{operation?.description || "Operation preview."}</span>
               </div>
 
-              {hasActiveSameRequest && (
-                <div className="inventoryCheck ok">
-                  <strong>Active Request Found</strong>
+              <div className="checkoutTarget">
+                <small>Target</small>
+                <b>{targetLabel}</b>
+              </div>
+            </div>
+
+            {hasActiveSameRequest && (
+              <div className="inventoryCheck ok">
+                <strong>Active Request Found</strong>
+                <p>This same care request is already active for {targetLabel}.</p>
+              </div>
+            )}
+
+            {operation?.category === "Inventory Use" && (
+              <div className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}>
+                <strong>Inventory Preview</strong>
+                {hasRequiredInventory && requiredInventoryItem ? (
                   <p>
-                    This same service is already {String(activeSameRequest?.status || "PENDING").replace("_", " ")} for this tree. It will unlock after completion or cancellation.
+                    Available: {requiredInventoryItem.item_name} — {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
+                    {requiredInventoryItem.unit || ""}
                   </p>
+                ) : (
+                  <p>No {operation.requiredInventoryCategory} in inventory. Please buy from Marketplace first.</p>
+                )}
+
+                {!hasRequiredInventory && (
+                  <Link className="buyMissing" href="/dashboard/marketplace">
+                    Buy Missing Supplies
+                  </Link>
+                )}
+              </div>
+            )}
+
+            {operation?.category === "Care Program" && (
+              <div className="careSyncBox">
+                <strong>Protection Plan</strong>
+                <div className="miniGrid">
+                  <Mini label="Plan" value={operation.name} />
+                  <Mini label="Price" value={peso(operation.price)} />
+                  <Mini label="Duration" value={operation.duration || "Program"} />
+                  <Mini label="Target" value={scope === "FOREST" ? "Entire Forest" : "Single Seedling"} />
                 </div>
-              )}
+                <p>
+                  Forest Care creates a paid pending request first. The tree stays pending activation until Admin assigns
+                  the field team, gardener evidence is submitted, and Admin approves activation.
+                </p>
+              </div>
+            )}
 
-              {operation?.category === "Care Program" && (
-                <div className="careSyncBox">
-                  <strong>Marketplace Care Program Sync</strong>
-
-                  <div className="programMiniGrid">
-                    <Mini label="care_program_name" value={operation.name} />
-                    <Mini label="care_program_price" value={peso(operation.price)} />
-                    <Mini
-                      label="care_program_status"
-                      value={operation.status || "ACTIVE"}
-                    />
-                    <Mini
-                      label="care_program_coverage"
-                      value={operation.coverage || "Program coverage pending"}
-                    />
-                    <Mini
-                      label="next_renewal_date"
-                      value={
-                        operation.duration === "1 Week"
-                          ? "Weekly renewal"
-                          : "Monthly renewal"
-                      }
-                    />
-                    <Mini
-                      label="auto_renew_enabled"
-                      value="Choose Buy Once or Subscribe below"
-                    />
-                  </div>
-
-                  <p>
-                    This uses the Marketplace product name and price. Buy Once creates a request and updates the tree only. Subscribe creates a request, updates the tree, then saves a subscription record.
-                  </p>
-                </div>
-              )}
-
-              {operation?.category === "Inventory Use" && (
-                <div className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}>
-                  <strong>Inventory Preview</strong>
-                  {hasRequiredInventory && requiredInventoryItem ? (
-                    <p>
-                      Available: {requiredInventoryItem.item_name} —{" "}
-                      {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
-                      {requiredInventoryItem.unit || ""}
-                    </p>
-                  ) : (
-                    <p>
-                      No {operation.requiredInventoryCategory} in inventory.
-                      Please buy from Marketplace first.
-                    </p>
-                  )}
-
-                  {!hasRequiredInventory && (
-                    <Link className="buyMissing" href="/dashboard/marketplace">
-                      Buy Missing Supplies
-                    </Link>
-                  )}
-                </div>
-              )}
-
+            <div className="checkoutGrid">
               <div className="feeBox">
+                <FeeRow label={operation?.category === "Care Program" ? "Program Price" : "Care Fee"} value={baseOperationFee} />
                 <FeeRow
-                  label={operation?.category === "Care Program" ? "Program Price" : "Operation Fee"}
-                  value={baseOperationFee}
-                />
-                <FeeRow
-                  label={
-                    operation?.category === "Care Program"
-                      ? "Platform Fee"
-                      : "Platform Fee 2% Preview"
-                  }
+                  label={operation?.category === "Care Program" ? "Platform Fee" : "Platform Fee 2% Preview"}
                   value={platformFeePreview}
                 />
                 <FeeRow label="Total Charge" value={totalPreview} strong />
@@ -1286,112 +1304,71 @@ export default function TreeOperationsPage() {
                 <textarea
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="Optional note saved to tree_operation_requests."
+                  placeholder="Optional note for Admin and Gardener."
                 />
               </label>
+            </div>
 
-              {operation?.category === "Care Program" ? (
-                <div className="actionGrid">
-                  <button
-                    className="submitButton secondary"
-                    disabled={processing}
-                    onClick={() => createOperationRequest(false)}
-                  >
-                    {processing ? "Processing Payment..." : "Buy Once"}
-                  </button>
+            {operation?.category === "Care Program" ? (
+              <div className="actionGrid">
+                <button className="submitButton secondary" disabled={processing} onClick={() => submitCareProgram(false)}>
+                  {processing ? "Processing..." : "Buy Once"}
+                </button>
 
-                  <button
-                    className="submitButton"
-                    disabled={processing}
-                    onClick={() => createOperationRequest(true)}
-                  >
-                    {processing ? "Processing Payment..." : "Subscribe"}
-                  </button>
-                </div>
-              ) : (
-                <div className="actionGrid">
-                  <button
-                    className="submitButton secondary"
-                    disabled={processing}
-                    onClick={previewOperation}
-                  >
-                    Preview
-                  </button>
+                <button className="submitButton" disabled={processing} onClick={() => submitCareProgram(true)}>
+                  {processing ? "Processing..." : "Subscribe"}
+                </button>
+              </div>
+            ) : (
+              <div className="actionGrid">
+                <button className="submitButton secondary" disabled={processing} onClick={previewOperation}>
+                  Preview
+                </button>
 
-                  <button
-                    className="submitButton"
-                    disabled={processing || hasActiveSameRequest}
-                    onClick={createServiceOperationRequest}
-                  >
-                    {processing
-                      ? "Processing..."
-                      : hasActiveSameRequest
-                      ? "Already Requested"
-                      : "Buy Request"}
-                  </button>
-                </div>
-              )}
+                <button className="submitButton" disabled={processing || hasActiveSameRequest} onClick={submitServiceRequest}>
+                  {processing ? "Processing..." : hasActiveSameRequest ? "Already Requested" : "Submit Care Request"}
+                </button>
+              </div>
+            )}
 
-              <button
-                type="button"
-                className="submitButton"
-                disabled={processing || autoRenewProcessing}
-                onClick={handleManualAutoRenew}
-              >
-                {autoRenewProcessing ? "Running Auto Renew..." : "Run Auto Renew"}
-              </button>
-
-              <p className="warning">
-                Step 10: Buy Once and Subscribe are paid actions. Auto Renew is manual-only for testing. It reads active care_program_subscriptions where auto_renew_enabled is ON and next_renewal_date is due. It checks wallet, deducts wallet, creates a wallet transaction, updates the subscription renewal date, and creates a renewal log. Normal services now create paid requests and inventory-use services deduct inventory. Still disabled: no cron jobs and no background jobs.
-              </p>
-            </section>
+            <button className="autoRenewButton" disabled={processing || autoRenewProcessing} onClick={handleManualAutoRenew}>
+              {autoRenewProcessing ? "Running Auto Renew..." : "Run Auto Renew Check"}
+            </button>
           </section>
 
           <section className="history panel">
-            <PanelHead
-              title="Recent Operation Requests"
-              text="Read-only records from tree_operation_requests."
-            />
+            <PanelHead title="Recent Care Activity" text="Read-only records from tree_operation_requests." />
 
             {requests.length === 0 ? (
-              <div className="empty small">No operation requests yet.</div>
+              <div className="softEmpty">No care requests yet.</div>
             ) : (
               <div className="requestList">
                 {requests.map((request) => {
-                  const tree = trees.find((item) => item.id === request.tree_id);
+                  const requestTree = trees.find((item) => item.tree_id === request.tree_id);
+                  const requestForest = forests.find((item) => item.group_id === request.group_id);
+                  const target =
+                    request.tree_id && requestTree
+                      ? getTreeName(requestTree)
+                      : requestForest
+                      ? getForestName(requestForest)
+                      : request.tree_id || request.group_id || "Forest Care";
 
                   return (
                     <div className="requestRow" key={request.id}>
                       <div>
-                        <strong>
-                          {request.care_program_name ||
-                            request.operation_type ||
-                            "Tree Operation"}
-                        </strong>
+                        <strong>{request.care_program_name || request.operation_type || "Forest Care"}</strong>
                         <p>
-                          {tree?.tree_code || request.tree_id || "Unknown tree"} •{" "}
-                          {formatDate(request.created_at)}
+                          {target} • {formatDate(request.created_at)}
                         </p>
                         {request.notes && <small>{request.notes}</small>}
                       </div>
 
                       <div className="requestRight">
-                        <span
-                          className={`status ${statusClass(
-                            request.care_program_status || request.status
-                          )}`}
-                        >
+                        <span className={`status ${statusClass(request.care_program_status || request.status)}`}>
                           {request.care_program_status || request.status || "PENDING"}
                         </span>
                         <b>
-                          {peso(
-                            Number(
-                              request.care_program_price ||
-                                request.total_amount ||
-                                request.operation_fee ||
-                                0
-                            )
-                          )}
+                          {peso(Number(request.care_program_price || request.total_amount || request.operation_fee || 0))}
                         </b>
                       </div>
                     </div>
@@ -1404,66 +1381,110 @@ export default function TreeOperationsPage() {
       )}
 
       <style>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         .page {
           min-height: 100vh;
           padding: 30px;
-          color: #18261d;
+          color: #fff7df;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 16% 6%, rgba(220, 176, 88, .24), transparent 28%),
+            radial-gradient(circle at 88% 0%, rgba(85, 132, 93, .22), transparent 30%),
+            linear-gradient(180deg, #07130d 0%, #0b1f15 48%, #06100b 100%);
         }
 
         .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: stretch;
+          display: grid;
+          grid-template-columns: 1fr 320px;
           gap: 18px;
-          margin-bottom: 22px;
+          align-items: stretch;
+          margin-bottom: 18px;
+        }
+
+        .heroCopy,
+        .walletCard,
+        .message,
+        .empty,
+        .stat,
+        .panel,
+        .emptyState {
+          border: 1px solid rgba(232, 190, 103, .18);
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)),
+            rgba(7, 24, 15, .84);
+          box-shadow: 0 24px 70px rgba(0,0,0,.32);
+          backdrop-filter: blur(10px);
+        }
+
+        .heroCopy {
+          position: relative;
+          overflow: hidden;
+          border-radius: 34px;
+          min-height: 280px;
+          padding: 28px;
+        }
+
+        .heroCopy:before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(90deg, rgba(7,19,13,.96), rgba(7,19,13,.74), rgba(7,19,13,.92)),
+            url("https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1600&q=80");
+          background-size: cover;
+          background-position: center;
+          opacity: .82;
+          z-index: -1;
+        }
+
+        .back {
+          display: inline-flex;
+          margin-bottom: 16px;
+          color: #e8be67;
+          font-weight: 900;
+          text-decoration: none;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
+          color: #e8be67;
           font-weight: 900;
-          letter-spacing: .5px;
           text-transform: uppercase;
+          letter-spacing: .14em;
           font-size: 12px;
         }
 
         .hero h1 {
           margin: 0;
-          font-size: 44px;
-          letter-spacing: -1.6px;
-          color: #101a14;
+          color: #fff7df;
+          font-size: 54px;
+          letter-spacing: -2px;
+          line-height: .96;
         }
 
         .hero span {
           display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          font-size: 15px;
+          margin-top: 14px;
+          color: rgba(255,247,223,.76);
           max-width: 880px;
-          line-height: 1.6;
+          line-height: 1.65;
+          font-weight: 800;
         }
 
         .walletCard {
-          min-width: 260px;
-          border-radius: 28px;
-          padding: 22px;
-          color: white;
-          background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 24px 56px rgba(36,69,54,.24);
+          border-radius: 34px;
+          padding: 24px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
         }
 
         .walletCard p {
           margin: 0;
-          color: rgba(255,255,255,.72);
+          color: rgba(255,247,223,.62);
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .14em;
@@ -1472,57 +1493,82 @@ export default function TreeOperationsPage() {
 
         .walletCard strong {
           display: block;
-          margin-top: 10px;
-          font-size: 30px;
+          margin-top: 12px;
+          color: #f4d58b;
+          font-size: 34px;
         }
 
         .walletCard small {
           display: block;
-          margin-top: 6px;
-          color: rgba(255,255,255,.72);
+          margin-top: 8px;
+          color: rgba(255,247,223,.64);
           font-weight: 900;
-        }
-
-        .message,
-        .empty,
-        .stat,
-        .panel {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
         }
 
         .message,
         .empty {
-          padding: 20px;
-          color: #31553d;
-          font-weight: 900;
+          border-radius: 24px;
+          padding: 18px;
           margin-bottom: 18px;
+          color: #f4d58b;
+          font-weight: 900;
         }
 
-        .small {
-          box-shadow: none;
-          border-radius: 18px;
-          background: #f3ead8;
-          margin-top: 14px;
+        .emptyState {
+          min-height: 430px;
+          display: grid;
+          place-items: center;
+          text-align: center;
+          padding: 44px;
+          border-radius: 34px;
+        }
+
+        .emptyState h2 {
+          margin: 0;
+          color: #fff7df;
+          font-size: 36px;
+        }
+
+        .emptyState p {
+          max-width: 580px;
+          color: rgba(255,247,223,.72);
+          font-weight: 800;
+          line-height: 1.65;
+        }
+
+        .emptyState a,
+        .buyMissing {
+          display: inline-flex;
+          margin-top: 8px;
+          border-radius: 16px;
+          padding: 14px 18px;
+          color: #08120d;
+          background: linear-gradient(135deg, #f4d58b, #c99536);
+          text-decoration: none;
+          font-weight: 900;
+        }
+
+        .emptyIcon {
+          font-size: 70px;
+          margin-bottom: 10px;
         }
 
         .stats {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
+          gap: 14px;
           margin-bottom: 18px;
         }
 
         .stat {
-          padding: 22px;
+          border-radius: 26px;
+          padding: 20px;
         }
 
         .stat p {
           margin: 0;
-          color: #6b6b62;
-          font-size: 12px;
+          color: rgba(255,247,223,.58);
+          font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .12em;
@@ -1530,179 +1576,322 @@ export default function TreeOperationsPage() {
 
         .stat h3 {
           margin: 10px 0 0;
-          color: #244536;
+          color: #f4d58b;
           font-size: 28px;
         }
 
-        .grid {
+        .careLayout {
           display: grid;
-          grid-template-columns: .9fr 1.1fr .95fr;
+          grid-template-columns: .9fr 1fr 1.1fr;
           gap: 16px;
           align-items: start;
+          margin-bottom: 18px;
         }
 
         .panel {
+          border-radius: 34px;
           padding: 22px;
         }
 
         .panelHead h2 {
           margin: 0;
-          color: #101a14;
+          color: #fff7df;
           font-size: 24px;
+          letter-spacing: -.4px;
         }
 
         .panelHead p {
-          margin: 6px 0 0;
-          color: #6b6b62;
+          margin: 7px 0 0;
+          color: rgba(255,247,223,.62);
           line-height: 1.5;
           font-size: 14px;
+          font-weight: 800;
         }
 
-        .treeList,
-        .serviceList {
+        .forestList,
+        .serviceList,
+        .seedlingList {
           display: grid;
           gap: 12px;
           margin-top: 18px;
-          max-height: 590px;
+          max-height: 600px;
           overflow: auto;
           padding-right: 4px;
         }
 
-        .treeCard,
+        .forestCard,
+        .seedlingCard,
         .serviceCard {
-          border: 1px solid rgba(92,70,35,.08);
+          border: 1px solid rgba(255,255,255,.08);
+          border-radius: 22px;
+          background:
+            linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.04)),
+            rgba(8, 23, 15, .78);
+          color: #fff7df;
+          cursor: pointer;
+          text-align: left;
+          box-shadow: 0 14px 30px rgba(0,0,0,.20);
+        }
+
+        .forestCard {
+          padding: 16px;
+        }
+
+        .forestCard.active,
+        .seedlingCard.active,
+        .serviceCard.active {
+          border-color: rgba(232,190,103,.48);
+          background:
+            radial-gradient(circle at 90% 8%, rgba(232,190,103,.20), transparent 28%),
+            linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.05)),
+            rgba(9, 30, 19, .94);
+        }
+
+        .forestCard small,
+        .selectedForestHero small,
+        .operationPreview small,
+        .checkoutTarget small {
+          display: block;
+          color: #e8be67;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .10em;
+          margin-bottom: 6px;
+        }
+
+        .forestCard b,
+        .selectedForestHero b,
+        .operationPreview b,
+        .checkoutTarget b {
+          display: block;
+          color: #fff7df;
+          font-size: 20px;
+          line-height: 1.18;
+        }
+
+        .forestCard > span {
+          display: inline-flex;
+          margin-top: 10px;
+          border-radius: 999px;
+          padding: 7px 10px;
+          color: #08120d;
+          background: #f4d58b;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .forestMiniStats {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 6px;
+          margin-top: 14px;
+        }
+
+        .forestMiniStats em {
+          font-style: normal;
+          font-size: 12px;
+          font-weight: 900;
+        }
+
+        .protected {
+          color: #8df0a4;
+        }
+
+        .attention {
+          color: #f4d58b;
+        }
+
+        .critical {
+          color: #ff9a88;
+        }
+
+        .selectedForestHero,
+        .operationPreview,
+        .careSyncBox,
+        .inventoryCheck,
+        .feeBox {
+          border-radius: 22px;
+          padding: 16px;
+          margin-top: 18px;
+          background: rgba(255,255,255,.07);
+          border: 1px solid rgba(255,255,255,.08);
+        }
+
+        .selectedForestHero p,
+        .operationPreview p,
+        .careSyncBox p,
+        .inventoryCheck p {
+          margin: 8px 0 0;
+          color: rgba(255,247,223,.64);
+          line-height: 1.5;
+          font-weight: 800;
+        }
+
+        .scopeGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .scopeGrid button {
+          border: 1px solid rgba(255,255,255,.08);
           border-radius: 20px;
           padding: 16px;
-          background: #f3ead8;
+          background: rgba(255,255,255,.07);
+          color: #fff7df;
           text-align: left;
           cursor: pointer;
         }
 
-        .treeCard.active,
-        .serviceCard.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
+        .scopeGrid button.active {
+          border-color: rgba(232,190,103,.46);
+          background: rgba(232,190,103,.12);
         }
 
-        .serviceCard.program {
-          border-color: rgba(214,178,94,.38);
-          background:
-            radial-gradient(circle at 92% 8%, rgba(255, 222, 139, .34), transparent 32%),
-            #f3ead8;
+        .scopeGrid button:disabled {
+          opacity: .45;
+          cursor: not-allowed;
         }
 
-        .serviceCard.program.active {
-          background:
-            radial-gradient(circle at 90% 12%, rgba(214,178,94,.28), transparent 34%),
-            linear-gradient(135deg, #244536, #10281f);
+        .scopeGrid strong {
+          display: block;
+          margin-bottom: 6px;
         }
 
-        .treeCard strong,
+        .scopeGrid span {
+          color: rgba(255,247,223,.62);
+          font-size: 12px;
+          line-height: 1.4;
+          font-weight: 800;
+        }
+
+        .seedlingCard {
+          padding: 13px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .seedlingCard > span {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 38px;
+          border-radius: 16px;
+          background: rgba(255,255,255,.08);
+          flex: 0 0 auto;
+        }
+
+        .seedlingCard b {
+          display: block;
+          color: #fff7df;
+          font-size: 15px;
+        }
+
+        .seedlingCard small {
+          display: block;
+          margin-top: 3px;
+          color: rgba(255,247,223,.58);
+          font-weight: 800;
+          line-height: 1.3;
+        }
+
+        .serviceCard {
+          padding: 14px;
+          display: grid;
+          grid-template-columns: 48px 1fr;
+          gap: 12px;
+          align-items: start;
+        }
+
+        .serviceIcon {
+          display: grid;
+          place-items: center;
+          width: 48px;
+          height: 48px;
+          border-radius: 18px;
+          background: rgba(255,255,255,.08);
+          font-size: 24px;
+        }
+
+        .serviceCard span {
+          display: inline-flex;
+          margin-bottom: 7px;
+          border-radius: 999px;
+          padding: 6px 9px;
+          background: rgba(232,190,103,.12);
+          color: #f4d58b;
+          font-size: 10px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+        }
+
         .serviceCard strong {
           display: block;
+          color: #fff7df;
           font-size: 16px;
         }
 
-        .treeCard p,
         .serviceCard p {
           margin: 7px 0 0;
-          color: inherit;
-          opacity: .75;
+          color: rgba(255,247,223,.62);
           line-height: 1.45;
           font-size: 13px;
           font-weight: 800;
         }
 
-        .treeCard small {
-          display: block;
-          margin-top: 8px;
-          color: inherit;
-          opacity: .65;
-          font-weight: 800;
-        }
-
-        .serviceCard span {
-          display: inline-flex;
-          margin-bottom: 10px;
-          border-radius: 999px;
-          padding: 7px 10px;
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .1em;
-        }
-
-        .serviceCard.active span {
-          background: rgba(255,255,255,.13);
-          color: #d9b45f;
-        }
-
         .serviceCard b {
           display: block;
-          margin-top: 12px;
-          color: #244536;
-          font-size: 18px;
+          margin-top: 10px;
+          color: #f4d58b;
+          font-size: 16px;
         }
 
-        .serviceCard.active b {
-          color: #d9b45f;
+        .checkout {
+          margin-bottom: 18px;
         }
 
-        .selectedBox,
-        .operationBox,
-        .feeBox,
-        .inventoryCheck,
-        .careSyncBox,
-        .currentProgramBox {
-          border-radius: 22px;
-          background: #f3ead8;
-          border: 1px solid rgba(92,70,35,.08);
-          padding: 16px;
-          margin-top: 18px;
+        .checkoutHead {
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: flex-start;
         }
 
-        .currentProgramBox,
-        .careSyncBox {
-          background:
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.54), transparent 28%),
-            rgba(49,85,61,.08);
+        .checkoutHead h2 {
+          margin: 0;
+          color: #fff7df;
+          font-size: 32px;
         }
 
-        .selectedBox span,
-        .operationBox span {
+        .checkoutHead span {
           display: block;
-          color: #6b6b62;
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .selectedBox strong,
-        .operationBox h3,
-        .currentProgramBox strong,
-        .careSyncBox strong {
-          display: block;
-          margin: 8px 0 0;
-          color: #101a14;
-          font-size: 20px;
-        }
-
-        .selectedBox p,
-        .operationBox p,
-        .inventoryCheck p,
-        .careSyncBox p {
-          margin: 8px 0 0;
-          color: #6b6b62;
-          line-height: 1.5;
+          margin-top: 7px;
+          color: rgba(255,247,223,.62);
           font-weight: 800;
         }
 
-        .programMiniGrid {
+        .checkoutTarget {
+          min-width: 220px;
+          border-radius: 22px;
+          padding: 16px;
+          background: rgba(232,190,103,.10);
+          border: 1px solid rgba(232,190,103,.18);
+        }
+
+        .checkoutGrid {
           display: grid;
-          grid-template-columns: repeat(2, 1fr);
+          grid-template-columns: .8fr 1fr;
+          gap: 16px;
+          margin-top: 16px;
+        }
+
+        .miniGrid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
           gap: 10px;
           margin-top: 14px;
         }
@@ -1710,12 +1899,12 @@ export default function TreeOperationsPage() {
         .mini {
           border-radius: 16px;
           padding: 12px;
-          background: rgba(255,253,246,.82);
+          background: rgba(255,255,255,.07);
         }
 
         .mini span {
           display: block;
-          color: #6b6b62;
+          color: #e8be67;
           font-size: 10px;
           font-weight: 900;
           text-transform: uppercase;
@@ -1725,38 +1914,27 @@ export default function TreeOperationsPage() {
         .mini b {
           display: block;
           margin-top: 6px;
-          color: #244536;
+          color: #fff7df;
           font-size: 13px;
           line-height: 1.35;
           word-break: break-word;
         }
 
         .inventoryCheck.ok {
-          background: rgba(49,85,61,.10);
-          color: #31553d;
+          border-color: rgba(121,225,146,.22);
         }
 
         .inventoryCheck.bad {
-          background: rgba(163,60,42,.10);
-          color: #a33c2a;
+          border-color: rgba(255,120,96,.24);
         }
 
-        .inventoryCheck strong {
+        .inventoryCheck strong,
+        .careSyncBox strong {
           display: block;
-          font-size: 13px;
+          color: #fff7df;
+          font-size: 14px;
           text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .buyMissing {
-          display: inline-flex;
-          margin-top: 12px;
-          border-radius: 999px;
-          padding: 10px 14px;
-          background: #244536;
-          color: white;
-          text-decoration: none;
-          font-weight: 900;
+          letter-spacing: .10em;
         }
 
         .feeRow {
@@ -1764,8 +1942,8 @@ export default function TreeOperationsPage() {
           justify-content: space-between;
           gap: 12px;
           padding: 12px 0;
-          border-bottom: 1px solid rgba(92,70,35,.10);
-          color: #6b6b62;
+          border-bottom: 1px solid rgba(255,255,255,.08);
+          color: rgba(255,247,223,.68);
           font-weight: 900;
         }
 
@@ -1774,15 +1952,18 @@ export default function TreeOperationsPage() {
         }
 
         .feeRow.strong {
-          color: #101a14;
+          color: #fff7df;
           font-size: 18px;
+        }
+
+        .feeRow b {
+          color: #f4d58b;
         }
 
         label {
           display: grid;
           gap: 8px;
-          margin-top: 18px;
-          color: #6b6b62;
+          color: #e8be67;
           font-size: 12px;
           font-weight: 900;
           text-transform: uppercase;
@@ -1791,15 +1972,19 @@ export default function TreeOperationsPage() {
 
         textarea {
           width: 100%;
-          min-height: 120px;
-          border: 1px solid rgba(92,70,35,.14);
-          border-radius: 16px;
+          min-height: 148px;
+          border: 1px solid rgba(232,190,103,.20);
+          border-radius: 18px;
           padding: 14px;
-          background: rgba(255,253,246,.94);
-          color: #101a14;
+          background: rgba(255,255,255,.08);
+          color: #fff7df;
           outline: none;
           font-weight: 800;
           resize: vertical;
+        }
+
+        textarea::placeholder {
+          color: rgba(255,247,223,.38);
         }
 
         .actionGrid {
@@ -1809,41 +1994,35 @@ export default function TreeOperationsPage() {
           margin-top: 16px;
         }
 
-        .submitButton {
+        .submitButton,
+        .autoRenewButton {
           width: 100%;
-          margin-top: 16px;
           border: 0;
-          border-radius: 16px;
+          border-radius: 18px;
           padding: 15px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
+          background: linear-gradient(135deg, #f4d58b, #c99536);
+          color: #08120d;
           font-weight: 900;
           cursor: pointer;
         }
 
-        .actionGrid .submitButton {
-          margin-top: 0;
-        }
-
         .submitButton.secondary {
-          background: #d9b45f;
-          color: #10281f;
+          color: #fff7df;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(232,190,103,.22);
         }
 
-        .submitButton:disabled {
+        .autoRenewButton {
+          margin-top: 12px;
+          color: #fff7df;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(232,190,103,.22);
+        }
+
+        .submitButton:disabled,
+        .autoRenewButton:disabled {
           opacity: .55;
           cursor: not-allowed;
-        }
-
-        .warning {
-          margin: 12px 0 0;
-          color: #8c6a3c;
-          font-weight: 900;
-          line-height: 1.5;
-        }
-
-        .history {
-          margin-top: 18px;
         }
 
         .requestList {
@@ -1857,20 +2036,20 @@ export default function TreeOperationsPage() {
           grid-template-columns: 1fr auto;
           gap: 16px;
           align-items: center;
-          border-radius: 18px;
-          background: #f3ead8;
+          border-radius: 20px;
+          background: rgba(255,255,255,.07);
           padding: 16px;
-          border: 1px solid rgba(92,70,35,.08);
+          border: 1px solid rgba(255,255,255,.08);
         }
 
         .requestRow strong {
-          color: #101a14;
+          color: #fff7df;
           font-size: 16px;
         }
 
         .requestRow p {
           margin: 6px 0 0;
-          color: #6b6b62;
+          color: rgba(255,247,223,.62);
           font-size: 13px;
           font-weight: 800;
         }
@@ -1878,7 +2057,7 @@ export default function TreeOperationsPage() {
         .requestRow small {
           display: block;
           margin-top: 6px;
-          color: #8c6a3c;
+          color: #f4d58b;
           font-weight: 900;
           white-space: pre-line;
         }
@@ -1890,7 +2069,7 @@ export default function TreeOperationsPage() {
         }
 
         .requestRight b {
-          color: #244536;
+          color: #f4d58b;
         }
 
         .status {
@@ -1901,34 +2080,52 @@ export default function TreeOperationsPage() {
           padding: 8px 10px;
           font-size: 11px;
           font-weight: 900;
+          background: rgba(244,213,139,.16);
+          color: #f4d58b;
         }
 
-        .status.pending {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-        }
-
-        .status.approved,
         .status.completed,
-        .status.active {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
+        .status.active,
+        .status.approved {
+          background: rgba(121,225,146,.14);
+          color: #8df0a4;
         }
 
         .status.rejected,
         .status.failed,
-        .status.expired {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
+        .status.expired,
+        .status.cancelled {
+          background: rgba(255,120,96,.14);
+          color: #ff9a88;
         }
 
-        @media (max-width: 1220px) {
+        .softEmpty {
+          border-radius: 18px;
+          padding: 14px;
+          color: rgba(255,247,223,.62);
+          background: rgba(255,255,255,.06);
+          font-weight: 900;
+          text-align: center;
+          margin-top: 14px;
+        }
+
+        @media (max-width: 1260px) {
+          .hero,
+          .careLayout,
+          .checkoutGrid {
+            grid-template-columns: 1fr;
+          }
+
           .stats {
             grid-template-columns: repeat(2, 1fr);
           }
 
-          .grid {
-            grid-template-columns: 1fr;
+          .miniGrid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+
+          .checkoutHead {
+            display: grid;
           }
         }
 
@@ -1937,22 +2134,15 @@ export default function TreeOperationsPage() {
             padding: 18px;
           }
 
-          .hero {
-            flex-direction: column;
-          }
-
           .hero h1 {
-            font-size: 34px;
-          }
-
-          .walletCard {
-            min-width: 100%;
+            font-size: 40px;
           }
 
           .stats,
-          .requestRow,
-          .programMiniGrid,
-          .actionGrid {
+          .scopeGrid,
+          .miniGrid,
+          .actionGrid,
+          .requestRow {
             grid-template-columns: 1fr;
           }
 
@@ -1963,44 +2153,6 @@ export default function TreeOperationsPage() {
       `}</style>
     </main>
   );
-}
-
-function getProgramDuration(program: MarketplaceProduct) {
-  const name = String(program.name || "").toLowerCase();
-  const unit = String(program.unit || "").toLowerCase();
-
-  if (name.includes("1 week") || unit.includes("week")) return "1 Week";
-  if (name.includes("premium")) return "Monthly";
-  if (name.includes("standard")) return "Monthly";
-
-  return program.unit || "Program";
-}
-
-function getProgramCoverage(program: MarketplaceProduct) {
-  const name = String(program.name || "").toLowerCase();
-
-  if (name.includes("premium")) {
-    return "Premium monthly care coverage with advanced pest control, tree health booster, plantation monitoring, and priority support.";
-  }
-
-  if (name.includes("standard")) {
-    return "Standard monthly care coverage with fertilizer, nutrients, fungicide protection, pest control, monitoring, and health assessment.";
-  }
-
-  return "Weekly care coverage with organic fertilizer, tree nutrients, basic tree health check, and growth monitoring.";
-}
-
-function getNextRenewalDate(duration: string) {
-  const nextDate = new Date();
-  const normalized = String(duration || "").toLowerCase();
-
-  if (normalized.includes("week")) {
-    nextDate.setDate(nextDate.getDate() + 7);
-  } else {
-    nextDate.setMonth(nextDate.getMonth() + 1);
-  }
-
-  return nextDate.toISOString();
 }
 
 function PanelHead({ title, text }: { title: string; text: string }) {
@@ -2045,25 +2197,4 @@ function FeeRow({
       <b>{peso(value)}</b>
     </div>
   );
-}
-
-function peso(value: number) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function statusClass(value: string | null | undefined) {
-  return (value || "pending").toLowerCase().replaceAll(" ", "_");
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "Not set";
-
-  return new Date(value).toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }
