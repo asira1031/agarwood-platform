@@ -28,21 +28,6 @@ function normalize(value: any) {
   return String(value || "").trim().toUpperCase();
 }
 
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "Not recorded";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not recorded";
-
-  return date.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function statusLabel(value: string | null | undefined) {
   const status = normalize(value);
   if (status === "APPROVED") return "APPROVED";
@@ -59,6 +44,20 @@ function statusClass(value: string | null | undefined) {
   if (status === "PENDING") return "pending";
   if (status === "REJECTED") return "rejected";
   return "notSubmitted";
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function safeFileName(value: string) {
@@ -78,55 +77,12 @@ function maskIdNumber(value: string | null | undefined) {
 
 function getSubmittedValue(record: KycRecord | null | undefined) {
   if (!record) return null;
-  return record.submitted_at || record.created_at || record.updated_at || null;
+  return record.submitted_at || record.reviewed_at || null;
 }
 
 function getAdminNotes(record: KycRecord | null | undefined) {
   if (!record) return "—";
-  return (
-    record.admin_notes ||
-    record.rejection_reason ||
-    record.review_notes ||
-    record.notes ||
-    "—"
-  );
-}
-
-function getDocumentUrl(record: KycRecord | null | undefined) {
-  if (!record) return null;
-  return (
-    record.document_url ||
-    record.id_document_url ||
-    record.id_front_url ||
-    record.id_back_url ||
-    record.selfie_url ||
-    record.proof_of_address_url ||
-    null
-  );
-}
-
-function removeBadColumnFromPayload(
-  payload: Record<string, any>,
-  errorMessage: string
-) {
-  const patterns = [
-    /Could not find the '([^']+)' column/i,
-    /column "([^"]+)" does not exist/i,
-    /schema cache.*'([^']+)'/i,
-    /record "new" has no field "([^"]+)"/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = errorMessage.match(pattern);
-
-    if (match?.[1] && Object.prototype.hasOwnProperty.call(payload, match[1])) {
-      const next = { ...payload };
-      delete next[match[1]];
-      return next;
-    }
-  }
-
-  return null;
+  return record.review_notes || "—";
 }
 
 export default function ProfilePage() {
@@ -145,9 +101,9 @@ export default function ProfilePage() {
   const [kycForm, setKycForm] = useState({
     id_type: "",
     id_number: "",
-    notes: "",
     source_of_funds: "",
     investment_experience: "",
+    notes: "",
     risk_acknowledged: false,
   });
 
@@ -197,10 +153,10 @@ export default function ProfilePage() {
   async function resolveCurrentProfile() {
     const {
       data: { user },
-      error: userError,
+      error,
     } = await supabase.auth.getUser();
 
-    if (userError) throw userError;
+    if (error) throw error;
     if (!user) throw new Error("No authenticated user found.");
 
     const currentProfile = await findProfile(user.id, user.email || "");
@@ -212,47 +168,19 @@ export default function ProfilePage() {
     return currentProfile;
   }
 
-  async function loadKycRecords(profileId: string, email?: string | null) {
-    let loaded: KycRecord[] = [];
-
-    const { data: profileRows, error: profileError } = await supabase
+  async function loadKycRecords(profileId: string) {
+    const { data, error } = await supabase
       .from("kyc_records")
       .select("*")
-      .eq("profile_id", profileId);
+      .eq("profile_id", profileId)
+      .order("submitted_at", { ascending: false });
 
-    if (!profileError && profileRows && profileRows.length > 0) {
-      loaded = profileRows as KycRecord[];
+    if (error) {
+      setKycRecords([]);
+      return;
     }
 
-    if (loaded.length === 0) {
-      const { data: customerRows, error: customerError } = await supabase
-        .from("kyc_records")
-        .select("*")
-        .eq("customer_id", profileId);
-
-      if (!customerError && customerRows && customerRows.length > 0) {
-        loaded = customerRows as KycRecord[];
-      }
-    }
-
-    if (loaded.length === 0 && email) {
-      const { data: emailRows, error: emailError } = await supabase
-        .from("kyc_records")
-        .select("*")
-        .eq("email", email);
-
-      if (!emailError && emailRows && emailRows.length > 0) {
-        loaded = emailRows as KycRecord[];
-      }
-    }
-
-    loaded.sort((a, b) => {
-      const aTime = new Date(getSubmittedValue(a) || 0).getTime();
-      const bTime = new Date(getSubmittedValue(b) || 0).getTime();
-      return bTime - aTime;
-    });
-
-    setKycRecords(loaded);
+    setKycRecords((data || []) as KycRecord[]);
   }
 
   async function loadProfile() {
@@ -268,13 +196,9 @@ export default function ProfilePage() {
         phone: currentProfile.phone || "",
       });
 
-      await loadKycRecords(currentProfile.id, currentProfile.email);
+      await loadKycRecords(currentProfile.id);
     } catch (error: any) {
-      if (
-        String(error?.message || "")
-          .toLowerCase()
-          .includes("authenticated")
-      ) {
+      if (String(error?.message || "").toLowerCase().includes("authenticated")) {
         window.location.href = "/login";
         return;
       }
@@ -340,7 +264,6 @@ export default function ProfilePage() {
     const cleanName = safeFileName(file.name);
     const timestamp = Date.now();
     const filePath = `kyc/${profileId}/${folder}/${timestamp}-${cleanName}`;
-
     let lastError = "";
 
     for (const bucket of STORAGE_BUCKETS) {
@@ -358,46 +281,10 @@ export default function ProfilePage() {
       }
 
       const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
-
-      if (data?.publicUrl) return data.publicUrl;
-
-      return `${bucket}/${filePath}`;
+      return data?.publicUrl || `${bucket}/${filePath}`;
     }
 
     throw new Error(lastError || "KYC document upload failed.");
-  }
-
-  async function insertKycRecordSafe(payload: Record<string, any>) {
-    let currentPayload = { ...payload };
-
-    for (let attempt = 0; attempt < 25; attempt++) {
-      const { error } = await supabase.from("kyc_records").insert(currentPayload);
-
-      if (!error) return;
-
-      const nextPayload = removeBadColumnFromPayload(
-        currentPayload,
-        error.message
-      );
-
-      if (!nextPayload) throw new Error(error.message);
-
-      currentPayload = nextPayload;
-    }
-
-    throw new Error("Unable to insert KYC record after schema-safe retries.");
-  }
-
-  async function updateProfileKycPending(profileId: string) {
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        kyc_status: "PENDING",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", profileId);
-
-    if (error) throw new Error(error.message);
   }
 
   async function submitKyc() {
@@ -412,16 +299,13 @@ export default function ProfilePage() {
     if (!kycForm.id_number.trim()) return setMessage("Please enter ID number.");
 
     if (!files.id_document && !files.id_front) {
-      setMessage("Please upload an ID document/image.");
-      return;
+      return setMessage("Please upload an ID document/image.");
     }
 
     try {
       setSubmittingKyc(true);
 
       const currentProfile = await resolveCurrentProfile();
-      setProfile(currentProfile);
-
       const now = new Date().toISOString();
 
       const idDocumentUrl = await uploadToAnyKycBucket(
@@ -443,45 +327,44 @@ export default function ProfilePage() {
         : null;
 
       const proofUrl = files.proof
-        ? await uploadToAnyKycBucket(
-            files.proof,
-            "proof-address",
-            currentProfile.id
-          )
+        ? await uploadToAnyKycBucket(files.proof, "proof-address", currentProfile.id)
         : null;
 
-      const payload = {
+      const { error: insertError } = await supabase.from("kyc_records").insert({
         profile_id: currentProfile.id,
-        customer_id: currentProfile.id,
-        full_name: currentProfile.full_name,
-        email: currentProfile.email,
         id_type: kycForm.id_type,
         id_number: kycForm.id_number.trim(),
-        document_url: idDocumentUrl,
-        id_document_url: idDocumentUrl,
         id_front_url: idFrontUrl,
         id_back_url: idBackUrl,
         selfie_url: selfieUrl,
         proof_of_address_url: proofUrl,
-        notes: kycForm.notes.trim() || null,
         source_of_funds: kycForm.source_of_funds || null,
         investment_experience: kycForm.investment_experience || null,
         risk_acknowledged: kycForm.risk_acknowledged || false,
         status: "PENDING",
+        review_notes: kycForm.notes.trim() || null,
         submitted_at: now,
-        created_at: now,
-        updated_at: now,
-      };
+        reviewed_at: null,
+      });
 
-      await insertKycRecordSafe(payload);
-      await updateProfileKycPending(currentProfile.id);
+      if (insertError) throw insertError;
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          kyc_status: "PENDING",
+          updated_at: now,
+        })
+        .eq("id", currentProfile.id);
+
+      if (profileError) throw profileError;
 
       setKycForm({
         id_type: "",
         id_number: "",
-        notes: "",
         source_of_funds: "",
         investment_experience: "",
+        notes: "",
         risk_acknowledged: false,
       });
 
@@ -509,8 +392,7 @@ export default function ProfilePage() {
           <p className="eyebrow">Customer Account</p>
           <h1>Forest Identity Center</h1>
           <span>
-            Manage your customer identity, membership standing, and KYC
-            verification for Arganwood services.
+            Manage your customer identity, membership standing, and KYC verification for Arganwood services.
           </span>
         </div>
 
@@ -530,10 +412,7 @@ export default function ProfilePage() {
           <section className="stats">
             <SummaryCard label="Name" value={profile?.full_name || "Unnamed"} />
             <SummaryCard label="Email" value={profile?.email || "No email"} />
-            <SummaryCard
-              label="Membership"
-              value={statusLabel(membershipStatus)}
-            />
+            <SummaryCard label="Membership" value={statusLabel(membershipStatus)} />
             <SummaryCard label="KYC" value={statusLabel(kycStatus)} />
           </section>
 
@@ -543,9 +422,7 @@ export default function ProfilePage() {
                 <div>
                   <p className="eyebrow">Profile</p>
                   <h2>Identity Details</h2>
-                  <span>
-                    Friendly customer information from the profiles table.
-                  </span>
+                  <span>Friendly customer information from the profiles table.</span>
                 </div>
               </div>
 
@@ -555,10 +432,7 @@ export default function ProfilePage() {
                   <input
                     value={profileForm.full_name}
                     onChange={(e) =>
-                      setProfileForm({
-                        ...profileForm,
-                        full_name: e.target.value,
-                      })
+                      setProfileForm({ ...profileForm, full_name: e.target.value })
                     }
                     placeholder="Full name"
                   />
@@ -569,10 +443,7 @@ export default function ProfilePage() {
                   <input
                     value={profileForm.phone}
                     onChange={(e) =>
-                      setProfileForm({
-                        ...profileForm,
-                        phone: e.target.value,
-                      })
+                      setProfileForm({ ...profileForm, phone: e.target.value })
                     }
                     placeholder="Phone number"
                   />
@@ -593,26 +464,16 @@ export default function ProfilePage() {
               <div className="panelHead">
                 <div>
                   <p className="eyebrow">Trust Status</p>
-                  <h2>
-                    {isVerified ? "Verified Customer" : "Verification Needed"}
-                  </h2>
-                  <span>
-                    KYC approval unlocks withdrawal and sell tree access.
-                  </span>
+                  <h2>{isVerified ? "Verified Customer" : "Verification Needed"}</h2>
+                  <span>KYC approval unlocks withdrawal and sell tree access.</span>
                 </div>
               </div>
 
               <div className="trustList">
                 <Info label="Membership" value={statusLabel(membershipStatus)} />
                 <Info label="KYC Status" value={statusLabel(kycStatus)} />
-                <Info
-                  label="Withdraw Access"
-                  value={isVerified ? "UNLOCKED" : "LOCKED"}
-                />
-                <Info
-                  label="Sell Tree Access"
-                  value={isVerified ? "UNLOCKED" : "LOCKED"}
-                />
+                <Info label="Withdraw Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
+                <Info label="Sell Tree Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
               </div>
             </aside>
           </section>
@@ -625,16 +486,12 @@ export default function ProfilePage() {
                   <h2>KYC Documents</h2>
                   <span>Upload identity documents for admin verification.</span>
                 </div>
-                <b className={`pill ${statusClass(kycStatus)}`}>
-                  {statusLabel(kycStatus)}
-                </b>
+                <b className={`pill ${statusClass(kycStatus)}`}>{statusLabel(kycStatus)}</b>
               </div>
 
               {!canSubmitKyc ? (
                 <div className="lockedBox">
-                  <strong>
-                    {isVerified ? "KYC already approved." : "KYC is pending review."}
-                  </strong>
+                  <strong>{isVerified ? "KYC already approved." : "KYC is pending review."}</strong>
                   <p>
                     {isVerified
                       ? "Your account is verified. You may use payout and sell tree features."
@@ -646,10 +503,7 @@ export default function ProfilePage() {
                   {isRejected && (
                     <div className="rejectedBox">
                       <strong>Previous KYC was rejected.</strong>
-                      <p>
-                        {getAdminNotes(latestKyc) ||
-                          "Please review your documents and submit again."}
-                      </p>
+                      <p>{getAdminNotes(latestKyc) || "Please review your documents and submit again."}</p>
                     </div>
                   )}
 
@@ -658,12 +512,7 @@ export default function ProfilePage() {
                       ID Type
                       <select
                         value={kycForm.id_type}
-                        onChange={(e) =>
-                          setKycForm({
-                            ...kycForm,
-                            id_type: e.target.value,
-                          })
-                        }
+                        onChange={(e) => setKycForm({ ...kycForm, id_type: e.target.value })}
                       >
                         <option value="">Select ID Type</option>
                         {ID_TYPES.map((type) => (
@@ -678,12 +527,7 @@ export default function ProfilePage() {
                       ID Number
                       <input
                         value={kycForm.id_number}
-                        onChange={(e) =>
-                          setKycForm({
-                            ...kycForm,
-                            id_number: e.target.value,
-                          })
-                        }
+                        onChange={(e) => setKycForm({ ...kycForm, id_number: e.target.value })}
                         placeholder="Enter ID number"
                       />
                     </label>
@@ -693,10 +537,7 @@ export default function ProfilePage() {
                       <select
                         value={kycForm.source_of_funds}
                         onChange={(e) =>
-                          setKycForm({
-                            ...kycForm,
-                            source_of_funds: e.target.value,
-                          })
+                          setKycForm({ ...kycForm, source_of_funds: e.target.value })
                         }
                       >
                         <option value="">Select Source of Funds</option>
@@ -714,10 +555,7 @@ export default function ProfilePage() {
                       <select
                         value={kycForm.investment_experience}
                         onChange={(e) =>
-                          setKycForm({
-                            ...kycForm,
-                            investment_experience: e.target.value,
-                          })
+                          setKycForm({ ...kycForm, investment_experience: e.target.value })
                         }
                       >
                         <option value="">Select Experience</option>
@@ -733,12 +571,7 @@ export default function ProfilePage() {
                     Notes Optional
                     <textarea
                       value={kycForm.notes}
-                      onChange={(e) =>
-                        setKycForm({
-                          ...kycForm,
-                          notes: e.target.value,
-                        })
-                      }
+                      onChange={(e) => setKycForm({ ...kycForm, notes: e.target.value })}
                       placeholder="Add notes for admin review"
                     />
                   </label>
@@ -747,9 +580,7 @@ export default function ProfilePage() {
                     <UploadBox
                       label="ID Document / Image Required"
                       file={files.id_document}
-                      onChange={(file) =>
-                        setFiles({ ...files, id_document: file })
-                      }
+                      onChange={(file) => setFiles({ ...files, id_document: file })}
                     />
                     <UploadBox
                       label="Front of ID Optional"
@@ -778,15 +609,11 @@ export default function ProfilePage() {
                       type="checkbox"
                       checked={kycForm.risk_acknowledged}
                       onChange={(e) =>
-                        setKycForm({
-                          ...kycForm,
-                          risk_acknowledged: e.target.checked,
-                        })
+                        setKycForm({ ...kycForm, risk_acknowledged: e.target.checked })
                       }
                     />
                     <span>
-                      I understand that agarwood ownership involves long-term
-                      agricultural, market, and verification risk.
+                      I understand that agarwood ownership involves long-term agricultural, market, and verification risk.
                     </span>
                   </label>
 
@@ -812,56 +639,17 @@ export default function ProfilePage() {
                 <div className="trustList">
                   <Info label="Status" value={statusLabel(latestKyc.status)} />
                   <Info label="ID Type" value={latestKyc.id_type || "—"} />
-                  <Info
-                    label="ID Number"
-                    value={maskIdNumber(latestKyc.id_number)}
-                  />
-                  <Info
-                    label="Submitted"
-                    value={formatDateTime(getSubmittedValue(latestKyc))}
-                  />
-                  <Info
-                    label="Reviewed"
-                    value={formatDateTime(latestKyc.reviewed_at)}
-                  />
-                  <Info
-                    label="Admin Notes / Rejection Reason"
-                    value={getAdminNotes(latestKyc)}
-                  />
+                  <Info label="ID Number" value={maskIdNumber(latestKyc.id_number)} />
+                  <Info label="Submitted" value={formatDateTime(getSubmittedValue(latestKyc))} />
+                  <Info label="Reviewed" value={formatDateTime(latestKyc.reviewed_at)} />
+                  <Info label="Admin Notes / Rejection Reason" value={getAdminNotes(latestKyc)} />
 
                   <div className="docLinks">
-                    <DocumentLink
-                      title="Main Document"
-                      url={getDocumentUrl(latestKyc)}
-                    />
-                    <DocumentLink
-                      title="Front ID"
-                      url={latestKyc.id_front_url}
-                    />
-                    <DocumentLink
-                      title="Back ID"
-                      url={latestKyc.id_back_url}
-                    />
+                    <DocumentLink title="Front ID" url={latestKyc.id_front_url} />
+                    <DocumentLink title="Back ID" url={latestKyc.id_back_url} />
                     <DocumentLink title="Selfie" url={latestKyc.selfie_url} />
-                    <DocumentLink
-                      title="Proof"
-                      url={latestKyc.proof_of_address_url}
-                    />
+                    <DocumentLink title="Proof" url={latestKyc.proof_of_address_url} />
                   </div>
-                </div>
-              )}
-
-              {kycRecords.length > 1 && (
-                <div className="historyList">
-                  <h3>Previous Submissions</h3>
-
-                  {kycRecords.slice(1).map((record, index) => (
-                    <div key={record.id || index} className="historyItem">
-                      <strong>{statusLabel(record.status)}</strong>
-                      <span>{record.id_type || "Unknown ID"}</span>
-                      <small>{formatDateTime(getSubmittedValue(record))}</small>
-                    </div>
-                  ))}
                 </div>
               )}
             </aside>
@@ -1040,7 +828,6 @@ export default function ProfilePage() {
         }
 
         input:disabled { opacity: .65; }
-
         option { color: #07140f; }
 
         button {
@@ -1190,36 +977,6 @@ export default function ProfilePage() {
 
         .docLinks span { color: rgba(248,241,216,.45); }
 
-        .historyList {
-          margin-top: 18px;
-          display: grid;
-          gap: 10px;
-        }
-
-        .historyList h3 {
-          margin: 0 0 4px;
-          color: #fff8dc;
-          font-size: 18px;
-        }
-
-        .historyItem {
-          display: grid;
-          gap: 5px;
-          border: 1px solid rgba(214,178,94,.12);
-          border-radius: 16px;
-          background: rgba(0,0,0,.22);
-          padding: 12px;
-        }
-
-        .historyItem strong { color: #d6b25e; }
-
-        .historyItem span {
-          color: #fff8dc;
-          font-weight: 900;
-        }
-
-        .historyItem small { color: rgba(248,241,216,.58); }
-
         @media (max-width: 980px) {
           .hero,
           .grid {
@@ -1234,7 +991,6 @@ export default function ProfilePage() {
           }
 
           .identityCard { min-width: 0; }
-
           h1 { font-size: 36px; }
         }
       `}</style>
