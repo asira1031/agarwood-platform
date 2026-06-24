@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { createClient } from "@/utils/supabase/client";
+import { supabase } from "@/lib/supabase";
 
 type AssignedTask = {
   assignment_id: string;
@@ -26,7 +26,6 @@ type AssignedTask = {
 const verifiedKey = (id: string) => `verified_tree_assignment_${id}`;
 
 export default function GardenerPhotoUpdatesPage() {
-  const supabase = createClient();
   const searchParams = useSearchParams();
 
   const [loading, setLoading] = useState(true);
