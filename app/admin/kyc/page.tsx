@@ -5,9 +5,14 @@ import { supabase } from "@/lib/supabase";
 
 type KYCRecord = {
   id: string;
-  profile_id: string;
+  profile_id: string | null;
+  customer_id?: string | null;
+  full_name?: string | null;
+  email?: string | null;
   id_type: string | null;
   id_number: string | null;
+  document_url?: string | null;
+  id_document_url?: string | null;
   id_front_url: string | null;
   id_back_url: string | null;
   selfie_url: string | null;
@@ -16,9 +21,14 @@ type KYCRecord = {
   investment_experience: string | null;
   risk_acknowledged: boolean | null;
   status: string | null;
+  notes?: string | null;
   review_notes: string | null;
+  admin_notes?: string | null;
+  rejection_reason?: string | null;
   submitted_at: string | null;
   reviewed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type ProfileRow = {
@@ -28,6 +38,30 @@ type ProfileRow = {
 };
 
 type TabKey = "PENDING" | "HISTORY";
+
+function removeBadColumnFromPayload(
+  payload: Record<string, any>,
+  errorMessage: string
+) {
+  const patterns = [
+    /Could not find the '([^']+)' column/i,
+    /column "([^"]+)" does not exist/i,
+    /schema cache.*'([^']+)'/i,
+    /record "new" has no field "([^"]+)"/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = errorMessage.match(pattern);
+
+    if (match?.[1] && Object.prototype.hasOwnProperty.call(payload, match[1])) {
+      const next = { ...payload };
+      delete next[match[1]];
+      return next;
+    }
+  }
+
+  return null;
+}
 
 export default function AdminKYCPage() {
   const [records, setRecords] = useState<KYCRecord[]>([]);
@@ -60,7 +94,11 @@ export default function AdminKYCPage() {
     }
 
     const profileIds = Array.from(
-      new Set((kycRows || []).map((item) => item.profile_id).filter(Boolean))
+      new Set(
+        (kycRows || [])
+          .flatMap((item) => [item.profile_id, item.customer_id])
+          .filter(Boolean)
+      )
     ) as string[];
 
     let profileRows: ProfileRow[] = [];
@@ -80,7 +118,11 @@ export default function AdminKYCPage() {
 
     const nextNotes: Record<string, string> = {};
     (kycRows || []).forEach((record) => {
-      nextNotes[record.id] = record.review_notes || "";
+      nextNotes[record.id] =
+        record.review_notes ||
+        record.admin_notes ||
+        record.rejection_reason ||
+        "";
     });
 
     setRecords((kycRows || []) as KYCRecord[]);
@@ -111,8 +153,26 @@ export default function AdminKYCPage() {
     (record) => String(record.status || "").toUpperCase() === "REJECTED"
   ).length;
 
-  function getProfile(profileId: string | null | undefined) {
-    return profiles.find((profile) => profile.id === profileId) || null;
+  function getProfile(record: KYCRecord) {
+    return (
+      profiles.find((profile) => profile.id === record.profile_id) ||
+      profiles.find((profile) => profile.id === record.customer_id) ||
+      null
+    );
+  }
+
+  function getTargetProfileId(record: KYCRecord) {
+    return record.profile_id || record.customer_id || "";
+  }
+
+  function getCustomerName(record: KYCRecord) {
+    const profile = getProfile(record);
+    return record.full_name || profile?.full_name || "Unknown Customer";
+  }
+
+  function getCustomerEmail(record: KYCRecord) {
+    const profile = getProfile(record);
+    return record.email || profile?.email || "No email";
   }
 
   function formatDate(value: string | null | undefined) {
@@ -141,11 +201,72 @@ export default function AdminKYCPage() {
     return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
   }
 
+  async function updateKYCRecordSafe(
+    recordId: string,
+    payload: Record<string, any>
+  ) {
+    let currentPayload = { ...payload };
+
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const { error } = await supabase
+        .from("kyc_records")
+        .update(currentPayload)
+        .eq("id", recordId);
+
+      if (!error) return;
+
+      const nextPayload = removeBadColumnFromPayload(
+        currentPayload,
+        error.message
+      );
+
+      if (!nextPayload) {
+        throw new Error(error.message);
+      }
+
+      currentPayload = nextPayload;
+    }
+
+    throw new Error("Unable to update KYC record after schema-safe retries.");
+  }
+
+  async function updateProfileStatusSafe(
+    profileId: string,
+    nextStatus: "APPROVED" | "REJECTED",
+    reviewedAt: string
+  ) {
+    let payload: Record<string, any> = {
+      kyc_status: nextStatus,
+      updated_at: reviewedAt,
+    };
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const { error } = await supabase
+        .from("profiles")
+        .update(payload)
+        .eq("id", profileId);
+
+      if (!error) return;
+
+      const nextPayload = removeBadColumnFromPayload(payload, error.message);
+
+      if (!nextPayload) {
+        throw new Error(error.message);
+      }
+
+      payload = nextPayload;
+    }
+
+    throw new Error("Unable to update profile KYC status.");
+  }
+
   async function reviewKYC(
     record: KYCRecord,
     nextStatus: "APPROVED" | "REJECTED"
   ) {
-    if (!record.id || !record.profile_id) {
+    const profileId = getTargetProfileId(record);
+
+    if (!record.id || !profileId) {
       setMessage("Missing KYC record ID or profile ID.");
       return;
     }
@@ -169,43 +290,42 @@ export default function AdminKYCPage() {
     setMessage("");
 
     const reviewedAt = new Date().toISOString();
+    const finalNote =
+      note.trim() ||
+      (nextStatus === "APPROVED"
+        ? "KYC approved by admin."
+        : "KYC rejected by admin.");
 
-    const { error: kycError } = await supabase
-      .from("kyc_records")
-      .update({
-        status: nextStatus,
-        review_notes:
-          note.trim() ||
-          (nextStatus === "APPROVED"
-            ? "KYC approved by admin."
-            : "KYC rejected by admin."),
-        reviewed_at: reviewedAt,
-      })
-      .eq("id", record.id);
+    try {
+      if (nextStatus === "APPROVED") {
+        await updateKYCRecordSafe(record.id, {
+          status: "APPROVED",
+          review_notes: finalNote,
+          admin_notes: finalNote,
+          reviewed_at: reviewedAt,
+          updated_at: reviewedAt,
+        });
+      } else {
+        await updateKYCRecordSafe(record.id, {
+          status: "REJECTED",
+          review_notes: finalNote,
+          admin_notes: finalNote,
+          rejection_reason: finalNote,
+          reviewed_at: reviewedAt,
+          updated_at: reviewedAt,
+        });
+      }
 
-    if (kycError) {
-      setMessage(kycError.message);
+      await updateProfileStatusSafe(profileId, nextStatus, reviewedAt);
+
+      setMessage(`KYC ${nextStatus}. Moved to KYC History.`);
       setWorkingId("");
-      return;
-    }
-
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
-        kyc_status: nextStatus,
-      })
-      .eq("id", record.profile_id);
-
-    if (profileError) {
-      setMessage(profileError.message);
+      await loadKYC();
+      setTab("PENDING");
+    } catch (error: any) {
+      setMessage(error?.message || `Failed to ${nextStatus.toLowerCase()} KYC.`);
       setWorkingId("");
-      return;
     }
-
-    setMessage(`KYC ${nextStatus}. Moved to KYC History.`);
-    setWorkingId("");
-    await loadKYC();
-    setTab("PENDING");
   }
 
   const activeRecords = tab === "PENDING" ? pendingRecords : historyRecords;
@@ -290,9 +410,9 @@ export default function AdminKYCPage() {
         ) : (
           <section className="space-y-5">
             {activeRecords.map((record) => {
-              const profile = getProfile(record.profile_id);
               const status = String(record.status || "PENDING").toUpperCase();
               const isPending = status === "PENDING";
+              const targetProfileId = getTargetProfileId(record);
 
               return (
                 <div
@@ -303,7 +423,7 @@ export default function AdminKYCPage() {
                     <div className="space-y-3">
                       <div className="flex flex-wrap items-center gap-3">
                         <h2 className="text-2xl font-bold text-[#ffe49a]">
-                          {profile?.full_name || "Unknown Customer"}
+                          {getCustomerName(record)}
                         </h2>
 
                         <span
@@ -318,13 +438,13 @@ export default function AdminKYCPage() {
                       <div className="text-sm text-white/65">
                         <p>
                           Email:{" "}
-                          <b className="text-white">
-                            {profile?.email || "No email"}
-                          </b>
+                          <b className="text-white">{getCustomerEmail(record)}</b>
                         </p>
                         <p>
                           Profile ID:{" "}
-                          <b className="text-white">{record.profile_id}</b>
+                          <b className="text-white">
+                            {targetProfileId || "Missing profile/customer id"}
+                          </b>
                         </p>
                         <p>
                           ID Type:{" "}
@@ -359,7 +479,11 @@ export default function AdminKYCPage() {
                         <p>
                           Submitted:{" "}
                           <b className="text-white">
-                            {formatDate(record.submitted_at)}
+                            {formatDate(
+                              record.submitted_at ||
+                                record.created_at ||
+                                record.updated_at
+                            )}
                           </b>
                         </p>
 
@@ -371,10 +495,33 @@ export default function AdminKYCPage() {
                             </b>
                           </p>
                         )}
+
+                        {!isPending && (
+                          <p>
+                            Admin Notes:{" "}
+                            <b className="text-white">
+                              {record.admin_notes ||
+                                record.rejection_reason ||
+                                record.review_notes ||
+                                "N/A"}
+                            </b>
+                          </p>
+                        )}
+
+                        {record.notes && (
+                          <p>
+                            Customer Notes:{" "}
+                            <b className="text-white">{record.notes}</b>
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    <div className="grid gap-2 text-sm md:grid-cols-2 lg:w-[420px]">
+                    <div className="grid gap-2 text-sm md:grid-cols-2 lg:w-[520px]">
+                      <DocLink
+                        label="Main ID Document"
+                        url={record.document_url || record.id_document_url || null}
+                      />
                       <DocLink label="ID Front" url={record.id_front_url} />
                       <DocLink label="ID Back" url={record.id_back_url} />
                       <DocLink label="Selfie" url={record.selfie_url} />
@@ -441,7 +588,13 @@ export default function AdminKYCPage() {
   );
 }
 
-function DocLink({ label, url }: { label: string; url: string | null }) {
+function DocLink({
+  label,
+  url,
+}: {
+  label: string;
+  url: string | null | undefined;
+}) {
   if (!url) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-white/40">
