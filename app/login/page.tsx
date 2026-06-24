@@ -195,6 +195,7 @@ export default function LoginPage() {
         full_name: cleanName,
         email: cleanEmail,
         referral_code: newUserReferralCode,
+        referred_by_code: cleanReferralCode || null,
         account_status: "ACTIVE",
         verification_status: "PENDING",
       });
@@ -369,6 +370,24 @@ export default function LoginPage() {
                       placeholder="Your full name"
                     />
                   </div>
+                </label>
+              )}
+
+              {mode === "register" && (
+                <label className="block">
+                  <span className="font-black text-[#0f2c1b]">Referral code optional</span>
+                  <div className="mt-3 flex items-center gap-4 rounded-xl border border-[#d1d7d5] bg-white px-5 py-4 shadow-sm">
+                    <span className="text-2xl text-[#77838a]">🎁</span>
+                    <input
+                      value={referralCode}
+                      onChange={(e) => setReferralCode(e.target.value.trim())}
+                      className="w-full bg-transparent text-lg text-[#0f2c1b] outline-none placeholder:text-[#7b8790] disabled:cursor-not-allowed disabled:text-[#4f5b55]"
+                      placeholder="Enter referral code if you have one"
+                    />
+                  </div>
+                  <p className="mt-2 text-sm font-bold text-[#53645d]">
+                    Referral links automatically fill this field. Manual code entry is also allowed.
+                  </p>
                 </label>
               )}
 

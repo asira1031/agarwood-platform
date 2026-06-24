@@ -109,7 +109,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const t = setInterval(() => {
-      setStage((s) => (s >= 5 ? 1 : s + 1));
+      setStage((s) => (s >= 7 ? 1 : s + 1));
     }, 2600);
 
     return () => clearInterval(t);
@@ -250,9 +250,7 @@ export default function DashboardPage() {
   const walletBalance = Number(wallet?.balance || 0);
   const membershipStatus = cleanStatus(profile?.membership_status);
   const kycStatus = cleanStatus(profile?.kyc_status || profile?.account_status);
-  const careSubscription = cleanStatus(
-    profile?.care_subscription_status || profile?.care_status
-  );
+  const careSubscription = cleanStatus(profile?.care_subscription_status || profile?.care_status);
 
   const latestTreeDate = trees
     .map((tree) => tree.created_at)
@@ -261,30 +259,31 @@ export default function DashboardPage() {
 
   const gpsVerifiedCount = trees.filter((tree) => tree.gps_verified === true).length;
 
+  const pendingOperations = operationRequests.filter(
+    (op) => cleanStatus(op.status) === "PENDING" || cleanStatus(op.status) === "ASSIGNED"
+  ).length;
+
   const recentActivity = useMemo(() => {
     const walletRows = walletTransactions.map((tx) => ({
       id: `wallet-${tx.id}`,
-      icon: "💳",
-      title: tx.transaction_type || "Wallet Transaction",
+      icon: "₱",
+      title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
       description: tx.description || `${peso(Number(tx.amount || 0))} wallet activity`,
+      amount: peso(Number(tx.amount || 0)),
       date: formatDate(tx.created_at),
       status: cleanStatus(tx.status),
-      kind: "ok",
+      kind: "wallet",
     }));
 
     const operationRows = operationRequests.map((op) => ({
       id: `operation-${op.id}`,
       icon: "🌿",
-      title: op.operation_type || op.service_type || op.item_name || "Tree Operation",
+      title: cleanLabel(op.operation_type || op.service_type || op.item_name || "Tree Operation"),
       description: op.notes || `${peso(Number(op.total_amount || op.amount || 0))} operation request`,
+      amount: peso(Number(op.total_amount || op.amount || 0)),
       date: formatDate(op.created_at),
       status: cleanStatus(op.status),
-      kind:
-        String(op.status || "").toUpperCase() === "PENDING"
-          ? "warning"
-          : String(op.status || "").toUpperCase() === "REJECTED"
-          ? "danger"
-          : "ok",
+      kind: "operation",
     }));
 
     return [...walletRows, ...operationRows].slice(0, 6);
@@ -293,1170 +292,291 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <main className="dashboardPage">
-        <section className="content">
-          <div className="loadingBox">Loading dashboard...</div>
-        </section>
+        <div className="pageShell">
+          <div className="loadingBox">Loading customer dashboard...</div>
+        </div>
+
+        <style>{baseStyles}</style>
       </main>
     );
   }
 
   return (
     <main className="dashboardPage">
-      <section className="content">
-        <header className="header">
-          <div>
-            <p className="eyebrow">Welcome back,</p>
-            <h2>
-              {displayName} <span>🌿</span>
-            </h2>
-            <small>
-              Manage your agarwood investments, membership access, care services,
-              wallet activity, and tree updates.
-            </small>
+      <div className="pageShell">
+        <header className="hero">
+          <div className="heroText">
+            <p className="eyebrow">Customer Buyer Portal</p>
+            <h1>
+              Welcome back, <span>{displayName}</span>
+            </h1>
+            <p>
+              Your live agarwood investment dashboard. Cash in, activate membership,
+              complete KYC, buy trees, monitor care, and prepare for resale.
+            </p>
             {errorMessage && <div className="errorBox">{errorMessage}</div>}
+
+            <div className="heroActions">
+              <Link href="/dashboard/wallet">Cash In</Link>
+              <Link href="/dashboard/marketplace">Buy Tree</Link>
+              <Link href="/dashboard/my-trees">Track Trees</Link>
+            </div>
           </div>
 
-          <div className="headerActions">
-            <Link
-              href="/dashboard/transactions"
-              className="headerIconButton"
-              title="Open transactions and notifications"
-            >
-              🔔<i>{recentActivity.length}</i>
-            </Link>
-
-            <Link
-              href="/dashboard/tree-operations"
-              className="headerIconButton"
-              title="Open tree operation messages"
-            >
-              ✉️<i>{operationRequests.length}</i>
-            </Link>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="logoutButton"
-              title="Logout"
-            >
-              🚪 Logout
+          <div className="accountGlass">
+            <div className="avatar">{initials}</div>
+            <div>
+              <small>Active Account</small>
+              <strong>{profile?.email || "Verified customer"}</strong>
+            </div>
+            <button type="button" onClick={handleLogout}>
+              Logout
             </button>
-
-            <div className="topAvatar">{initials}</div>
           </div>
         </header>
 
-        <section className="stats">
-          <Card
-            icon="🌳"
-            title="Owned Trees"
-            value={String(trees.length)}
-            sub={`${individualTrees} individual • ${packageTrees} package`}
-          />
-          <Card
-            icon="🎖️"
-            title="Membership"
-            value={membershipStatus}
-            sub={`KYC: ${kycStatus}`}
-            gold
-          />
-          <Card
-            icon="🛡️"
-            title="Care Subscription"
-            value={careSubscription}
-            sub="Real profile care status"
-          />
-          <Card
-            icon="💳"
-            title="Wallet Balance"
-            value={peso(walletBalance)}
-            sub="Available balance"
-          />
+        <section className="metricGrid">
+          <MetricCard label="Wallet Balance" value={peso(walletBalance)} note="Available buying power" />
+          <MetricCard label="Membership Status" value={membershipStatus} note="Required before full access" />
+          <MetricCard label="KYC Status" value={kycStatus} note="Required for withdrawals" />
+          <MetricCard label="Owned Trees" value={String(trees.length)} note={`${individualTrees} individual • ${packageTrees} package`} />
+          <MetricCard label="Pending Operations" value={String(pendingOperations)} note="Care requests in progress" />
+          <MetricCard label="Latest Transactions" value={String(walletTransactions.length)} note="Recent wallet movements" />
         </section>
 
         <section className="mainGrid">
-          <div className="journey">
-            <h3>Agarwood Growth Guide</h3>
-            <h4>Educational development stages</h4>
-
-            {[
-              ["Seedling", "0 - 6 Months", "Early root stage; photo may be limited", true],
-              ["Sapling", "6 - 18 Months", "Visible stem and leaves begin", true],
-              ["Young Tree", "1.5 - 3 Years", "Active growth and care monitoring", true],
-              ["Mature Tree", "3 - 7 Years", "Trunk mass and value development", false],
-              ["Harvest Ready", "7+ Years", "Eligible for sell or harvest review", false],
-            ].map((x, i) => (
-              <div className={`step ${i === 2 ? "current" : ""}`} key={x[0] as string}>
-                <span>{x[3] ? "✓" : "•"}</span>
-                <div>
-                  <strong>{x[0]}</strong>
-                  <p>{x[1]}</p>
-                  <small>{x[2]}</small>
-                </div>
-                {i === 2 && <b />}
-              </div>
-            ))}
-          </div>
-
-          <div className="treeVisualCard">
-            <div className="visualTop">
+          <div className="plantationPanel">
+            <div className="panelTop">
               <div>
-                <p className="visualEyebrow">🌿 Agarwood Growth Monitor</p>
-                <h3>Tree Portfolio Snapshot</h3>
-                <small>
-                  Premium dashboard visualization based on live Supabase records.
-                </small>
+                <p className="eyebrow">Realistic Plantation View</p>
+                <h2>Agarwood Estate Monitor</h2>
+                <span>Live portfolio counts shown over a premium plantation-style field.</span>
               </div>
 
-              <div className="visualBadge">
-                <strong>{stage}/5</strong>
-                <span>Guide Stage</span>
+              <div className="stageBadge">
+                <strong>{stage}/7</strong>
+                <small>Buyer Journey</small>
               </div>
             </div>
 
-            <div className="forestOrb">
-              <div className="orbRing">
-                <div className="orbCore">
-                  <strong>{trees.length}</strong>
-                  <span>Owned Trees</span>
-                </div>
-              </div>
-            </div>
+            <div className="plantationVisual">
+              <div className="moonGlow" />
+              <div className="mountain m1" />
+              <div className="mountain m2" />
+              <div className="mist mist1" />
+              <div className="mist mist2" />
 
-            <div className="visualStats">
-              <div>
-                <span>GPS Verified</span>
-                <strong>
-                  {trees.length === 0 ? "No Trees" : `${gpsVerifiedCount}/${trees.length}`}
-                </strong>
-              </div>
-              <div>
-                <span>Care Status</span>
-                <strong>{careSubscription}</strong>
-              </div>
-              <div>
-                <span>Latest Added</span>
-                <strong>{formatDate(latestTreeDate)}</strong>
-              </div>
-            </div>
-
-            <div className="progressGlass">
-              <div>
-                <strong>Educational Growth Guide</strong>
-                <span>{stage * 20}%</span>
+              <div className="treeLine back">
+                {Array.from({ length: 12 }).map((_, index) => (
+                  <i key={`back-${index}`} />
+                ))}
               </div>
 
-              <div className="bar">
-                <i style={{ width: `${stage * 20}%` }} />
+              <div className="treeLine mid">
+                {Array.from({ length: 10 }).map((_, index) => (
+                  <i key={`mid-${index}`} />
+                ))}
               </div>
 
-              <p>
-                <b>Live portfolio data</b>
-                <span>Guide only</span>
-              </p>
-            </div>
-          </div>
+              <div className="fieldRows">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
 
-          <div className="portfolio">
-            <div className="panelHead">
-              <h3>My Trees Overview</h3>
-              <Link href="/dashboard/my-trees">View My Trees ›</Link>
-            </div>
+              <div className="treeLine front">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <i key={`front-${index}`} />
+                ))}
+              </div>
 
-            <div className="treeOverviewHero">
-              <div>
+              <div className="estateCard">
+                <small>Owned Trees</small>
                 <strong>{trees.length}</strong>
-                <span>Owned Trees</span>
+                <span>GPS verified: {trees.length === 0 ? "0/0" : `${gpsVerifiedCount}/${trees.length}`}</span>
               </div>
             </div>
 
-            <div className="overviewRows">
-              <OverviewRow label="Individual Trees" value={String(individualTrees)} />
-              <OverviewRow label="Package Trees" value={String(packageTrees)} />
-              <OverviewRow label="Latest Tree Added" value={formatDate(latestTreeDate)} />
-              <OverviewRow
-                label="GPS Verification"
-                value={
-                  trees.length === 0
-                    ? "No Trees"
-                    : gpsVerifiedCount === trees.length
-                    ? "Verified"
-                    : `${gpsVerifiedCount}/${trees.length}`
-                }
-              />
-              <OverviewRow label="Care Subscription" value={careSubscription} />
-              <OverviewRow
-                label="Low Stock Items"
-                value={String(lowStockItems.length)}
-                alert={lowStockItems.length > 0}
-              />
+            <div className="plantationStats">
+              <Mini label="Latest Tree Added" value={formatDate(latestTreeDate)} />
+              <Mini label="Care Status" value={careSubscription} />
+              <Mini label="Inventory Alerts" value={String(lowStockItems.length)} />
             </div>
           </div>
 
-          <div className="inventory panel">
-            <div className="panelHead">
-              <h3>Inventory</h3>
-              <Link href="/dashboard/inventory">Open Inventory ›</Link>
+          <div className="journeyPanel">
+            <div className="panelTop compact">
+              <div>
+                <p className="eyebrow">Buyer Journey</p>
+                <h2>From Funding to Resale</h2>
+              </div>
             </div>
 
-            <div className="inventoryList">
-              {inventory.length === 0 ? (
-                <div className="emptyState">No inventory records yet.</div>
-              ) : (
-                inventory.slice(0, 5).map((item) => {
-                  const remaining = Number(item.remaining_qty || 0);
-                  const lowLevel = Number(item.low_stock_level || 0);
-                  const isLow = remaining <= lowLevel;
-
-                  return (
-                    <InventoryRow
-                      key={item.id}
-                      icon={getInventoryIcon(item.category)}
-                      name={item.item_name || "Unnamed Item"}
-                      qty={`${remaining.toLocaleString("en-PH")} ${item.unit || ""}`}
-                      category={item.category || "Inventory item"}
-                      warning={isLow}
-                    />
-                  );
-                })
-              )}
+            <div className="journeyList">
+              <JourneyStep number="1" label="Cash-In" href="/dashboard/wallet" done={walletBalance > 0} />
+              <JourneyStep number="2" label="Membership" href="/dashboard/membership" done={membershipStatus === "ACTIVE"} />
+              <JourneyStep number="3" label="KYC" href="/dashboard/profile" done={kycStatus === "APPROVED"} />
+              <JourneyStep number="4" label="Buy Tree" href="/dashboard/marketplace" done={trees.length > 0} />
+              <JourneyStep number="5" label="Track Tree" href="/dashboard/my-trees" done={trees.length > 0} />
+              <JourneyStep number="6" label="Request Care" href="/dashboard/tree-operations" done={operationRequests.length > 0} />
+              <JourneyStep number="7" label="Sell Tree" href="/dashboard/sell-tree" done={false} />
             </div>
-
-            <small>
-              {inventory.length === 0
-                ? "Inventory data will appear here once records are added."
-                : lowStockItems.length > 0
-                ? `${lowStockItems.length} item(s) are near or below low stock level.`
-                : "All visible inventory items are above low stock level."}
-            </small>
           </div>
 
-          <div className="taskOrders panel">
-            <div className="panelHead">
-              <h3>Task Orders</h3>
-              <Link href="/dashboard/tree-operations">Open Operations ›</Link>
+          <div className="quickPanel">
+            <div className="panelTop compact">
+              <div>
+                <p className="eyebrow">Quick Actions</p>
+                <h2>Next Move</h2>
+              </div>
             </div>
 
-            <p className="taskIntro">
-              Recent tree operation requests connected to your Supabase records.
-            </p>
+            <div className="quickGrid">
+              <QuickAction href="/dashboard/wallet" icon="₱" label="Wallet" />
+              <QuickAction href="/dashboard/membership" icon="◆" label="Membership" />
+              <QuickAction href="/dashboard/profile" icon="✓" label="Profile / KYC" />
+              <QuickAction href="/dashboard/marketplace" icon="🌳" label="Marketplace" />
+              <QuickAction href="/dashboard/my-trees" icon="🌿" label="My Trees" />
+              <QuickAction href="/dashboard/tree-operations" icon="🛠" label="Tree Operations" />
+              <QuickAction href="/dashboard/sell-tree" icon="↗" label="Sell Tree" />
+              <QuickAction href="/dashboard/support" icon="?" label="Support" />
+            </div>
+          </div>
 
-            <div className="taskList">
-              {operationRequests.length === 0 ? (
-                <div className="emptyState">No tree operation requests yet.</div>
+          <div className="latestPanel">
+            <div className="panelTop compact">
+              <div>
+                <p className="eyebrow">Activity</p>
+                <h2>Latest Transactions</h2>
+              </div>
+              <Link href="/dashboard/transactions">View all</Link>
+            </div>
+
+            <div className="activityList">
+              {recentActivity.length === 0 ? (
+                <div className="emptyState">No recent wallet or tree-operation activity yet.</div>
               ) : (
-                operationRequests.slice(0, 4).map((op) => (
-                  <TaskOrder
-                    key={op.id}
-                    code={String(op.id).slice(0, 8).toUpperCase()}
-                    icon="🌿"
-                    title={op.operation_type || op.service_type || op.item_name || "Tree Operation"}
-                    tree={op.tree_id ? `Tree ${String(op.tree_id).slice(0, 8)}` : "Customer Tree"}
-                    date={formatDate(op.scheduled_date || op.created_at)}
-                    status={cleanStatus(op.status)}
-                    covered={String(op.status || "").toUpperCase() === "APPROVED"}
-                  />
+                recentActivity.map((item) => (
+                  <div className="activityRow" key={item.id}>
+                    <span>{item.icon}</span>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.description}</p>
+                      <small>{item.date}</small>
+                    </div>
+                    <b>{item.status}</b>
+                  </div>
                 ))
               )}
             </div>
+          </div>
 
-            <div className="subscriptionBox">
+          <div className="portfolioPanel">
+            <div className="panelTop compact">
               <div>
-                <strong>Managed Care Subscription</strong>
-                <p>Care service status: {careSubscription}</p>
+                <p className="eyebrow">Portfolio Snapshot</p>
+                <h2>Tree Ownership</h2>
               </div>
-              <Link href="/dashboard/tree-operations">
-                {careSubscription === "ACTIVE" ? "Renew" : "Subscribe"}
-              </Link>
+              <Link href="/dashboard/my-trees">Open</Link>
+            </div>
+
+            <div className="portfolioRows">
+              <OverviewRow label="Individual Trees" value={String(individualTrees)} />
+              <OverviewRow label="Package Trees" value={String(packageTrees)} />
+              <OverviewRow label="GPS Verified" value={trees.length === 0 ? "0/0" : `${gpsVerifiedCount}/${trees.length}`} />
+              <OverviewRow label="Latest Added" value={formatDate(latestTreeDate)} />
+              <OverviewRow label="Care Subscription" value={careSubscription} />
+              <OverviewRow label="Low Stock Items" value={String(lowStockItems.length)} alert={lowStockItems.length > 0} />
             </div>
           </div>
 
-          <div className="activity panel">
-            <div className="panelHead">
-              <h3>Notifications</h3>
-              <Link href="/dashboard/transactions">View all ›</Link>
+          <div className="operationsPanel">
+            <div className="panelTop compact">
+              <div>
+                <p className="eyebrow">Care Requests</p>
+                <h2>Pending Operations</h2>
+              </div>
+              <Link href="/dashboard/tree-operations">Request care</Link>
             </div>
 
-            {recentActivity.length === 0 ? (
-              <div className="emptyState">No recent activity yet.</div>
-            ) : (
-              recentActivity.map((a) => (
-                <div className={`activityRow ${a.kind}`} key={a.id}>
-                  <span>{a.icon}</span>
-                  <div>
-                    <strong>{a.title}</strong>
-                    <p>{a.description}</p>
+            <div className="operationList">
+              {operationRequests.length === 0 ? (
+                <div className="emptyState">No tree operation requests yet.</div>
+              ) : (
+                operationRequests.slice(0, 5).map((op) => (
+                  <div className="operationRow" key={op.id}>
+                    <div>
+                      <strong>{cleanLabel(op.operation_type || op.service_type || op.item_name || "Tree Operation")}</strong>
+                      <p>{op.tree_id ? `Tree ${String(op.tree_id).slice(0, 8)}` : "Customer tree"} • {formatDate(op.scheduled_date || op.created_at)}</p>
+                    </div>
+                    <span>{cleanStatus(op.status)}</span>
                   </div>
-                  <b>{a.status || a.date}</b>
-                </div>
-              ))
-            )}
+                ))
+              )}
+            </div>
           </div>
         </section>
 
         <footer>
-          ☀️ Sustainable agarwood ownership with premium care operations.{" "}
-          <span>|</span> Agarwood Investments © 2026
+          Sustainable agarwood ownership with real wallet, tree, inventory, and care-operation records.
         </footer>
-      </section>
+      </div>
 
-      <style>{`
-        * { box-sizing: border-box; }
-
-        .dashboardPage {
-          min-height: 100vh;
-          color: #18261d;
-          font-family: Arial, Helvetica, sans-serif;
-        }
-
-        .content {
-          min-height: 100vh;
-          padding: 26px 28px 18px;
-          overflow-x: hidden;
-          background-image:
-            linear-gradient(rgba(2,24,13,.35), rgba(2,24,13,.70)),
-            url('/images/agarwood-real-tree.jpg');
-          background-size: cover;
-          background-position: center;
-          background-repeat: no-repeat;
-          background-attachment: fixed;
-        }
-
-        .loadingBox, .errorBox, .emptyState {
-          border-radius: 16px;
-          background: rgba(255, 253, 246, .88);
-          border: 1px solid rgba(92, 70, 35, .10);
-          padding: 16px;
-          color: #6b6255;
-          font-weight: 800;
-        }
-
-        .loadingBox {
-          min-height: 70vh;
-          display: grid;
-          place-items: center;
-          font-size: 18px;
-        }
-
-        .errorBox {
-          margin-top: 12px;
-          color: #a33c2a;
-          background: rgba(255, 235, 230, .82);
-        }
-
-        .header {
-          display: flex;
-          justify-content: space-between;
-          align-items: start;
-          margin-bottom: 20px;
-          padding: 20px;
-          border-radius: 24px;
-          background: rgba(255, 253, 246, .82);
-          border: 1px solid rgba(255,255,255,.30);
-          box-shadow: 0 18px 42px rgba(0,0,0,.16);
-          backdrop-filter: blur(8px);
-        }
-
-        .eyebrow {
-          margin: 0;
-          font-weight: 900;
-          color: #6e552d;
-          letter-spacing: .3px;
-        }
-
-        .header h2 {
-          margin: 4px 0 5px;
-          font-size: 34px;
-          line-height: 1;
-          letter-spacing: -1px;
-          color: #101a14;
-        }
-
-        .header small {
-          color: #5f665e;
-          font-size: 15px;
-        }
-
-        .headerActions {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-        }
-
-        .headerActions .headerIconButton {
-          position: relative;
-          width: 52px;
-          height: 52px;
-          border: 1px solid rgba(92, 70, 35, .08);
-          border-radius: 16px;
-          background: rgba(255, 253, 246, .72);
-          box-shadow: 0 14px 32px rgba(82, 60, 27, .08);
-          cursor: pointer;
-          font-size: 20px;
-          display: grid;
-          place-items: center;
-          text-decoration: none;
-        }
-
-        .logoutButton {
-          height: 52px;
-          border: 1px solid rgba(92, 70, 35, .08);
-          border-radius: 16px;
-          background: linear-gradient(135deg, #d9b45f, #8a6a2f);
-          color: #10281f;
-          box-shadow: 0 14px 32px rgba(82, 60, 27, .12);
-          cursor: pointer;
-          font-size: 14px;
-          font-weight: 900;
-          padding: 0 18px;
-          white-space: nowrap;
-        }
-
-        .logoutButton:hover,
-        .headerActions .headerIconButton:hover {
-          transform: translateY(-1px);
-          filter: brightness(1.04);
-        }
-
-        .headerActions i {
-          position: absolute;
-          right: 8px;
-          top: 5px;
-          background: #8a6a2f;
-          color: white;
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          font-size: 11px;
-          display: grid;
-          place-items: center;
-          font-style: normal;
-        }
-
-        .topAvatar {
-          width: 54px;
-          height: 54px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #244536, #10281f);
-          border: 2px solid rgba(189, 167, 123, .55);
-          display: grid;
-          place-items: center;
-          color: white;
-          font-weight: 900;
-          box-shadow: 0 12px 28px rgba(33, 54, 39, .18);
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .stat {
-          min-height: 138px;
-          border-radius: 20px;
-          background: rgba(255, 253, 246, .88);
-          border: 1px solid rgba(255,255,255,.30);
-          display: flex;
-          align-items: center;
-          gap: 19px;
-          padding: 20px;
-          box-shadow: 0 18px 40px rgba(0,0,0,.16);
-          backdrop-filter: blur(8px);
-        }
-
-        .statIcon {
-          width: 68px;
-          height: 68px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: radial-gradient(circle, #f5e8c9, #d9ccb0);
-          font-size: 29px;
-          box-shadow: inset -10px -12px 20px rgba(103, 78, 35, .12);
-        }
-
-        .statIcon.gold {
-          background: radial-gradient(circle, #fff2bc, #c9a34d);
-        }
-
-        .stat p {
-          margin: 0 0 8px;
-          font-size: 13px;
-          color: #5f665e;
-          font-weight: 800;
-        }
-
-        .stat h3 {
-          margin: 0 0 8px;
-          font-size: 29px;
-          letter-spacing: -1px;
-          color: #101a14;
-        }
-
-        .stat small {
-          color: #6e552d;
-          font-weight: 900;
-        }
-
-        .mainGrid {
-          display: grid;
-          grid-template-columns: 240px 1.4fr 1fr;
-          gap: 16px;
-        }
-
-        .journey, .treeVisualCard, .portfolio, .panel {
-          border-radius: 20px;
-          box-shadow: 0 18px 42px rgba(0,0,0,.16);
-          border: 1px solid rgba(255,255,255,.24);
-        }
-
-        .journey {
-          background: rgba(255, 253, 246, .88);
-          padding: 20px;
-          min-height: 520px;
-          backdrop-filter: blur(8px);
-        }
-
-        .journey h3, .journey h4 {
-          margin: 0;
-        }
-
-        .journey h3 {
-          color: #17271d;
-        }
-
-        .journey h4 {
-          margin-top: 12px;
-          color: #8c6a3c;
-          font-size: 14px;
-        }
-
-        .step {
-          position: relative;
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          padding: 13px 10px;
-          margin-top: 10px;
-          border-radius: 14px;
-        }
-
-        .step:before {
-          content: "";
-          position: absolute;
-          left: 21px;
-          top: -12px;
-          width: 2px;
-          height: 24px;
-          background: #d9ccb0;
-        }
-
-        .step:first-of-type:before { display: none; }
-
-        .step.current {
-          background: linear-gradient(90deg, #f2e4c6, #e0cfaa);
-          box-shadow: inset 0 0 0 1px rgba(140, 106, 60, .12);
-        }
-
-        .step span {
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: #31553d;
-          color: white;
-          font-size: 12px;
-          z-index: 2;
-          flex: 0 0 auto;
-        }
-
-        .step div strong {
-          font-size: 14px;
-          color: #17271d;
-        }
-
-        .step div p {
-          margin: 5px 0 0;
-          font-size: 13px;
-          color: #6c675b;
-        }
-
-        .step div small {
-          display: block;
-          margin-top: 3px;
-          font-size: 11px;
-          color: #817866;
-        }
-
-        .step b {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: #8c6a3c;
-          margin-left: auto;
-        }
-
-        .treeVisualCard {
-          position: relative;
-          overflow: hidden;
-          min-height: 520px;
-          padding: 24px;
-          background:
-            radial-gradient(circle at 50% 38%, rgba(217,180,95,.30), transparent 18%),
-            radial-gradient(circle at 50% 50%, rgba(103,178,70,.22), transparent 36%),
-            linear-gradient(145deg, rgba(7,31,22,.94), rgba(16,40,31,.96));
-          color: white;
-        }
-
-        .treeVisualCard:before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background-image:
-            linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-          background-size: 34px 34px;
-          opacity: .38;
-          pointer-events: none;
-        }
-
-        .visualTop {
-          position: relative;
-          z-index: 2;
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 18px;
-        }
-
-        .visualEyebrow {
-          margin: 0 0 8px;
-          color: #d9b45f;
-          font-size: 13px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .7px;
-        }
-
-        .visualTop h3 {
-          margin: 0;
-          font-size: 30px;
-          letter-spacing: -.8px;
-        }
-
-        .visualTop small {
-          display: block;
-          margin-top: 8px;
-          max-width: 430px;
-          color: rgba(255,255,255,.72);
-          line-height: 1.5;
-        }
-
-        .visualBadge {
-          width: 104px;
-          height: 104px;
-          border-radius: 26px;
-          background: rgba(255,255,255,.12);
-          border: 1px solid rgba(255,255,255,.18);
-          display: grid;
-          place-items: center;
-          text-align: center;
-          box-shadow: inset 0 0 32px rgba(255,255,255,.06);
-          flex: 0 0 auto;
-        }
-
-        .visualBadge strong {
-          display: block;
-          font-size: 30px;
-          color: #d9b45f;
-        }
-
-        .visualBadge span {
-          display: block;
-          margin-top: -18px;
-          font-size: 11px;
-          color: rgba(255,255,255,.70);
-          font-weight: 900;
-          text-transform: uppercase;
-        }
-
-        .forestOrb {
-          position: relative;
-          z-index: 2;
-          min-height: 210px;
-          display: grid;
-          place-items: center;
-          margin: 10px 0 18px;
-        }
-
-        .orbRing {
-          width: 220px;
-          height: 220px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background:
-            conic-gradient(from 180deg, #d9b45f, #8bc34a, #244536, #d9b45f);
-          box-shadow:
-            0 0 80px rgba(139,195,74,.22),
-            inset 0 0 40px rgba(0,0,0,.22);
-          padding: 12px;
-        }
-
-        .orbCore {
-          width: 100%;
-          height: 100%;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          text-align: center;
-          background:
-            radial-gradient(circle at 35% 30%, rgba(255,255,255,.18), transparent 28%),
-            linear-gradient(145deg, #244536, #10281f);
-          border: 1px solid rgba(255,255,255,.22);
-        }
-
-        .orbCore strong {
-          display: block;
-          font-size: 52px;
-          line-height: 1;
-          color: #fff8e6;
-        }
-
-        .orbCore span {
-          display: block;
-          margin-top: -44px;
-          color: rgba(255,255,255,.72);
-          font-size: 13px;
-          font-weight: 900;
-        }
-
-        .visualStats {
-          position: relative;
-          z-index: 2;
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 12px;
-          margin-bottom: 16px;
-        }
-
-        .visualStats div {
-          border-radius: 16px;
-          background: rgba(255,255,255,.10);
-          border: 1px solid rgba(255,255,255,.16);
-          padding: 14px;
-        }
-
-        .visualStats span {
-          display: block;
-          color: rgba(255,255,255,.64);
-          font-size: 11px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .4px;
-        }
-
-        .visualStats strong {
-          display: block;
-          margin-top: 7px;
-          color: #fff8e6;
-          font-size: 15px;
-        }
-
-        .progressGlass {
-          position: relative;
-          z-index: 2;
-          padding: 18px;
-          border-radius: 18px;
-          color: #fff8e6;
-          background: rgba(5, 44, 24, .82);
-          border: 1px solid rgba(255,255,255,.18);
-          backdrop-filter: blur(13px);
-        }
-
-        .progressGlass div:first-child,
-        .progressGlass p {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .progressGlass span {
-          font-size: 26px;
-          font-weight: 900;
-        }
-
-        .progressGlass p {
-          margin: 9px 0 0;
-          font-size: 14px;
-        }
-
-        .progressGlass p span {
-          font-size: 14px;
-        }
-
-        .bar {
-          margin-top: 12px;
-          height: 12px;
-          border-radius: 999px;
-          background: rgba(255,255,255,.28);
-          overflow: hidden;
-        }
-
-        .bar i {
-          display: block;
-          height: 100%;
-          border-radius: inherit;
-          background: linear-gradient(90deg, #8bc34a, #f4d37a);
-          transition: width .4s ease;
-        }
-
-        .portfolio {
-          background: linear-gradient(145deg, rgba(36,69,54,.94), rgba(16,40,31,.94));
-          color: white;
-          padding: 24px;
-          min-height: 520px;
-          backdrop-filter: blur(8px);
-        }
-
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .panelHead h3 {
-          margin: 0;
-        }
-
-        .panelHead a {
-          color: inherit;
-          text-decoration: none;
-          font-weight: 900;
-        }
-
-        .treeOverviewHero {
-          margin: 26px auto 20px;
-          width: 170px;
-          height: 170px;
-          border-radius: 50%;
-          background: radial-gradient(circle at 35% 35%, #d6c28c, #31553d 72%);
-          display: grid;
-          place-items: center;
-          box-shadow: inset -20px -25px 35px rgba(0,0,0,.18), 0 20px 50px rgba(0,0,0,.22);
-        }
-
-        .treeOverviewHero div {
-          text-align: center;
-        }
-
-        .treeOverviewHero strong {
-          display: block;
-          font-size: 38px;
-        }
-
-        .treeOverviewHero span {
-          font-size: 13px;
-        }
-
-        .overviewRows {
-          display: grid;
-          gap: 12px;
-        }
-
-        .overviewRow {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 12px;
-          padding: 12px 0;
-          border-bottom: 1px solid rgba(255,255,255,.13);
-        }
-
-        .overviewRow p {
-          margin: 0;
-          color: rgba(255,255,255,.76);
-        }
-
-        .overviewRow b {
-          color: white;
-        }
-
-        .overviewRow.alert b {
-          color: #f4d37a;
-        }
-
-        .panel {
-          background: rgba(255, 253, 246, .88);
-          padding: 22px;
-          min-height: 255px;
-          backdrop-filter: blur(8px);
-        }
-
-        .inventory {
-          grid-column: 1 / 2;
-        }
-
-        .taskOrders {
-          grid-column: 2 / 3;
-        }
-
-        .activity {
-          grid-column: 3 / 4;
-        }
-
-        .inventoryList {
-          margin-top: 18px;
-          display: grid;
-          gap: 10px;
-        }
-
-        .inventoryRow {
-          display: grid;
-          grid-template-columns: 36px 1fr auto;
-          align-items: center;
-          gap: 10px;
-          padding: 9px 0;
-          border-bottom: 1px solid rgba(92, 70, 35, .10);
-        }
-
-        .inventoryRow .icon {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: #efe3cc;
-        }
-
-        .inventoryRow strong {
-          font-size: 13px;
-        }
-
-        .inventoryRow p {
-          margin: 3px 0 0;
-          font-size: 11px;
-          color: #666;
-        }
-
-        .inventoryRow.warn b {
-          color: #a66c22;
-        }
-
-        .inventory small {
-          display: block;
-          color: #6e552d;
-          margin-top: 15px;
-          font-weight: 900;
-          line-height: 1.4;
-        }
-
-        .taskIntro {
-          margin: 12px 0 0;
-          color: #5c6259;
-          font-size: 13px;
-          line-height: 1.5;
-        }
-
-        .taskList {
-          margin-top: 15px;
-          display: grid;
-          gap: 10px;
-        }
-
-        .taskOrder {
-          display: grid;
-          grid-template-columns: 38px 1fr auto;
-          align-items: center;
-          gap: 10px;
-          padding: 11px;
-          border-radius: 14px;
-          background: #f3ead8;
-          border: 1px solid rgba(92, 70, 35, .06);
-        }
-
-        .taskOrder .taskIcon {
-          width: 36px;
-          height: 36px;
-          border-radius: 50%;
-          background: #efe3cc;
-          display: grid;
-          place-items: center;
-        }
-
-        .taskOrder strong {
-          display: block;
-          font-size: 13px;
-        }
-
-        .taskOrder p {
-          margin: 3px 0 0;
-          font-size: 12px;
-          color: #6b6b62;
-        }
-
-        .taskOrder b {
-          font-size: 11px;
-          color: #6b6b62;
-          text-align: right;
-        }
-
-        .taskOrder.covered b {
-          color: #31553d;
-        }
-
-        .taskCode {
-          display: inline-block;
-          margin-bottom: 3px;
-          font-size: 10px;
-          font-weight: 900;
-          color: #8c6a3c;
-          letter-spacing: .6px;
-        }
-
-        .subscriptionBox {
-          margin-top: 14px;
-          border-radius: 16px;
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
-          padding: 15px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-        }
-
-        .subscriptionBox p {
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: rgba(255,255,255,.72);
-        }
-
-        .subscriptionBox a {
-          border-radius: 12px;
-          background: #d6b25e;
-          color: #10281f;
-          padding: 10px 14px;
-          font-weight: 900;
-          text-decoration: none;
-          white-space: nowrap;
-        }
-
-        .activityRow {
-          display: grid;
-          grid-template-columns: 42px 1fr auto;
-          align-items: center;
-          gap: 12px;
-          padding: 13px 0;
-          border-bottom: 1px solid rgba(92, 70, 35, .10);
-        }
-
-        .activityRow span {
-          width: 38px;
-          height: 38px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          background: #efe3cc;
-        }
-
-        .activityRow strong {
-          font-size: 13px;
-        }
-
-        .activityRow p {
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: #6b6b62;
-        }
-
-        .activityRow b {
-          color: #31553d;
-          font-size: 13px;
-          text-align: right;
-        }
-
-        .activityRow.danger b {
-          color: #a33c2a;
-        }
-
-        .activityRow.warning b {
-          color: #a66c22;
-        }
-
-        footer {
-          text-align: center;
-          color: rgba(255,255,255,.82);
-          padding: 20px 0 0;
-          font-size: 14px;
-          font-weight: 800;
-          text-shadow: 0 2px 12px rgba(0,0,0,.45);
-        }
-
-        footer span {
-          margin: 0 24px;
-        }
-
-        @media (max-width: 1280px) {
-          .stats { grid-template-columns: repeat(2, 1fr); }
-          .mainGrid { grid-template-columns: 220px 1fr; }
-          .portfolio, .activity { grid-column: 1 / -1; }
-          .inventory { grid-column: 1 / 2; }
-          .taskOrders { grid-column: 2 / 3; }
-        }
-
-        @media (max-width: 900px) {
-          .content { padding: 18px; }
-          .mainGrid, .stats { grid-template-columns: 1fr; }
-          .inventory, .taskOrders, .activity { grid-column: 1; }
-          .header { flex-direction: column; gap: 20px; }
-          .headerActions { flex-wrap: wrap; }
-          .logoutButton { width: auto; }
-          .visualStats { grid-template-columns: 1fr; }
-        }
-      `}</style>
+      <style>{baseStyles}</style>
     </main>
   );
 }
 
-function Card({
-  icon,
-  title,
-  value,
-  sub,
-  gold,
-}: {
-  icon: string;
-  title: string;
-  value: string;
-  sub: string;
-  gold?: boolean;
-}) {
+function MetricCard({ label, value, note }: { label: string; value: string; note: string }) {
   return (
-    <div className="stat">
-      <div className={`statIcon ${gold ? "gold" : ""}`}>{icon}</div>
-      <div>
-        <p>{title}</p>
-        <h3>{value}</h3>
-        <small>{sub}</small>
-      </div>
+    <article className="metricCard">
+      <p>{label}</p>
+      <h3>{value}</h3>
+      <span>{note}</span>
+    </article>
+  );
+}
+
+function Mini({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mini">
+      <span>{label}</span>
+      <b>{value}</b>
     </div>
   );
 }
 
-function OverviewRow({
+function JourneyStep({
+  number,
   label,
-  value,
-  alert,
+  href,
+  done,
 }: {
+  number: string;
   label: string;
-  value: string;
-  alert?: boolean;
+  href: string;
+  done: boolean;
 }) {
+  return (
+    <Link className={`journeyStep ${done ? "done" : ""}`} href={href}>
+      <span>{done ? "✓" : number}</span>
+      <strong>{label}</strong>
+      <small>{done ? "Completed" : "Next step"}</small>
+    </Link>
+  );
+}
+
+function QuickAction({ href, icon, label }: { href: string; icon: string; label: string }) {
+  return (
+    <Link className="quickAction" href={href}>
+      <span>{icon}</span>
+      <strong>{label}</strong>
+    </Link>
+  );
+}
+
+function OverviewRow({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
   return (
     <div className={`overviewRow ${alert ? "alert" : ""}`}>
       <p>{label}</p>
@@ -1465,73 +585,11 @@ function OverviewRow({
   );
 }
 
-function InventoryRow({
-  icon,
-  name,
-  qty,
-  category,
-  warning,
-}: {
-  icon: string;
-  name: string;
-  qty: string;
-  category: string;
-  warning?: boolean;
-}) {
-  return (
-    <div className={`inventoryRow ${warning ? "warn" : ""}`}>
-      <span className="icon">{icon}</span>
-      <div>
-        <strong>{name}</strong>
-        <p>{category}</p>
-      </div>
-      <b>{qty}</b>
-    </div>
-  );
-}
-
-function TaskOrder({
-  code,
-  icon,
-  title,
-  tree,
-  date,
-  status,
-  covered,
-}: {
-  code: string;
-  icon: string;
-  title: string;
-  tree: string;
-  date: string;
-  status: string;
-  covered?: boolean;
-}) {
-  return (
-    <div className={`taskOrder ${covered ? "covered" : ""}`}>
-      <span className="taskIcon">{icon}</span>
-      <div>
-        <span className="taskCode">{code}</span>
-        <strong>{title}</strong>
-        <p>
-          {tree} • {date}
-        </p>
-      </div>
-      <b>{status}</b>
-    </div>
-  );
-}
-
-function getInventoryIcon(category: string | null | undefined) {
-  const value = String(category || "").toLowerCase();
-
-  if (value.includes("fertilizer")) return "🌱";
-  if (value.includes("booster")) return "🧪";
-  if (value.includes("insect")) return "🪲";
-  if (value.includes("fung")) return "🌿";
-  if (value.includes("soil")) return "🪴";
-
-  return "📦";
+function cleanLabel(value: string) {
+  return String(value || "")
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function getInitials(name: string) {
@@ -1543,3 +601,721 @@ function getInitials(name: string) {
     .slice(0, 2)
     .toUpperCase();
 }
+
+const baseStyles = `
+  * { box-sizing: border-box; }
+
+  .dashboardPage {
+    min-height: 100vh;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    color: #f8f1d8;
+    font-family: Arial, Helvetica, sans-serif;
+    background:
+      radial-gradient(circle at 16% 8%, rgba(214,178,94,.22), transparent 28%),
+      radial-gradient(circle at 86% 12%, rgba(65,120,82,.18), transparent 34%),
+      linear-gradient(180deg, #06110d 0%, #0b1f17 44%, #07120d 100%);
+  }
+
+  .pageShell {
+    width: 100%;
+    max-width: 1480px;
+    min-width: 0;
+    margin: 0 auto;
+    padding: 28px;
+    overflow-x: hidden;
+  }
+
+  .loadingBox,
+  .errorBox,
+  .emptyState,
+  .metricCard,
+  .plantationPanel,
+  .journeyPanel,
+  .quickPanel,
+  .latestPanel,
+  .portfolioPanel,
+  .operationsPanel,
+  .accountGlass {
+    border: 1px solid rgba(214,178,94,.20);
+    background: rgba(255,255,255,.075);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 24px 70px rgba(0,0,0,.30);
+  }
+
+  .loadingBox {
+    min-height: 72vh;
+    border-radius: 28px;
+    display: grid;
+    place-items: center;
+    color: #fff8dc;
+    font-weight: 900;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: stretch;
+    margin-bottom: 18px;
+  }
+
+  .heroText {
+    min-width: 0;
+    border-radius: 32px;
+    padding: 28px;
+    background:
+      linear-gradient(rgba(2,20,12,.62), rgba(2,20,12,.82)),
+      url('/images/agarwood-real-tree.jpg');
+    background-size: cover;
+    background-position: center;
+    border: 1px solid rgba(214,178,94,.22);
+    box-shadow: 0 24px 70px rgba(0,0,0,.35);
+    overflow: hidden;
+  }
+
+  .eyebrow {
+    margin: 0 0 10px;
+    color: #d6b25e;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .16em;
+    font-size: 12px;
+  }
+
+  .hero h1 {
+    margin: 0;
+    color: #fff8dc;
+    font-size: clamp(34px, 5vw, 56px);
+    line-height: .98;
+    letter-spacing: -2px;
+  }
+
+  .hero h1 span {
+    color: #d6b25e;
+  }
+
+  .hero p {
+    max-width: 860px;
+    margin: 16px 0 0;
+    color: rgba(248,241,216,.78);
+    line-height: 1.7;
+    font-weight: 700;
+  }
+
+  .heroActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 22px;
+  }
+
+  .heroActions a,
+  .accountGlass button,
+  .panelTop a {
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+    color: #07140f;
+    text-decoration: none;
+    font-weight: 950;
+    cursor: pointer;
+  }
+
+  .accountGlass {
+    width: 330px;
+    border-radius: 32px;
+    padding: 22px;
+    display: grid;
+    align-content: space-between;
+    gap: 18px;
+    min-width: 0;
+  }
+
+  .avatar {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+    color: #07140f;
+    font-weight: 950;
+    font-size: 24px;
+  }
+
+  .accountGlass small {
+    color: rgba(248,241,216,.62);
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+  }
+
+  .accountGlass strong {
+    display: block;
+    margin-top: 8px;
+    color: #fff8dc;
+    overflow-wrap: anywhere;
+  }
+
+  .errorBox {
+    margin-top: 16px;
+    border-radius: 18px;
+    padding: 14px;
+    color: #ffd7ce;
+    background: rgba(130,40,24,.28);
+  }
+
+  .metricGrid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .metricCard {
+    min-width: 0;
+    border-radius: 24px;
+    padding: 18px;
+  }
+
+  .metricCard p {
+    margin: 0;
+    color: rgba(248,241,216,.62);
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .11em;
+  }
+
+  .metricCard h3 {
+    margin: 10px 0 6px;
+    color: #fff8dc;
+    font-size: clamp(21px, 2.2vw, 30px);
+    overflow-wrap: anywhere;
+  }
+
+  .metricCard span {
+    color: #d6b25e;
+    font-weight: 800;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .mainGrid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+    gap: 18px;
+    min-width: 0;
+  }
+
+  .plantationPanel,
+  .journeyPanel,
+  .quickPanel,
+  .latestPanel,
+  .portfolioPanel,
+  .operationsPanel {
+    min-width: 0;
+    border-radius: 30px;
+    padding: 22px;
+    overflow: hidden;
+  }
+
+  .plantationPanel {
+    grid-row: span 2;
+  }
+
+  .panelTop {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 18px;
+    min-width: 0;
+  }
+
+  .panelTop.compact {
+    margin-bottom: 14px;
+  }
+
+  .panelTop h2 {
+    margin: 0;
+    color: #fff8dc;
+    font-size: clamp(24px, 3vw, 34px);
+    letter-spacing: -.8px;
+  }
+
+  .panelTop span {
+    display: block;
+    margin-top: 8px;
+    color: rgba(248,241,216,.66);
+    line-height: 1.5;
+  }
+
+  .stageBadge {
+    flex: 0 0 auto;
+    width: 96px;
+    height: 96px;
+    border-radius: 24px;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    background: rgba(0,0,0,.28);
+    border: 1px solid rgba(214,178,94,.18);
+  }
+
+  .stageBadge strong {
+    display: block;
+    color: #d6b25e;
+    font-size: 28px;
+  }
+
+  .stageBadge small {
+    display: block;
+    margin-top: -18px;
+    color: rgba(248,241,216,.58);
+    font-weight: 900;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
+  .plantationVisual {
+    position: relative;
+    height: 430px;
+    border-radius: 28px;
+    overflow: hidden;
+    background:
+      linear-gradient(180deg, rgba(3,19,19,.24) 0%, rgba(7,26,20,.45) 45%, rgba(5,22,12,.96) 100%),
+      radial-gradient(circle at 48% 18%, rgba(214,178,94,.28), transparent 18%),
+      linear-gradient(180deg, #102923 0%, #18372a 45%, #0a1f13 100%);
+    border: 1px solid rgba(214,178,94,.18);
+  }
+
+  .moonGlow {
+    position: absolute;
+    top: 44px;
+    left: 50%;
+    width: 150px;
+    height: 150px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,237,173,.70), rgba(214,178,94,.20) 42%, transparent 70%);
+    filter: blur(.2px);
+  }
+
+  .mountain {
+    position: absolute;
+    bottom: 154px;
+    width: 58%;
+    height: 170px;
+    background: linear-gradient(135deg, rgba(8,40,27,.96), rgba(2,16,11,.98));
+    clip-path: polygon(0 100%, 48% 8%, 100% 100%);
+    opacity: .78;
+  }
+
+  .m1 { left: -10%; }
+  .m2 { right: -8%; height: 135px; opacity: .66; }
+
+  .mist {
+    position: absolute;
+    left: -10%;
+    right: -10%;
+    height: 54px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, rgba(235,245,219,.18), transparent);
+    filter: blur(11px);
+  }
+
+  .mist1 { top: 170px; }
+  .mist2 { top: 235px; opacity: .7; }
+
+  .treeLine {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-end;
+  }
+
+  .treeLine i {
+    display: block;
+    position: relative;
+    width: 11px;
+    border-radius: 999px 999px 0 0;
+    background: linear-gradient(180deg, #5a3b1d, #24170d);
+  }
+
+  .treeLine i:before,
+  .treeLine i:after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    border-radius: 50% 50% 46% 46%;
+    transform: translateX(-50%);
+    background:
+      radial-gradient(circle at 35% 28%, rgba(158,198,118,.55), transparent 20%),
+      linear-gradient(145deg, #2f6b3e, #0d2f20);
+    box-shadow: 0 8px 20px rgba(0,0,0,.22);
+  }
+
+  .treeLine i:before {
+    top: -42px;
+    width: 58px;
+    height: 54px;
+  }
+
+  .treeLine i:after {
+    top: -70px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .treeLine.back {
+    bottom: 150px;
+    opacity: .54;
+  }
+
+  .treeLine.back i {
+    height: 48px;
+    transform: scale(.68);
+  }
+
+  .treeLine.mid {
+    bottom: 104px;
+    opacity: .8;
+  }
+
+  .treeLine.mid i {
+    height: 72px;
+    transform: scale(.86);
+  }
+
+  .treeLine.front {
+    bottom: 38px;
+  }
+
+  .treeLine.front i {
+    height: 98px;
+  }
+
+  .fieldRows {
+    position: absolute;
+    inset: auto -20% 0 -20%;
+    height: 190px;
+    transform: perspective(400px) rotateX(58deg);
+    transform-origin: bottom;
+  }
+
+  .fieldRows span {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 18px;
+    border-radius: 50%;
+    border-top: 2px solid rgba(214,178,94,.22);
+    background: linear-gradient(90deg, transparent, rgba(90,120,53,.26), transparent);
+  }
+
+  .fieldRows span:nth-child(1) { bottom: 24px; }
+  .fieldRows span:nth-child(2) { bottom: 64px; }
+  .fieldRows span:nth-child(3) { bottom: 108px; }
+  .fieldRows span:nth-child(4) { bottom: 154px; }
+
+  .estateCard {
+    position: absolute;
+    left: 22px;
+    bottom: 22px;
+    min-width: 190px;
+    border-radius: 22px;
+    padding: 18px;
+    background: rgba(3,20,13,.74);
+    border: 1px solid rgba(214,178,94,.28);
+    backdrop-filter: blur(12px);
+  }
+
+  .estateCard small {
+    color: rgba(248,241,216,.66);
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+  }
+
+  .estateCard strong {
+    display: block;
+    color: #fff8dc;
+    font-size: 48px;
+    line-height: 1;
+    margin-top: 8px;
+  }
+
+  .estateCard span {
+    display: block;
+    color: #d6b25e;
+    font-weight: 900;
+    margin-top: 8px;
+  }
+
+  .plantationStats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .mini {
+    min-width: 0;
+    border-radius: 18px;
+    padding: 14px;
+    background: rgba(0,0,0,.24);
+    border: 1px solid rgba(214,178,94,.14);
+  }
+
+  .mini span {
+    display: block;
+    color: rgba(248,241,216,.58);
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  .mini b {
+    display: block;
+    margin-top: 8px;
+    color: #fff8dc;
+    overflow-wrap: anywhere;
+  }
+
+  .journeyList {
+    display: grid;
+    gap: 10px;
+  }
+
+  .journeyStep {
+    display: grid;
+    grid-template-columns: 42px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 13px;
+    border-radius: 18px;
+    background: rgba(0,0,0,.24);
+    border: 1px solid rgba(214,178,94,.12);
+    text-decoration: none;
+    color: inherit;
+  }
+
+  .journeyStep span {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgba(214,178,94,.18);
+    color: #d6b25e;
+    font-weight: 950;
+  }
+
+  .journeyStep.done span {
+    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+    color: #07140f;
+  }
+
+  .journeyStep strong {
+    color: #fff8dc;
+  }
+
+  .journeyStep small {
+    color: rgba(248,241,216,.56);
+    font-weight: 900;
+  }
+
+  .quickGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .quickAction {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 38px 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 13px;
+    border-radius: 18px;
+    background: rgba(0,0,0,.24);
+    border: 1px solid rgba(214,178,94,.12);
+    color: #fff8dc;
+    text-decoration: none;
+    font-weight: 900;
+  }
+
+  .quickAction span {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgba(214,178,94,.16);
+    color: #d6b25e;
+  }
+
+  .latestPanel,
+  .portfolioPanel,
+  .operationsPanel {
+    grid-column: auto;
+  }
+
+  .activityList,
+  .portfolioRows,
+  .operationList {
+    display: grid;
+    gap: 10px;
+  }
+
+  .activityRow,
+  .operationRow,
+  .overviewRow {
+    min-width: 0;
+    border-radius: 18px;
+    padding: 13px;
+    background: rgba(0,0,0,.22);
+    border: 1px solid rgba(214,178,94,.12);
+  }
+
+  .activityRow {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .activityRow > span {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgba(214,178,94,.14);
+    color: #d6b25e;
+    font-weight: 950;
+  }
+
+  .activityRow strong,
+  .operationRow strong {
+    color: #fff8dc;
+    overflow-wrap: anywhere;
+  }
+
+  .activityRow p,
+  .operationRow p {
+    margin: 4px 0 0;
+    color: rgba(248,241,216,.58);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .activityRow small {
+    display: block;
+    margin-top: 4px;
+    color: rgba(248,241,216,.45);
+    font-weight: 800;
+  }
+
+  .activityRow b,
+  .operationRow span,
+  .overviewRow b {
+    color: #d6b25e;
+    font-weight: 950;
+    white-space: nowrap;
+  }
+
+  .overviewRow,
+  .operationRow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .overviewRow p {
+    margin: 0;
+    color: rgba(248,241,216,.65);
+    font-weight: 800;
+  }
+
+  .overviewRow.alert b {
+    color: #ffcf8c;
+  }
+
+  footer {
+    padding: 22px 0 0;
+    text-align: center;
+    color: rgba(248,241,216,.58);
+    font-weight: 800;
+  }
+
+  @media (max-width: 1280px) {
+    .metricGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .mainGrid {
+      grid-template-columns: 1fr;
+    }
+
+    .plantationPanel {
+      grid-row: auto;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .pageShell {
+      padding: 18px;
+    }
+
+    .hero {
+      grid-template-columns: 1fr;
+    }
+
+    .accountGlass {
+      width: 100%;
+    }
+
+    .metricGrid,
+    .plantationStats,
+    .quickGrid {
+      grid-template-columns: 1fr;
+    }
+
+    .panelTop {
+      flex-direction: column;
+    }
+
+    .stageBadge {
+      width: 100%;
+      height: auto;
+      padding: 16px;
+    }
+
+    .stageBadge small {
+      margin-top: 2px;
+    }
+
+    .plantationVisual {
+      height: 360px;
+    }
+
+    .activityRow {
+      grid-template-columns: 42px minmax(0, 1fr);
+    }
+
+    .activityRow b {
+      grid-column: 2;
+      white-space: normal;
+    }
+  }
+`;

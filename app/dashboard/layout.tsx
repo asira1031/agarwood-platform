@@ -1,3 +1,4 @@
+// app/dashboard/layout.tsx
 "use client";
 
 import Link from "next/link";
@@ -23,11 +24,7 @@ const sidebarItems = [
   { label: "Support", href: "/dashboard/support" },
 ];
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [allowed, setAllowed] = useState(false);
 
   useEffect(() => {
@@ -82,11 +79,11 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f3e8] text-[#1f3b2c]">
-      <div className="flex min-h-screen">
-        <aside className="w-72 border-r border-[#d8ccb0] bg-[#1f3b2c] text-white">
-          <div className="p-6">
-            <div className="rounded-3xl border border-white/10 bg-white/10 p-5 shadow-lg">
+    <div className="min-h-screen w-full overflow-x-hidden bg-[#07140f] text-[#f8f1d8]">
+      <div className="flex min-h-screen w-full overflow-x-hidden">
+        <aside className="hidden lg:flex lg:w-72 lg:shrink-0 lg:flex-col border-r border-amber-200/15 bg-[#071f16] text-white">
+          <div className="sticky top-0 h-screen overflow-y-auto p-6">
+            <div className="rounded-3xl border border-white/10 bg-white/10 p-5 shadow-lg backdrop-blur">
               <p className="text-xs uppercase tracking-[0.3em] text-amber-200">
                 ARGANWOOD
               </p>
@@ -110,7 +107,30 @@ export default function DashboardLayout({
           </div>
         </aside>
 
-        <main className="flex-1 overflow-y-auto p-8">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden">
+          <div className="lg:hidden border-b border-amber-200/15 bg-[#071f16] p-4">
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-amber-200">
+                ARGANWOOD
+              </p>
+              <h1 className="mt-1 text-xl font-bold text-white">Customer Portal</h1>
+            </div>
+
+            <nav className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {sidebarItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="shrink-0 rounded-full bg-white/10 px-4 py-2 text-sm font-bold text-white/80"
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+
+          <div className="min-w-0 w-full overflow-x-hidden">{children}</div>
+        </main>
       </div>
     </div>
   );

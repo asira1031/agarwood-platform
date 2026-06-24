@@ -176,20 +176,48 @@ export default function AdminWithdrawalsPage() {
   const processingAmount = grouped.processing.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const paidAmount = grouped.paid.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
-  async function upsertWithdrawalTransaction(
+  async function getFreshTransaction(referenceNo: string) {
+    const { data, error } = await supabase
+      .from("wallet_transactions")
+      .select("id, profile_id, transaction_type, amount, reference_no, description, status, created_at")
+      .eq("reference_no", referenceNo)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data as WalletTransaction | null;
+  }
+
+  async function getFreshWallet(profileId: string) {
+    const { data, error } = await supabase
+      .from("wallets")
+      .select("id, profile_id, balance")
+      .eq("profile_id", profileId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data as WalletRow | null;
+  }
+
+  async function updateWithdrawalTransaction(
     request: WithdrawalRequest,
     status: "PROCESSING" | "COMPLETED" | "REJECTED"
   ) {
     if (!request.profile_id) throw new Error("Profile ID missing.");
 
-    const existing = transactions[request.id];
-    const amount = status === "COMPLETED" ? -Math.abs(Number(request.amount || 0)) : 0;
-    const transactionType =
+    const existing = await getFreshTransaction(request.id);
+    const originalAmount = existing?.amount;
+    const fallbackAmount = -Math.abs(Number(request.amount || 0));
+
+    const amount =
       status === "COMPLETED"
-        ? "WITHDRAWAL"
-        : status === "PROCESSING"
-        ? "WITHDRAWAL_PROCESSING"
-        : "WITHDRAWAL_REJECTED";
+        ? Number(originalAmount || fallbackAmount)
+        : status === "REJECTED"
+        ? Number(originalAmount || fallbackAmount)
+        : Number(originalAmount || fallbackAmount);
+
+    const transactionType = "WITHDRAWAL";
 
     const description =
       status === "COMPLETED"
@@ -198,7 +226,7 @@ export default function AdminWithdrawalsPage() {
           } - ${request.payout_account_number || "N/A"}.`
         : status === "PROCESSING"
         ? `Withdrawal moved to processing. Amount: ${peso(request.amount)}.`
-        : `Withdrawal rejected. Amount: ${peso(request.amount)}.`;
+        : `Withdrawal rejected and wallet restored once. Amount: ${peso(request.amount)}.`;
 
     if (existing) {
       const { error } = await supabase
@@ -228,6 +256,35 @@ export default function AdminWithdrawalsPage() {
     if (error) throw error;
   }
 
+  async function restoreWalletOnce(request: WithdrawalRequest) {
+    if (!request.profile_id) throw new Error("Profile ID missing.");
+
+    const freshTx = await getFreshTransaction(request.id);
+
+    if (freshTx && normalize(freshTx.status) === "REJECTED") {
+      return false;
+    }
+
+    const wallet = await getFreshWallet(request.profile_id);
+
+    if (!wallet?.id) {
+      throw new Error("Customer wallet not found. Cannot restore rejected withdrawal.");
+    }
+
+    const restoreAmount = Math.abs(Number(request.amount || 0));
+    const currentBalance = Number(wallet.balance || 0);
+    const newBalance = currentBalance + restoreAmount;
+
+    const { error: walletError } = await supabase
+      .from("wallets")
+      .update({ balance: newBalance })
+      .eq("id", wallet.id);
+
+    if (walletError) throw walletError;
+
+    return true;
+  }
+
   async function markProcessing(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
 
@@ -251,7 +308,7 @@ export default function AdminWithdrawalsPage() {
 
       if (error) throw error;
 
-      await upsertWithdrawalTransaction(request, "PROCESSING");
+      await updateWithdrawalTransaction(request, "PROCESSING");
 
       setMessage("Withdrawal moved to PROCESSING.");
       await loadData();
@@ -290,7 +347,7 @@ export default function AdminWithdrawalsPage() {
 
       if (error) throw error;
 
-      await upsertWithdrawalTransaction(request, "COMPLETED");
+      await updateWithdrawalTransaction(request, "COMPLETED");
 
       setMessage("Withdrawal marked as PAID. Wallet was not deducted again.");
       await loadData();
@@ -310,13 +367,15 @@ export default function AdminWithdrawalsPage() {
       return;
     }
 
-    const confirmed = window.confirm("Reject this withdrawal request?");
+    const confirmed = window.confirm("Reject this withdrawal request and restore wallet once?");
     if (!confirmed) return;
 
     setActionLoading(request.id);
     setMessage("");
 
     try {
+      await restoreWalletOnce(request);
+
       const { error } = await supabase
         .from("withdrawal_requests")
         .update({ status: "REJECTED" })
@@ -325,9 +384,9 @@ export default function AdminWithdrawalsPage() {
 
       if (error) throw error;
 
-      await upsertWithdrawalTransaction(request, "REJECTED");
+      await updateWithdrawalTransaction(request, "REJECTED");
 
-      setMessage("Withdrawal rejected.");
+      setMessage("Withdrawal rejected. Customer wallet restored once.");
       await loadData();
       setTab("REJECTED");
     } catch (error: any) {
@@ -345,7 +404,8 @@ export default function AdminWithdrawalsPage() {
           <h1>Payout Queue / Withdrawals</h1>
           <span>
             Review withdrawal requests, move to processing, and mark paid after external payout.
-            Admin does not deduct customer wallet again.
+            Admin does not deduct customer wallet again. Rejections restore the deducted wallet
+            balance once only.
           </span>
         </div>
 

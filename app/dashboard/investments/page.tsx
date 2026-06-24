@@ -39,13 +39,12 @@ function normalizeStatus(value: any) {
   return String(value || "NOT_ENROLLED").trim().toUpperCase();
 }
 
-function getTreeName(tree: TreeRow) {
+function getTreeName(tree: TreeRow, index?: number) {
   return (
     tree.custom_name ||
     tree.display_name ||
     tree.name ||
-    tree.tree_code ||
-    "Agarwood Tree"
+    `Seedling #${typeof index === "number" ? index + 1 : ""}`.trim()
   );
 }
 
@@ -205,7 +204,7 @@ export default function InvestmentsPage() {
     const { data: treeData, error: treeError } = await supabase
       .from("trees")
       .select("*")
-      .eq("profile_id", currentProfile.id)
+      .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
       .order("created_at", { ascending: false });
 
     if (treeError) {
@@ -217,7 +216,7 @@ export default function InvestmentsPage() {
     const { data: requestData } = await supabase
       .from("tree_operation_requests")
       .select("*")
-      .eq("profile_id", currentProfile.id)
+      .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
       .order("created_at", { ascending: false });
 
     const rows = (treeData || []) as TreeRow[];
@@ -235,6 +234,12 @@ export default function InvestmentsPage() {
   const selectedTree = useMemo(() => {
     return trees.find((tree) => tree.id === selectedTreeId) || trees[0] || null;
   }, [trees, selectedTreeId]);
+
+  const selectedTreeIndex = useMemo(() => {
+    if (!selectedTree) return 0;
+    const index = trees.findIndex((tree) => tree.id === selectedTree.id);
+    return index >= 0 ? index : 0;
+  }, [trees, selectedTree]);
 
   const stats = useMemo(() => {
     const totalPurchase = trees.reduce((sum, tree) => sum + getPurchasePrice(tree), 0);
@@ -331,17 +336,15 @@ export default function InvestmentsPage() {
     <main className="page">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agarwood Investments V5</p>
-          <h1>Investment Portfolio</h1>
+          <p className="eyebrow">Agarwood Portfolio Command</p>
+          <h1>Premium Forest Portfolio</h1>
           <span>
-            Track your trees by tree, group, package, and ledger. Care program
-            cost is included in ROI, but this page is display-only and does not
-            charge wallet or create renewals.
+            Review your owned agarwood assets by tree, group, package, and ledger. ROI uses your live tree records and remains display-only for investor clarity.
           </span>
         </div>
 
         <div className="heroCard">
-          <p>Portfolio ROI</p>
+          <p>Live Portfolio ROI</p>
           <strong className={stats.roi >= 0 ? "goodText" : "badText"}>
             {stats.roi.toFixed(2)}%
           </strong>
@@ -380,23 +383,23 @@ export default function InvestmentsPage() {
 
           <section className="tabs">
             <button className={viewMode === "TREE" ? "active" : ""} onClick={() => setViewMode("TREE")}>
-              By Tree
+              Tree Assets
             </button>
             <button className={viewMode === "GROUP" ? "active" : ""} onClick={() => setViewMode("GROUP")}>
-              By Group
+              Forest Groups
             </button>
             <button className={viewMode === "PACKAGE" ? "active" : ""} onClick={() => setViewMode("PACKAGE")}>
-              By Package
+              Packages
             </button>
             <button className={viewMode === "LEDGER" ? "active" : ""} onClick={() => setViewMode("LEDGER")}>
-              Ledger
+              Cost Ledger
             </button>
           </section>
 
           {viewMode === "TREE" && (
             <section className="layout">
               <aside className="treeList">
-                {trees.map((tree) => {
+                {trees.map((tree, index) => {
                   const active = selectedTree?.id === tree.id;
 
                   return (
@@ -406,9 +409,9 @@ export default function InvestmentsPage() {
                       onClick={() => setSelectedTreeId(tree.id)}
                     >
                       <div>
-                        <strong>{getTreeCode(tree)}</strong>
-                        <p>{getTreeName(tree)}</p>
-                        <small>{getGroupName(tree)}</small>
+                        <strong>{getTreeName(tree, index)}</strong>
+                        <p>{getGroupName(tree)}</p>
+                        <small>{getTreeCode(tree)}</small>
                       </div>
 
                       <span className={getProfit(tree) >= 0 ? "gain" : "loss"}>
@@ -423,8 +426,8 @@ export default function InvestmentsPage() {
                 <section className="detail">
                   <div className="detailTop">
                     <div>
-                      <p className="eyebrow">Selected Asset</p>
-                      <h2>{getTreeName(selectedTree)}</h2>
+                      <p className="eyebrow">Selected Tree Asset</p>
+                      <h2>{getTreeName(selectedTree, selectedTreeIndex)}</h2>
                       <span>{getTreeCode(selectedTree)}</span>
                     </div>
 
@@ -454,7 +457,7 @@ export default function InvestmentsPage() {
                   <section className="syncPanel">
                     <div className="panelHead">
                       <div>
-                        <h3>Care Program Sync</h3>
+                        <h3>Care & Operations Sync</h3>
                         <p>
                           Display-only status from the tree record. Renewal is
                           shown for planning only and does not auto-charge.
@@ -528,7 +531,7 @@ export default function InvestmentsPage() {
           {viewMode === "LEDGER" && (
             <section className="tablePanel">
               <PanelTitle
-                title="Care Program Ledger"
+                title="Care Program Cost Ledger"
                 text="Care program history from operation requests. Display only."
               />
 
@@ -582,14 +585,31 @@ export default function InvestmentsPage() {
         * { box-sizing: border-box; }
 
         .page {
+          width: 100%;
+          min-width: 0;
           min-height: 100vh;
-          padding: 30px;
-          color: #18261d;
+          padding: 32px;
+          color: #f7f1df;
           font-family: Arial, Helvetica, sans-serif;
           background:
-            radial-gradient(circle at 18% 5%, rgba(255, 226, 154, .55), transparent 24%),
-            radial-gradient(circle at 92% 8%, rgba(255,255,255,.72), transparent 28%),
-            linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
+            radial-gradient(circle at 14% 8%, rgba(214, 178, 94, .24), transparent 28%),
+            radial-gradient(circle at 88% 5%, rgba(86, 130, 92, .24), transparent 30%),
+            radial-gradient(circle at 48% 112%, rgba(214, 178, 94, .14), transparent 36%),
+            linear-gradient(135deg, #07130d 0%, #0d2117 46%, #03100a 100%);
+          position: relative;
+          overflow-x: hidden;
+        }
+
+        .page:before {
+          content: "";
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          background:
+            linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+          background-size: 46px 46px;
+          mask-image: radial-gradient(circle at top, black, transparent 78%);
         }
 
         .hero {
@@ -598,47 +618,52 @@ export default function InvestmentsPage() {
           align-items: stretch;
           gap: 18px;
           margin-bottom: 22px;
+          position: relative;
+          z-index: 1;
         }
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #8c6a3c;
+          color: #d9b45f;
           font-weight: 900;
           text-transform: uppercase;
-          letter-spacing: .12em;
+          letter-spacing: .16em;
           font-size: 12px;
         }
 
         .hero h1 {
           margin: 0;
-          font-size: 44px;
-          color: #101a14;
-          letter-spacing: -1.6px;
+          font-size: 48px;
+          color: #fff8df;
+          letter-spacing: -1.8px;
+          text-shadow: 0 14px 40px rgba(0,0,0,.32);
         }
 
         .hero span {
           display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          max-width: 850px;
-          line-height: 1.6;
+          margin-top: 10px;
+          color: rgba(247,241,223,.74);
+          max-width: 880px;
+          line-height: 1.65;
           font-weight: 700;
         }
 
         .heroCard {
-          min-width: 280px;
-          border-radius: 28px;
-          padding: 22px;
+          min-width: 290px;
+          border-radius: 30px;
+          padding: 24px;
           color: white;
           background:
-            radial-gradient(circle at 80% 18%, rgba(214,178,94,.44), transparent 34%),
-            linear-gradient(135deg, #244536, #10281f);
-          box-shadow: 0 24px 56px rgba(36,69,54,.24);
+            radial-gradient(circle at 82% 16%, rgba(217,180,95,.44), transparent 34%),
+            radial-gradient(circle at 10% 92%, rgba(83,128,90,.34), transparent 42%),
+            linear-gradient(135deg, rgba(23,70,44,.96), rgba(5,24,15,.98));
+          border: 1px solid rgba(217,180,95,.34);
+          box-shadow: 0 28px 78px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.14);
         }
 
         .heroCard p {
           margin: 0;
-          color: rgba(255,255,255,.72);
+          color: rgba(255,248,223,.72);
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .14em;
@@ -648,13 +673,13 @@ export default function InvestmentsPage() {
         .heroCard strong {
           display: block;
           margin-top: 10px;
-          font-size: 34px;
+          font-size: 36px;
         }
 
         .heroCard small {
           display: block;
           margin-top: 6px;
-          color: rgba(255,255,255,.74);
+          color: rgba(255,248,223,.74);
           font-weight: 900;
         }
 
@@ -669,24 +694,28 @@ export default function InvestmentsPage() {
         .detail,
         .tablePanel,
         .syncPanel {
-          border-radius: 26px;
-          background: rgba(255,253,246,.88);
-          border: 1px solid rgba(92,70,35,.08);
-          box-shadow: 0 18px 42px rgba(82,60,27,.09);
+          border-radius: 28px;
+          background: linear-gradient(180deg, rgba(255,255,255,.105), rgba(255,255,255,.055));
+          border: 1px solid rgba(217,180,95,.22);
+          box-shadow: 0 24px 70px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.10);
+          backdrop-filter: blur(18px);
+          position: relative;
+          z-index: 1;
         }
 
         .message,
         .empty {
           padding: 20px;
           margin-bottom: 18px;
-          color: #31553d;
+          color: #f8e6ad;
           font-weight: 900;
         }
 
         .small {
           box-shadow: none;
-          background: #f3ead8;
+          background: rgba(4,18,11,.52);
           border-radius: 18px;
+          border: 1px solid rgba(217,180,95,.14);
         }
 
         .stats {
@@ -694,19 +723,29 @@ export default function InvestmentsPage() {
           grid-template-columns: repeat(4, 1fr);
           gap: 16px;
           margin-bottom: 18px;
+          position: relative;
+          z-index: 1;
         }
 
-        .stats.second {
-          margin-top: -6px;
-        }
+        .stats.second { margin-top: -6px; }
 
-        .card {
-          padding: 22px;
+        .card { padding: 22px; }
+
+        .card p,
+        .detailTop span,
+        .statusBox small,
+        .money span,
+        .mini span,
+        .panelHead p,
+        .panelTitle p,
+        .summaryRow p,
+        .ledgerRow p,
+        .summaryMetric span {
+          color: rgba(247,241,223,.68);
         }
 
         .card p {
           margin: 0;
-          color: #6b6b62;
           font-size: 12px;
           font-weight: 900;
           text-transform: uppercase;
@@ -715,17 +754,12 @@ export default function InvestmentsPage() {
 
         .card h3 {
           margin: 10px 0 0;
-          color: #244536;
+          color: #fff8df;
           font-size: 26px;
         }
 
-        .card.good h3 {
-          color: #31553d;
-        }
-
-        .card.bad h3 {
-          color: #a33c2a;
-        }
+        .card.good h3 { color: #a8f2ac; }
+        .card.bad h3 { color: #ffb0a4; }
 
         .tabs {
           display: grid;
@@ -736,18 +770,22 @@ export default function InvestmentsPage() {
         }
 
         .tabs button {
-          border: 0;
+          border: 1px solid rgba(217,180,95,.16);
           border-radius: 18px;
           padding: 14px;
-          background: #f3ead8;
-          color: #244536;
+          background: rgba(4,18,11,.52);
+          color: #f7f1df;
           font-weight: 900;
           cursor: pointer;
+          transition: .2s ease;
         }
 
+        .tabs button:hover,
         .tabs button.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
+          background: linear-gradient(135deg, #f2d686, #b58a38);
+          color: #06130d;
+          border-color: transparent;
+          box-shadow: 0 16px 34px rgba(181,138,56,.24);
         }
 
         .layout {
@@ -755,6 +793,8 @@ export default function InvestmentsPage() {
           grid-template-columns: 360px 1fr;
           gap: 16px;
           align-items: start;
+          position: relative;
+          z-index: 1;
         }
 
         .treeList {
@@ -765,22 +805,30 @@ export default function InvestmentsPage() {
           overflow: auto;
         }
 
+        .treeList::-webkit-scrollbar { width: 8px; }
+        .treeList::-webkit-scrollbar-thumb { background: rgba(217,180,95,.35); border-radius: 999px; }
+
         .treeItem {
-          border: 0;
-          border-radius: 18px;
+          border: 1px solid rgba(217,180,95,.14);
+          border-radius: 20px;
           padding: 14px;
-          background: #f3ead8;
-          color: #18261d;
+          background: rgba(4,18,11,.52);
+          color: #f7f1df;
           display: flex;
           justify-content: space-between;
           gap: 12px;
           text-align: left;
           cursor: pointer;
+          transition: .2s ease;
         }
 
+        .treeItem:hover,
         .treeItem.active {
-          background: linear-gradient(135deg, #244536, #10281f);
-          color: white;
+          background:
+            radial-gradient(circle at 86% 12%, rgba(217,180,95,.20), transparent 34%),
+            linear-gradient(135deg, rgba(23,70,44,.96), rgba(5,24,15,.98));
+          border-color: rgba(242,214,134,.46);
+          transform: translateY(-1px);
         }
 
         .treeItem strong {
@@ -801,14 +849,12 @@ export default function InvestmentsPage() {
           font-weight: 800;
         }
 
-        .gain { color: #31553d; font-weight: 900; }
-        .loss { color: #a33c2a; font-weight: 900; }
+        .gain { color: #a8f2ac; font-weight: 900; }
+        .loss { color: #ffb0a4; font-weight: 900; }
         .treeItem.active .gain,
-        .treeItem.active .loss { color: #d9b45f; }
+        .treeItem.active .loss { color: #f2d686; }
 
-        .detail {
-          padding: 22px;
-        }
+        .detail { padding: 22px; }
 
         .detailTop {
           display: flex;
@@ -820,26 +866,33 @@ export default function InvestmentsPage() {
 
         .detailTop h2 {
           margin: 0;
-          color: #101a14;
-          font-size: 32px;
+          color: #fff8df;
+          font-size: 34px;
         }
 
         .detailTop span {
           display: block;
           margin-top: 6px;
-          color: #6b6b62;
           font-weight: 900;
+        }
+
+        .statusBox,
+        .money,
+        .mini,
+        .summaryRow,
+        .ledgerRow {
+          border-radius: 20px;
+          background: rgba(4,18,11,.52);
+          border: 1px solid rgba(217,180,95,.14);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
         }
 
         .statusBox {
           min-width: 260px;
-          border-radius: 22px;
           padding: 16px;
-          background: #f3ead8;
         }
 
         .statusBox small {
-          color: #6b6b62;
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
@@ -849,7 +902,7 @@ export default function InvestmentsPage() {
         .statusBox strong {
           display: block;
           margin-top: 8px;
-          color: #10281f;
+          color: #fff8df;
           font-size: 18px;
         }
 
@@ -858,9 +911,9 @@ export default function InvestmentsPage() {
           font-weight: 900;
         }
 
-        .statusBox.good { background: rgba(49,85,61,.12); }
-        .statusBox.warning { background: rgba(214,178,94,.20); }
-        .statusBox.bad { background: rgba(163,60,42,.12); }
+        .statusBox.good { background: rgba(112,189,124,.13); }
+        .statusBox.warning { background: rgba(217,180,95,.16); }
+        .statusBox.bad { background: rgba(255,112,92,.13); }
 
         .moneyGrid,
         .syncGrid {
@@ -870,16 +923,11 @@ export default function InvestmentsPage() {
         }
 
         .money,
-        .mini {
-          border-radius: 18px;
-          padding: 15px;
-          background: #f3ead8;
-        }
+        .mini { padding: 15px; }
 
         .money span,
         .mini span {
           display: block;
-          color: #6b6b62;
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
@@ -887,25 +935,25 @@ export default function InvestmentsPage() {
         }
 
         .money b,
-        .mini b {
+        .mini b,
+        .summaryMetric b,
+        .ledgerRight b {
           display: block;
           margin-top: 8px;
-          color: #244536;
+          color: #f2d686;
           font-size: 18px;
         }
 
         .money.strong {
-          background: linear-gradient(135deg, #244536, #10281f);
+          background:
+            radial-gradient(circle at 90% 14%, rgba(217,180,95,.26), transparent 34%),
+            linear-gradient(135deg, rgba(23,70,44,.96), rgba(5,24,15,.98));
+          border-color: rgba(217,180,95,.28);
         }
 
         .money.strong span,
-        .money.strong b {
-          color: white;
-        }
-
-        .money.good b {
-          color: #31553d;
-        }
+        .money.strong b { color: #fff8df; }
+        .money.good b { color: #a8f2ac; }
 
         .syncPanel {
           padding: 18px;
@@ -915,19 +963,20 @@ export default function InvestmentsPage() {
         .panelHead h3,
         .panelTitle h2 {
           margin: 0;
-          color: #101a14;
+          color: #fff8df;
         }
 
         .panelHead p,
         .panelTitle p {
           margin: 6px 0 0;
-          color: #6b6b62;
           line-height: 1.5;
           font-weight: 800;
         }
 
         .tablePanel {
           padding: 22px;
+          position: relative;
+          z-index: 1;
         }
 
         .table,
@@ -939,28 +988,21 @@ export default function InvestmentsPage() {
 
         .summaryRow,
         .ledgerRow {
-          border-radius: 20px;
           padding: 16px;
-          background: #f3ead8;
           display: grid;
           grid-template-columns: 1.2fr repeat(5, .8fr);
           gap: 12px;
           align-items: center;
         }
 
-        .ledgerRow {
-          grid-template-columns: 1fr auto;
-        }
+        .ledgerRow { grid-template-columns: 1fr auto; }
 
         .summaryRow strong,
-        .ledgerRow strong {
-          color: #101a14;
-        }
+        .ledgerRow strong { color: #fff8df; }
 
         .summaryRow p,
         .ledgerRow p {
           margin: 6px 0 0;
-          color: #6b6b62;
           font-size: 13px;
           font-weight: 800;
         }
@@ -969,25 +1011,20 @@ export default function InvestmentsPage() {
         .ledgerRow small {
           display: block;
           margin-top: 5px;
-          color: #8c6a3c;
+          color: #d9b45f;
           font-weight: 900;
           white-space: pre-line;
         }
 
         .summaryMetric span {
           display: block;
-          color: #6b6b62;
           font-size: 11px;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: .08em;
         }
 
-        .summaryMetric b {
-          display: block;
-          margin-top: 5px;
-          color: #244536;
-        }
+        .summaryMetric b { margin-top: 5px; }
 
         .ledgerRight {
           display: grid;
@@ -995,85 +1032,44 @@ export default function InvestmentsPage() {
           justify-items: end;
         }
 
-        .ledgerRight b {
-          color: #244536;
-        }
-
         .statusPill {
           border-radius: 999px;
           padding: 8px 10px;
           font-size: 11px;
           font-weight: 900;
+          border: 1px solid transparent;
         }
 
-        .statusPill.good {
-          background: rgba(49,85,61,.12);
-          color: #31553d;
-        }
-
-        .statusPill.warning {
-          background: rgba(214,178,94,.20);
-          color: #8c6a3c;
-        }
-
-        .statusPill.bad {
-          background: rgba(163,60,42,.12);
-          color: #a33c2a;
-        }
-
-        .statusPill.neutral {
-          background: rgba(92,70,35,.10);
-          color: #6b6b62;
-        }
+        .statusPill.good { background: rgba(112,189,124,.15); color: #a8f2ac; border-color: rgba(112,189,124,.22); }
+        .statusPill.warning { background: rgba(217,180,95,.16); color: #f2d686; border-color: rgba(217,180,95,.22); }
+        .statusPill.bad { background: rgba(255,112,92,.14); color: #ffb0a4; border-color: rgba(255,112,92,.20); }
+        .statusPill.neutral { background: rgba(255,255,255,.07); color: rgba(247,241,223,.72); border-color: rgba(255,255,255,.08); }
 
         @media (max-width: 1180px) {
           .stats,
           .moneyGrid,
           .syncGrid,
-          .tabs {
-            grid-template-columns: repeat(2, 1fr);
-          }
-
-          .layout {
-            grid-template-columns: 1fr;
-          }
-
-          .summaryRow {
-            grid-template-columns: 1fr 1fr;
-          }
+          .tabs { grid-template-columns: repeat(2, 1fr); }
+          .layout { grid-template-columns: 1fr; }
+          .summaryRow { grid-template-columns: 1fr 1fr; }
         }
 
-        @media (max-width: 760px) {
-          .page {
-            padding: 18px;
-          }
-
-          .hero,
+        @media (max-width: 820px) {
+          .page { padding: 18px; }
+          .hero { display: block; }
+          .hero h1 { font-size: 36px; }
+          .heroCard { margin-top: 16px; min-width: 0; }
           .stats,
           .tabs,
           .moneyGrid,
-          .syncGrid,
-          .detailTop,
+          .syncGrid { grid-template-columns: 1fr; }
+          .detailTop { display: block; }
+          .statusBox { margin-top: 14px; min-width: 0; }
           .summaryRow,
-          .ledgerRow {
-            display: grid;
-            grid-template-columns: 1fr;
-          }
-
-          .hero h1 {
-            font-size: 34px;
-          }
-
-          .heroCard,
-          .statusBox {
-            min-width: 0;
-          }
-
-          .ledgerRight {
-            justify-items: start;
-          }
+          .ledgerRow { grid-template-columns: 1fr; }
+          .ledgerRight { justify-items: start; }
         }
-      `}</style>
+`}</style>
     </main>
   );
 }
