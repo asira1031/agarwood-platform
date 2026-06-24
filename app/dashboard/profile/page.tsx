@@ -239,7 +239,6 @@ export default function ProfilePage() {
       .update({
         full_name: profileForm.full_name.trim(),
         phone: profileForm.phone.trim() || null,
-        updated_at: new Date().toISOString(),
       })
       .eq("id", profile.id);
 
@@ -353,7 +352,6 @@ export default function ProfilePage() {
         .from("profiles")
         .update({
           kyc_status: "PENDING",
-          updated_at: now,
         })
         .eq("id", currentProfile.id);
 
@@ -671,12 +669,7 @@ export default function ProfilePage() {
             linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
         }
 
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          gap: 18px;
-          margin-bottom: 22px;
-        }
+        .hero { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
 
         .eyebrow {
           margin: 0 0 8px;
@@ -687,115 +680,39 @@ export default function ProfilePage() {
           font-size: 12px;
         }
 
-        h1 {
-          margin: 0;
-          color: #fff8dc;
-          font-size: 46px;
-          letter-spacing: -1.6px;
-        }
+        h1 { margin: 0; color: #fff8dc; font-size: 46px; letter-spacing: -1.6px; }
 
-        .hero span,
-        .panelHead span {
+        .hero span, .panelHead span {
           display: block;
           margin-top: 8px;
           color: rgba(248,241,216,.68);
           line-height: 1.6;
         }
 
-        .identityCard,
-        .summaryCard,
-        .panel,
-        .message,
-        .empty {
+        .identityCard, .summaryCard, .panel, .message, .empty {
           border: 1px solid rgba(214,178,94,.22);
           background: rgba(255,255,255,.07);
           backdrop-filter: blur(18px);
           box-shadow: 0 24px 60px rgba(0,0,0,.28);
         }
 
-        .identityCard {
-          min-width: 320px;
-          border-radius: 28px;
-          padding: 24px;
-        }
+        .identityCard { min-width: 320px; border-radius: 28px; padding: 24px; }
+        .identityCard p, .identityCard small { margin: 0; color: rgba(248,241,216,.68); font-weight: 900; }
+        .identityCard strong { display: block; margin: 10px 0; color: #d6b25e; font-size: 28px; word-break: break-word; }
 
-        .identityCard p,
-        .identityCard small {
-          margin: 0;
-          color: rgba(248,241,216,.68);
-          font-weight: 900;
-        }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }
+        .summaryCard { border-radius: 24px; padding: 20px; }
+        .summaryCard p { margin: 0; color: rgba(248,241,216,.6); font-weight: 900; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+        .summaryCard h3 { margin: 10px 0 0; color: #fff8dc; font-size: 23px; word-break: break-word; }
 
-        .identityCard strong {
-          display: block;
-          margin: 10px 0;
-          color: #d6b25e;
-          font-size: 28px;
-          word-break: break-word;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .summaryCard {
-          border-radius: 24px;
-          padding: 20px;
-        }
-
-        .summaryCard p {
-          margin: 0;
-          color: rgba(248,241,216,.6);
-          font-weight: 900;
-          font-size: 12px;
-          letter-spacing: .12em;
-          text-transform: uppercase;
-        }
-
-        .summaryCard h3 {
-          margin: 10px 0 0;
-          color: #fff8dc;
-          font-size: 23px;
-          word-break: break-word;
-        }
-
-        .grid {
-          display: grid;
-          grid-template-columns: 1.25fr .85fr;
-          gap: 18px;
-          margin-bottom: 18px;
-        }
-
+        .grid { display: grid; grid-template-columns: 1.25fr .85fr; gap: 18px; margin-bottom: 18px; }
         .kycGrid { align-items: start; }
+        .panel { border-radius: 28px; padding: 22px; }
 
-        .panel {
-          border-radius: 28px;
-          padding: 22px;
-        }
+        .panelHead { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 18px; }
+        .panelHead h2 { margin: 0; color: #fff8dc; font-size: 26px; }
 
-        .panelHead {
-          display: flex;
-          justify-content: space-between;
-          align-items: start;
-          gap: 14px;
-          margin-bottom: 18px;
-        }
-
-        .panelHead h2 {
-          margin: 0;
-          color: #fff8dc;
-          font-size: 26px;
-        }
-
-        .formGrid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 14px;
-          margin-bottom: 16px;
-        }
+        .formGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
 
         label {
           display: grid;
@@ -809,9 +726,7 @@ export default function ProfilePage() {
 
         .notesLabel { margin-bottom: 16px; }
 
-        input,
-        select,
-        textarea {
+        input, select, textarea {
           width: 100%;
           border: 1px solid rgba(214,178,94,.22);
           border-radius: 16px;
@@ -821,12 +736,7 @@ export default function ProfilePage() {
           outline: none;
         }
 
-        textarea {
-          min-height: 100px;
-          resize: vertical;
-          font-family: inherit;
-        }
-
+        textarea { min-height: 100px; resize: vertical; font-family: inherit; }
         input:disabled { opacity: .65; }
         option { color: #07140f; }
 
@@ -840,13 +750,9 @@ export default function ProfilePage() {
           cursor: pointer;
         }
 
-        button:disabled {
-          cursor: not-allowed;
-          opacity: .55;
-        }
+        button:disabled { cursor: not-allowed; opacity: .55; }
 
-        .message,
-        .empty {
+        .message, .empty {
           padding: 18px;
           border-radius: 22px;
           margin-bottom: 18px;
@@ -854,12 +760,7 @@ export default function ProfilePage() {
           font-weight: 900;
         }
 
-        .small {
-          box-shadow: none;
-          margin: 0;
-          background: rgba(0,0,0,.22);
-        }
-
+        .small { box-shadow: none; margin: 0; background: rgba(0,0,0,.22); }
         .trustList { display: grid; gap: 12px; }
 
         .info {
@@ -872,37 +773,17 @@ export default function ProfilePage() {
           border: 1px solid rgba(214,178,94,.12);
         }
 
-        .info p {
-          margin: 0;
-          color: rgba(248,241,216,.58);
-          font-weight: 900;
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
+        .info p { margin: 0; color: rgba(248,241,216,.58); font-weight: 900; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; }
+        .info strong { color: #fff8dc; text-align: right; word-break: break-word; }
 
-        .info strong {
-          color: #fff8dc;
-          text-align: right;
-          word-break: break-word;
-        }
-
-        .pill {
-          border-radius: 999px;
-          padding: 9px 12px;
-          font-size: 12px;
-          white-space: nowrap;
-        }
+        .pill { border-radius: 999px; padding: 9px 12px; font-size: 12px; white-space: nowrap; }
 
         .approved { border-color: rgba(95,220,140,.35); }
         .pending { border-color: rgba(214,178,94,.45); }
         .rejected { border-color: rgba(255,105,105,.4); }
         .notSubmitted { border-color: rgba(255,255,255,.16); }
 
-        .lockedBox,
-        .rejectedBox,
-        .riskBox,
-        .uploadBox {
+        .lockedBox, .rejectedBox, .riskBox, .uploadBox {
           border-radius: 18px;
           padding: 16px;
           background: rgba(0,0,0,.22);
@@ -910,37 +791,18 @@ export default function ProfilePage() {
           margin-bottom: 16px;
         }
 
-        .lockedBox strong,
-        .rejectedBox strong { color: #fff8dc; }
+        .lockedBox strong, .rejectedBox strong { color: #fff8dc; }
 
-        .lockedBox p,
-        .rejectedBox p {
+        .lockedBox p, .rejectedBox p {
           color: rgba(248,241,216,.68);
           margin: 8px 0 0;
           line-height: 1.6;
         }
 
-        .uploadGrid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 14px;
-          margin-bottom: 16px;
-        }
-
+        .uploadGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
         .uploadBox { margin-bottom: 0; }
-
-        .uploadBox p {
-          margin: 0 0 10px;
-          color: #d6b25e;
-          font-weight: 900;
-        }
-
-        .uploadBox small {
-          display: block;
-          margin-top: 8px;
-          color: rgba(248,241,216,.62);
-          word-break: break-word;
-        }
+        .uploadBox p { margin: 0 0 10px; color: #d6b25e; font-weight: 900; }
+        .uploadBox small { display: block; margin-top: 8px; color: rgba(248,241,216,.62); word-break: break-word; }
 
         .riskBox {
           display: flex;
@@ -951,20 +813,11 @@ export default function ProfilePage() {
           line-height: 1.5;
         }
 
-        .riskBox input {
-          width: auto;
-          margin-top: 3px;
-        }
+        .riskBox input { width: auto; margin-top: 3px; }
 
-        .docLinks {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 10px;
-          margin-top: 4px;
-        }
+        .docLinks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 4px; }
 
-        .docLinks a,
-        .docLinks span {
+        .docLinks a, .docLinks span {
           border-radius: 14px;
           padding: 12px;
           text-align: center;
@@ -978,18 +831,8 @@ export default function ProfilePage() {
         .docLinks span { color: rgba(248,241,216,.45); }
 
         @media (max-width: 980px) {
-          .hero,
-          .grid {
-            display: grid;
-            grid-template-columns: 1fr;
-          }
-
-          .stats,
-          .formGrid,
-          .uploadGrid {
-            grid-template-columns: 1fr;
-          }
-
+          .hero, .grid { display: grid; grid-template-columns: 1fr; }
+          .stats, .formGrid, .uploadGrid { grid-template-columns: 1fr; }
           .identityCard { min-width: 0; }
           h1 { font-size: 36px; }
         }
