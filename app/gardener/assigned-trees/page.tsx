@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
@@ -50,6 +50,62 @@ function formatDate(value: string | null | undefined) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+
+function parseScannedTreeValue(raw: string) {
+  const value = raw.trim();
+  if (!value) return { treeId: "", treeCode: "" };
+
+  try {
+    const url = new URL(value);
+    const treeId =
+      url.searchParams.get("tree_id") ||
+      url.searchParams.get("treeId") ||
+      url.searchParams.get("id") ||
+      "";
+    const treeCode =
+      url.searchParams.get("tree_code") ||
+      url.searchParams.get("treeCode") ||
+      url.searchParams.get("code") ||
+      "";
+    const fallback = treeCode || treeId || value;
+
+    return {
+      treeId: treeId || (fallback.includes("-") && fallback.length > 20 ? fallback : ""),
+      treeCode: treeCode || fallback,
+    };
+  } catch {
+    return {
+      treeId: value.includes("-") && value.length > 20 ? value : "",
+      treeCode: value,
+    };
+  }
+}
+
+function scannedMatchesAssignment(item: AssignedTree, raw: string) {
+  const parsed = parseScannedTreeValue(raw);
+  const scannedCode = parsed.treeCode.trim().toLowerCase();
+  const scannedId = parsed.treeId.trim().toLowerCase();
+  const expectedCode = String(
+    item.tree?.tree_code ||
+      item.assignment?.tree_code ||
+      item.request?.tree_code ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+  const expectedId = String(item.tree?.id || item.treeId || item.assignment?.tree_id || item.request?.tree_id || "")
+    .trim()
+    .toLowerCase();
+
+  return {
+    parsed,
+    matched: Boolean(
+      (scannedCode && expectedCode && scannedCode === expectedCode) ||
+        (scannedId && expectedId && scannedId === expectedId)
+    ),
+  };
 }
 
 function getSourceType(assignment?: Row | null, task?: Row | null, request?: Row | null) {
@@ -376,22 +432,36 @@ export default function GardenerAssignedTreesPage() {
     );
   }
 
-  function verifyTree(item: AssignedTree) {
-    const expectedCode = String(getTreeCode(item) || "").trim().toLowerCase();
-    const enteredCode = String(verifyInputMap[item.assignmentId] || "").trim().toLowerCase();
-
-    if (!expectedCode) {
-      setMessage("Tree code not found for this assignment.");
-      return;
+  async function saveQrAuditLog(item: AssignedTree, parsed: { treeId: string; treeCode: string }) {
+    try {
+      await supabase.from("tree_verifications").insert({
+        assignment_id: item.assignmentId,
+        operation_request_id: item.operationRequestId,
+        tree_id: item.treeId,
+        customer_profile_id: item.customerProfileId,
+        caretaker_id: caretaker?.id || item.assignment?.caretaker_id || null,
+        verified_tree_code: parsed.treeCode || getTreeCode(item),
+        verification_method: "QR_CAMERA",
+        status: "VERIFIED",
+        created_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.warn("Optional tree_verifications audit skipped", error);
     }
+  }
+
+  async function verifyTree(item: AssignedTree, scannedValue?: string) {
+    const enteredCode = String(scannedValue || verifyInputMap[item.assignmentId] || "").trim();
 
     if (!enteredCode) {
       setMessage("Scan or enter the assigned tree code first.");
       return;
     }
 
-    if (enteredCode !== expectedCode) {
-      setMessage("Tree QR/code verification failed. Evidence upload is blocked for this task.");
+    const result = scannedMatchesAssignment(item, enteredCode);
+
+    if (!result.matched) {
+      setMessage("Wrong Tree / Tree mismatch. Evidence upload is blocked for this task.");
       return;
     }
 
@@ -405,6 +475,7 @@ export default function GardenerAssignedTreesPage() {
       [item.assignmentId]: true,
     }));
 
+    await saveQrAuditLog(item, result.parsed);
     setMessage("Tree Verified. Evidence Center is now enabled for this assignment.");
   }
 
@@ -604,7 +675,7 @@ export default function GardenerAssignedTreesPage() {
                     [item.assignmentId]: value,
                   }))
                 }
-                verifyTree={() => verifyTree(item)}
+                verifyTree={(value?: string) => verifyTree(item, value)}
                 updateAssignmentStatus={(status) => updateAssignmentStatus(item, status)}
               />
             ))}
@@ -629,9 +700,62 @@ function AssignedTreeCard({
   isVerified: boolean;
   verifyValue: string;
   setVerifyValue: (value: string) => void;
-  verifyTree: () => void;
+  verifyTree: (value?: string) => void;
   updateAssignmentStatus: (status: string) => void;
 }) {
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerRunning, setScannerRunning] = useState(false);
+  const scannerRef = useRef<any>(null);
+
+  async function stopCameraScanner() {
+    try {
+      if (scannerRef.current) {
+        await scannerRef.current.stop();
+        await scannerRef.current.clear();
+      }
+    } catch (error) {
+      console.warn("QR scanner stop skipped", error);
+    } finally {
+      scannerRef.current = null;
+      setScannerRunning(false);
+      setScannerOpen(false);
+    }
+  }
+
+  async function startCameraScanner() {
+    try {
+      setScannerOpen(true);
+      setScannerRunning(true);
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scannerId = `assigned-tree-qr-scanner-${item.assignmentId}`;
+      const scanner = new Html5Qrcode(scannerId);
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 260 } },
+        async (decodedText: string) => {
+          setVerifyValue(decodedText);
+          const result = scannedMatchesAssignment(item, decodedText);
+          if (result.matched) {
+            await stopCameraScanner();
+            verifyTree(decodedText);
+          }
+        },
+        () => undefined
+      );
+    } catch (error) {
+      console.warn("Unable to open QR camera scanner", error);
+      setScannerRunning(false);
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      stopCameraScanner();
+    };
+  }, []);
+
   const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
 
   const treeCode =
@@ -717,19 +841,33 @@ function AssignedTreeCard({
             </p>
 
             <div className="mt-4 flex flex-col gap-3 md:flex-row">
+              <button
+                onClick={scannerOpen ? stopCameraScanner : startCameraScanner}
+                disabled={scannerRunning && !scannerOpen}
+                className="rounded-2xl bg-emerald-500 px-5 py-3 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {scannerOpen ? "Close Camera Scanner" : "Open Camera Scanner"}
+              </button>
               <input
                 value={verifyValue}
                 onChange={(event) => setVerifyValue(event.target.value)}
-                placeholder="Scan or enter assigned Tree Code"
+                placeholder="Manual Tree Code Fallback"
                 className="min-h-[48px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30 focus:border-[#d9b45f]/60"
               />
               <button
-                onClick={verifyTree}
+                onClick={() => verifyTree()}
                 className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-sm font-black text-[#071f16] hover:bg-[#f7d774]"
               >
                 Verify Tree
               </button>
             </div>
+
+            {scannerOpen && (
+              <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-black/30 p-4">
+                <div id={`assigned-tree-qr-scanner-${item.assignmentId}`} className="min-h-[280px] overflow-hidden rounded-xl" />
+                <p className="mt-3 text-xs font-bold text-white/50">Point the camera at the physical tree QR sticker.</p>
+              </div>
+            )}
           </section>
         </div>
 

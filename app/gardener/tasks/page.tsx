@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Row = Record<string, any>;
@@ -122,6 +122,9 @@ export default function GardenerTasksPage() {
   const [selectedKey, setSelectedKey] = useState("");
   const [scanValue, setScanValue] = useState("");
   const [verifiedKey, setVerifiedKey] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerRunning, setScannerRunning] = useState(false);
+  const scannerRef = useRef<any>(null);
   const [currentPhoto, setCurrentPhoto] = useState<File | null>(null);
   const [beforePhoto, setBeforePhoto] = useState<File | null>(null);
   const [afterPhoto, setAfterPhoto] = useState<File | null>(null);
@@ -281,6 +284,10 @@ export default function GardenerTasksPage() {
 
   useEffect(() => {
     loadData();
+
+    return () => {
+      stopCameraScanner();
+    };
   }, []);
 
   const workItems = useMemo<WorkItem[]>(() => {
@@ -358,6 +365,133 @@ export default function GardenerTasksPage() {
   const rules = evidenceRules(selectedService);
   const isVerified = selected && verifiedKey === selected.key;
 
+
+  function parseScannedTreeValue(raw: string) {
+    const value = raw.trim();
+    if (!value) return { treeId: "", treeCode: "" };
+
+    try {
+      const url = new URL(value);
+      const treeId =
+        url.searchParams.get("tree_id") ||
+        url.searchParams.get("treeId") ||
+        url.searchParams.get("id") ||
+        "";
+      const treeCode =
+        url.searchParams.get("tree_code") ||
+        url.searchParams.get("treeCode") ||
+        url.searchParams.get("code") ||
+        "";
+      const fallback = treeCode || treeId || value;
+
+      return {
+        treeId: treeId || (fallback.includes("-") && fallback.length > 20 ? fallback : ""),
+        treeCode: treeCode || fallback,
+      };
+    } catch {
+      return {
+        treeId: value.includes("-") && value.length > 20 ? value : "",
+        treeCode: value,
+      };
+    }
+  }
+
+  async function stopCameraScanner() {
+    try {
+      if (scannerRef.current) {
+        await scannerRef.current.stop();
+        await scannerRef.current.clear();
+      }
+    } catch (error) {
+      console.warn("QR scanner stop skipped", error);
+    } finally {
+      scannerRef.current = null;
+      setScannerRunning(false);
+      setScannerOpen(false);
+    }
+  }
+
+  async function saveQrAuditLog(item: WorkItem, parsed: { treeId: string; treeCode: string }) {
+    if (!caretaker) return;
+
+    try {
+      await supabase.from("tree_verifications").insert({
+        assignment_id: item.assignment.id,
+        operation_request_id: item.assignment.operation_request_id || item.request?.id || null,
+        tree_id: item.assignment.tree_id || item.request?.tree_id || item.tree?.id || null,
+        customer_profile_id:
+          item.assignment.customer_profile_id ||
+          item.request?.customer_profile_id ||
+          item.request?.profile_id ||
+          item.tree?.customer_profile_id ||
+          item.tree?.profile_id ||
+          null,
+        caretaker_id: caretaker.id,
+        verified_tree_code: parsed.treeCode || item.tree?.tree_code || item.tree?.id || null,
+        verification_method: "QR_CAMERA",
+        status: "VERIFIED",
+        created_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.warn("Optional tree_verifications audit skipped", error);
+    }
+  }
+
+  function scannedMatchesSelected(item: WorkItem, raw: string) {
+    const parsed = parseScannedTreeValue(raw);
+    const scannedCode = parsed.treeCode.trim().toLowerCase();
+    const scannedId = parsed.treeId.trim().toLowerCase();
+    const treeCode = String(item.tree?.tree_code || item.assignment.tree_code || item.request?.tree_code || "")
+      .trim()
+      .toLowerCase();
+    const treeId = String(item.tree?.id || item.assignment.tree_id || item.request?.tree_id || "")
+      .trim()
+      .toLowerCase();
+
+    return {
+      parsed,
+      matched: Boolean((scannedCode && treeCode && scannedCode === treeCode) || (scannedId && treeId && scannedId === treeId)),
+    };
+  }
+
+  async function startCameraScanner() {
+    if (!selected) return;
+
+    setMessage("");
+
+    try {
+      setScannerOpen(true);
+      setScannerRunning(true);
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scannerId = `tasks-qr-scanner-${selected.key}`;
+      const scanner = new Html5Qrcode(scannerId);
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 260 } },
+        async (decodedText: string) => {
+          setScanValue(decodedText);
+          const result = scannedMatchesSelected(selected, decodedText);
+
+          if (result.matched) {
+            setVerifiedKey(selected.key);
+            setMessage("Tree Verified. Evidence upload is now unlocked.");
+            await saveQrAuditLog(selected, result.parsed);
+            await stopCameraScanner();
+          } else {
+            setVerifiedKey("");
+            setMessage("Wrong Tree / Tree mismatch. Evidence upload blocked.");
+          }
+        },
+        () => undefined
+      );
+    } catch (error: any) {
+      setScannerRunning(false);
+      setMessage(error?.message || "Unable to open camera scanner. Use manual fallback.");
+    }
+  }
+
   function resetEvidenceForm() {
     setCurrentPhoto(null);
     setBeforePhoto(null);
@@ -368,26 +502,25 @@ export default function GardenerTasksPage() {
     setNotes("");
   }
 
-  function verifyTree() {
+  async function verifyTree() {
     if (!selected) return;
 
-    const scanned = scanValue.trim().toLowerCase();
-    const treeCode = String(selected.tree?.tree_code || "").trim().toLowerCase();
-    const treeId = String(selected.tree?.id || selected.assignment.tree_id || "").trim().toLowerCase();
-
-    if (!scanned) {
+    if (!scanValue.trim()) {
       setMessage("Scan or manually enter tree QR / tree code first.");
       return;
     }
 
-    if (scanned === treeCode || scanned === treeId) {
+    const result = scannedMatchesSelected(selected, scanValue);
+
+    if (result.matched) {
       setVerifiedKey(selected.key);
       setMessage("Tree Verified. Evidence upload is now unlocked.");
+      await saveQrAuditLog(selected, result.parsed);
       return;
     }
 
     setVerifiedKey("");
-    setMessage("Tree mismatch. Evidence upload blocked.");
+    setMessage("Wrong Tree / Tree mismatch. Evidence upload blocked.");
   }
 
   async function startWork() {
@@ -727,6 +860,7 @@ export default function GardenerTasksPage() {
                       key={item.key}
                       onClick={() => {
                         setSelectedKey(item.key);
+                        stopCameraScanner();
                         setVerifiedKey("");
                         setScanValue("");
                         resetEvidenceForm();
@@ -791,10 +925,17 @@ export default function GardenerTasksPage() {
               </p>
 
               <div className="mt-4 flex flex-col gap-3 md:flex-row">
+                <button
+                  onClick={scannerOpen ? stopCameraScanner : startCameraScanner}
+                  disabled={!selected || (scannerRunning && !scannerOpen)}
+                  className="rounded-2xl bg-emerald-500 px-6 py-4 text-sm font-black text-[#03130d] disabled:opacity-50"
+                >
+                  {scannerOpen ? "Close Camera Scanner" : "Open Camera Scanner"}
+                </button>
                 <input
                   value={scanValue}
                   onChange={(e) => setScanValue(e.target.value)}
-                  placeholder="Enter scanned tree_code or tree_id"
+                  placeholder="Manual Tree Code Fallback"
                   className="min-h-[50px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
                 />
                 <button
@@ -804,6 +945,13 @@ export default function GardenerTasksPage() {
                   Verify Tree
                 </button>
               </div>
+
+              {scannerOpen && selected && (
+                <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-black/30 p-4">
+                  <div id={`tasks-qr-scanner-${selected.key}`} className="min-h-[280px] overflow-hidden rounded-xl" />
+                  <p className="mt-3 text-xs font-bold text-white/50">Point the camera at the physical tree QR sticker.</p>
+                </div>
+              )}
 
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm font-black">
                 {isVerified ? (
