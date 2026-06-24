@@ -1,3 +1,5 @@
+// app/admin/membership/page.tsx
+// FULL FILE REPLACEMENT
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -23,6 +25,62 @@ type ProfileRow = {
   email: string | null;
   membership_status: string | null;
 };
+
+function removeBadColumnFromPayload(payload: Record<string, any>, errorMessage: string) {
+  const patterns = [
+    /Could not find the '([^']+)' column/i,
+    /column "([^"]+)" does not exist/i,
+    /schema cache.*'([^']+)'/i,
+    /record "new" has no field "([^"]+)"/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = errorMessage.match(pattern);
+    if (match?.[1] && Object.prototype.hasOwnProperty.call(payload, match[1])) {
+      const next = { ...payload };
+      delete next[match[1]];
+      return next;
+    }
+  }
+
+  return null;
+}
+
+async function updateSafe(table: string, id: string, payload: Record<string, any>) {
+  let currentPayload = { ...payload };
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const { error } = await supabase.from(table).update(currentPayload).eq("id", id);
+    if (!error) return;
+
+    const nextPayload = removeBadColumnFromPayload(currentPayload, error.message);
+    if (!nextPayload) throw error;
+    currentPayload = nextPayload;
+  }
+
+  throw new Error(`Unable to update ${table}.`);
+}
+
+async function insertSafe(table: string, payload: Record<string, any>) {
+  let currentPayload = { ...payload };
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const { error } = await supabase.from(table).insert(currentPayload);
+    if (!error) return;
+
+    const nextPayload = removeBadColumnFromPayload(currentPayload, error.message);
+    if (!nextPayload) throw error;
+    currentPayload = nextPayload;
+  }
+
+  throw new Error(`Unable to insert into ${table}.`);
+}
+
+function addOneYear(date: Date) {
+  const next = new Date(date);
+  next.setFullYear(next.getFullYear() + 1);
+  return next.toISOString();
+}
 
 export default function AdminMembershipPage() {
   const [orders, setOrders] = useState<MembershipOrder[]>([]);
@@ -81,28 +139,13 @@ export default function AdminMembershipPage() {
 
   const filteredOrders = useMemo(() => {
     if (filter === "ALL") return orders;
-
-    return orders.filter(
-      (order) => (order.status || "").toUpperCase() === filter
-    );
+    return orders.filter((order) => (order.status || "").toUpperCase() === filter);
   }, [orders, filter]);
 
-  const pendingCount = orders.filter(
-    (order) => (order.status || "").toUpperCase() === "PENDING"
-  ).length;
-
-  const approvedCount = orders.filter(
-    (order) => (order.status || "").toUpperCase() === "APPROVED"
-  ).length;
-
-  const rejectedCount = orders.filter(
-    (order) => (order.status || "").toUpperCase() === "REJECTED"
-  ).length;
-
-  const totalAmount = orders.reduce(
-    (sum, order) => sum + Number(order.amount || order.annual_fee || 0),
-    0
-  );
+  const pendingCount = orders.filter((o) => (o.status || "").toUpperCase() === "PENDING").length;
+  const approvedCount = orders.filter((o) => (o.status || "").toUpperCase() === "APPROVED").length;
+  const rejectedCount = orders.filter((o) => (o.status || "").toUpperCase() === "REJECTED").length;
+  const totalAmount = orders.reduce((sum, order) => sum + Number(order.amount || order.annual_fee || 0), 0);
 
   function getProfile(profileId: string | null) {
     return profiles.find((profile) => profile.id === profileId) || null;
@@ -110,19 +153,11 @@ export default function AdminMembershipPage() {
 
   function badgeClass(value: string | null) {
     const status = (value || "UNKNOWN").toUpperCase();
-
     if (status === "APPROVED" || status === "ACTIVE" || status === "PAID") {
       return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
     }
-
-    if (status === "PENDING") {
-      return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
-    }
-
-    if (status === "REJECTED" || status === "FAILED") {
-      return "bg-red-500/20 text-red-200 border-red-400/30";
-    }
-
+    if (status === "PENDING") return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
+    if (status === "REJECTED" || status === "FAILED") return "bg-red-500/20 text-red-200 border-red-400/30";
     return "bg-white/10 text-white/60 border-white/10";
   }
 
@@ -135,7 +170,6 @@ export default function AdminMembershipPage() {
 
   function formatDate(dateValue: string | null) {
     if (!dateValue) return "—";
-
     return new Date(dateValue).toLocaleDateString("en-PH", {
       year: "numeric",
       month: "short",
@@ -143,47 +177,83 @@ export default function AdminMembershipPage() {
     });
   }
 
+  async function createMembershipAndTreasury(order: MembershipOrder) {
+    if (!order.profile_id) throw new Error("Missing profile_id.");
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const amount = Number(order.amount || order.annual_fee || 0);
+
+    await insertSafe("memberships", {
+      profile_id: order.profile_id,
+      plan_id: order.plan_id,
+      plan_name: order.plan_name || "Forest Membership",
+      amount,
+      start_date: now,
+      expiry_date: addOneYear(nowDate),
+      status: "ACTIVE",
+      membership_order_id: order.id,
+      created_at: now,
+      updated_at: now,
+    });
+
+    const { data: existingTreasury } = await supabase
+      .from("platform_treasury")
+      .select("id")
+      .eq("reference_no", order.id)
+      .maybeSingle();
+
+    if (!existingTreasury) {
+      await insertSafe("platform_treasury", {
+        profile_id: order.profile_id,
+        transaction_type: "MEMBERSHIP",
+        category: "MEMBERSHIP",
+        source: "MEMBERSHIP",
+        amount,
+        reference_no: order.id,
+        description: `Membership revenue: ${order.plan_name || "Forest Membership"}`,
+        status: "COMPLETED",
+        created_at: now,
+        updated_at: now,
+      });
+    }
+  }
+
   async function approveOrder(order: MembershipOrder) {
     if (!order.id || !order.profile_id) return;
 
-    const confirmed = window.confirm(
-      "Approve this membership order and activate customer membership?"
-    );
+    if ((order.status || "").toUpperCase() === "APPROVED") {
+      setErrorText("This membership order is already approved.");
+      return;
+    }
 
+    const confirmed = window.confirm("Approve this membership order and activate customer membership?");
     if (!confirmed) return;
 
     setActionLoading(order.id);
     setErrorText("");
 
-    const { error: orderError } = await supabase
-      .from("membership_orders")
-      .update({
+    try {
+      const approvedAt = new Date().toISOString();
+
+      await updateSafe("membership_orders", order.id, {
         status: "APPROVED",
         payment_status: "PAID",
-        approved_at: new Date().toISOString(),
-      })
-      .eq("id", order.id);
+        approved_at: approvedAt,
+        updated_at: approvedAt,
+      });
 
-    if (orderError) {
-      setErrorText(orderError.message);
-      setActionLoading("");
-      return;
-    }
-
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
+      await updateSafe("profiles", order.profile_id, {
         membership_status: "ACTIVE",
-      })
-      .eq("id", order.profile_id);
+        updated_at: approvedAt,
+      });
 
-    if (profileError) {
-      setErrorText(profileError.message);
-      setActionLoading("");
-      return;
+      await createMembershipAndTreasury(order);
+
+      await loadData();
+    } catch (error: any) {
+      setErrorText(error?.message || "Membership approval failed.");
     }
 
-    await loadData();
     setActionLoading("");
   }
 
@@ -196,21 +266,18 @@ export default function AdminMembershipPage() {
     setActionLoading(order.id);
     setErrorText("");
 
-    const { error: orderError } = await supabase
-      .from("membership_orders")
-      .update({
+    try {
+      await updateSafe("membership_orders", order.id, {
         status: "REJECTED",
         payment_status: "REJECTED",
-      })
-      .eq("id", order.id);
+        updated_at: new Date().toISOString(),
+      });
 
-    if (orderError) {
-      setErrorText(orderError.message);
-      setActionLoading("");
-      return;
+      await loadData();
+    } catch (error: any) {
+      setErrorText(error?.message || "Membership rejection failed.");
     }
 
-    await loadData();
     setActionLoading("");
   }
 
@@ -226,7 +293,7 @@ export default function AdminMembershipPage() {
               Membership Approval
             </h1>
             <p className="mt-2 text-white/70">
-              Review membership orders and activate customer membership after approval.
+              Review membership orders, activate memberships, and sync platform treasury.
             </p>
           </div>
 
@@ -254,9 +321,7 @@ export default function AdminMembershipPage() {
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-xl font-bold text-[#d9b45f]">
-                Membership Orders
-              </h2>
+              <h2 className="text-xl font-bold text-[#d9b45f]">Membership Orders</h2>
               <p className="text-sm text-white/60">
                 Showing {filteredOrders.length} of {orders.length} orders.
               </p>
@@ -299,14 +364,10 @@ export default function AdminMembershipPage() {
                 <tbody>
                   {filteredOrders.map((order) => {
                     const profile = getProfile(order.profile_id);
-                    const isPending =
-                      (order.status || "").toUpperCase() === "PENDING";
+                    const isPending = (order.status || "").toUpperCase() === "PENDING";
 
                     return (
-                      <tr
-                        key={order.id}
-                        className="border-t border-white/10 hover:bg-white/5"
-                      >
+                      <tr key={order.id} className="border-t border-white/10 hover:bg-white/5">
                         <td className="px-5 py-4">
                           <div className="font-semibold text-white">
                             {profile?.full_name || "Unknown Customer"}
@@ -315,8 +376,7 @@ export default function AdminMembershipPage() {
                             {profile?.email || "No email"}
                           </div>
                           <div className="mt-1 text-xs text-emerald-200/70">
-                            Membership:{" "}
-                            {profile?.membership_status || "INACTIVE"}
+                            Membership: {profile?.membership_status || "INACTIVE"}
                           </div>
                         </td>
 
@@ -332,21 +392,13 @@ export default function AdminMembershipPage() {
                         </td>
 
                         <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              order.status
-                            )}`}
-                          >
+                          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(order.status)}`}>
                             {(order.status || "UNKNOWN").toUpperCase()}
                           </span>
                         </td>
 
                         <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              order.payment_status
-                            )}`}
-                          >
+                          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(order.payment_status)}`}>
                             {(order.payment_status || "UNKNOWN").toUpperCase()}
                           </span>
                         </td>
@@ -367,7 +419,7 @@ export default function AdminMembershipPage() {
                                 disabled={actionLoading === order.id}
                                 className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
                               >
-                                Approve
+                                {actionLoading === order.id ? "Working..." : "Approve"}
                               </button>
 
                               <button
@@ -379,9 +431,7 @@ export default function AdminMembershipPage() {
                               </button>
                             </div>
                           ) : (
-                            <span className="text-xs text-white/50">
-                              Completed
-                            </span>
+                            <span className="text-xs text-white/50">Completed</span>
                           )}
                         </td>
                       </tr>
