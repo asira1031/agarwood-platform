@@ -18,6 +18,7 @@ type ForestSummary = {
   group_id: string;
   customer_profile_id: string | null;
   forest_name: string | null;
+  display_forest_name?: string | null;
   total_trees: number | null;
   protected_count: number | null;
   attention_count: number | null;
@@ -142,11 +143,16 @@ function normalizeStatus(value: string | null | undefined) {
 }
 
 function customerTreeName(tree: TreeDetail | null | undefined) {
-  return tree?.custom_name || tree?.customer_tree_name || tree?.display_name || "Seedling";
+  return (
+    tree?.custom_name ||
+    tree?.customer_tree_name ||
+    tree?.display_name ||
+    "Seedling"
+  );
 }
 
 function forestName(forest: ForestSummary | null | undefined) {
-  return forest?.forest_name || "Unnamed Forest";
+  return forest?.display_forest_name || forest?.forest_name || "Unnamed Forest";
 }
 
 function treeForestName(tree: TreeDetail | null | undefined) {
@@ -186,24 +192,35 @@ function alertClass(status: AlertStatus | null | undefined) {
 function careLabel(status: string | null | undefined) {
   const normalized = normalizeStatus(status);
 
-  if (normalized === "ACTIVE" || normalized === "SUBSCRIBED" || normalized === "PROTECTED") {
+  if (
+    normalized === "ACTIVE" ||
+    normalized === "SUBSCRIBED" ||
+    normalized === "PROTECTED"
+  ) {
     return "Subscribed";
   }
 
   if (normalized === "EXPIRED") return "Expired";
-  if (normalized === "CANCELLED" || normalized === "CANCELED") return "Cancelled";
+  if (normalized === "CANCELLED" || normalized === "CANCELED")
+    return "Cancelled";
   if (normalized === "INACTIVE") return "Inactive";
 
   return "Not Subscribed";
 }
 
-function valuationLabel(status: string | null | undefined, amount: number | null | undefined) {
+function valuationLabel(
+  status: string | null | undefined,
+  amount: number | null | undefined,
+) {
   const normalized = normalizeStatus(status);
 
-  if (normalized === "APPROVED" && amount) return `Official Value: ${peso(amount)}`;
+  if (normalized === "APPROVED" && amount)
+    return `Official Value: ${peso(amount)}`;
   if (normalized === "APPROVED") return "Approved";
-  if (normalized === "PENDING_ADMIN_VALUATION") return "Pending Admin Valuation";
-  if (normalized === "PENDING" || normalized === "REQUESTED") return "Pending Admin Valuation";
+  if (normalized === "PENDING_ADMIN_VALUATION")
+    return "Pending Admin Valuation";
+  if (normalized === "PENDING" || normalized === "REQUESTED")
+    return "Pending Admin Valuation";
   if (normalized === "ASSIGNED") return "Assigned for Inspection";
   if (normalized === "INSPECTION_SUBMITTED") return "Inspection Submitted";
 
@@ -233,6 +250,153 @@ function getMapLink(gps: GpsEvidence | TreeDetail) {
   if (lat && lng) return `https://maps.google.com/?q=${lat},${lng}`;
 
   return "";
+}
+
+function isCareInactive(tree: TreeDetail) {
+  const care = normalizeStatus(tree.care_status);
+  return (
+    care === "INACTIVE" ||
+    care === "EXPIRED" ||
+    care === "CANCELLED" ||
+    care === "CANCELED" ||
+    care === ""
+  );
+}
+
+function needsRecentUpdate(tree: TreeDetail) {
+  const latest =
+    tree.latest_photo_at ||
+    tree.latest_gps_at ||
+    tree.latest_health_at ||
+    tree.updated_at ||
+    tree.created_at;
+  if (!latest) return true;
+
+  const ageMs = Date.now() - new Date(latest).getTime();
+  return ageMs > 1000 * 60 * 60 * 24 * 30;
+}
+
+function getTreeProtectionBucket(
+  tree: TreeDetail,
+): "CRITICAL" | "ATTENTION" | "PROTECTED" {
+  const alert = normalizeStatus(tree.alert_status);
+  const health = normalizeStatus(tree.latest_health_status);
+  const issueSeverity = normalizeStatus(tree.latest_issue_severity);
+  const care = normalizeStatus(tree.care_status);
+
+  if (
+    alert === "CRITICAL" ||
+    health === "CRITICAL" ||
+    issueSeverity === "CRITICAL" ||
+    isCareInactive(tree)
+  ) {
+    return "CRITICAL";
+  }
+
+  if (
+    alert === "ATTENTION" ||
+    care === "PENDING" ||
+    care === "PENDING_CARE" ||
+    care === "PENDING_ACTIVATION" ||
+    needsRecentUpdate(tree)
+  ) {
+    return "ATTENTION";
+  }
+
+  if (
+    (care === "ACTIVE" || care === "SUBSCRIBED" || care === "PROTECTED") &&
+    alert !== "CRITICAL"
+  ) {
+    return "PROTECTED";
+  }
+
+  return "ATTENTION";
+}
+
+function buildUniqueForests(
+  forestRows: ForestSummary[],
+  treeRows: TreeDetail[],
+) {
+  const byId = new Map<string, ForestSummary>();
+  const rawNameCounts = new Map<string, number>();
+
+  forestRows.forEach((forest) => {
+    if (!forest.group_id || byId.has(forest.group_id)) return;
+
+    const groupTrees = treeRows.filter(
+      (tree) => tree.group_id === forest.group_id,
+    );
+    const protectedCount = groupTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "PROTECTED",
+    ).length;
+    const attentionCount = groupTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "ATTENTION",
+    ).length;
+    const criticalCount = groupTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "CRITICAL",
+    ).length;
+    const latestUpdate = groupTrees
+      .map(
+        (tree) =>
+          tree.latest_photo_at ||
+          tree.latest_gps_at ||
+          tree.latest_health_at ||
+          tree.updated_at ||
+          tree.created_at,
+      )
+      .filter(Boolean)
+      .sort()
+      .pop();
+
+    const rawName = forest.forest_name || "Unnamed Forest";
+    const nextNameCount = (rawNameCounts.get(rawName) || 0) + 1;
+    rawNameCounts.set(rawName, nextNameCount);
+
+    byId.set(forest.group_id, {
+      ...forest,
+      display_forest_name:
+        nextNameCount > 1 ? `${rawName} #${nextNameCount}` : rawName,
+      total_trees: groupTrees.length || Number(forest.total_trees || 0),
+      protected_count: protectedCount,
+      attention_count: attentionCount,
+      critical_count: criticalCount,
+      updated_at: latestUpdate || forest.updated_at || forest.created_at,
+    });
+  });
+
+  treeRows.forEach((tree) => {
+    if (!tree.group_id || byId.has(tree.group_id)) return;
+
+    const rawName = tree.forest_name || "Unnamed Forest";
+    const nextNameCount = (rawNameCounts.get(rawName) || 0) + 1;
+    rawNameCounts.set(rawName, nextNameCount);
+    const groupTrees = treeRows.filter(
+      (item) => item.group_id === tree.group_id,
+    );
+
+    byId.set(tree.group_id, {
+      group_id: tree.group_id,
+      customer_profile_id: tree.customer_profile_id,
+      forest_name: rawName,
+      display_forest_name:
+        nextNameCount > 1 ? `${rawName} #${nextNameCount}` : rawName,
+      total_trees: groupTrees.length,
+      protected_count: groupTrees.filter(
+        (item) => getTreeProtectionBucket(item) === "PROTECTED",
+      ).length,
+      attention_count: groupTrees.filter(
+        (item) => getTreeProtectionBucket(item) === "ATTENTION",
+      ).length,
+      critical_count: groupTrees.filter(
+        (item) => getTreeProtectionBucket(item) === "CRITICAL",
+      ).length,
+      status: "ACTIVE",
+      created_at: tree.created_at,
+      updated_at: tree.updated_at || tree.created_at,
+    });
+  });
+
+  return Array.from(byId.values());
 }
 
 export default function MyTreesPage() {
@@ -319,15 +483,21 @@ export default function MyTreesPage() {
       return;
     }
 
-    const nextForests = (forestRows || []) as ForestSummary[];
     const nextTrees = (treeRows || []) as TreeDetail[];
+    const nextForests = buildUniqueForests(
+      (forestRows || []) as ForestSummary[],
+      nextTrees,
+    );
 
     setForests(nextForests);
     setTrees(nextTrees);
 
     const preferredForestId = keepSelectedForestId || selectedForestId;
 
-    if (preferredForestId && nextForests.some((forest) => forest.group_id === preferredForestId)) {
+    if (
+      preferredForestId &&
+      nextForests.some((forest) => forest.group_id === preferredForestId)
+    ) {
       setSelectedForestId(preferredForestId);
     } else {
       setSelectedForestId(nextForests[0]?.group_id || "");
@@ -336,7 +506,9 @@ export default function MyTreesPage() {
     setSelectedTree((previous) => {
       if (!previous) return null;
 
-      return nextTrees.find((tree) => tree.tree_id === previous.tree_id) || null;
+      return (
+        nextTrees.find((tree) => tree.tree_id === previous.tree_id) || null
+      );
     });
 
     setLoading(false);
@@ -357,16 +529,22 @@ export default function MyTreesPage() {
         return sum;
       },
       {
+        forests: forests.length,
         total: 0,
         protected: 0,
         attention: 0,
         critical: 0,
-      }
+        pendingCare: trees.filter(
+          (tree) => getTreeProtectionBucket(tree) !== "PROTECTED",
+        ).length,
+      },
     );
-  }, [forests]);
+  }, [forests, trees]);
 
   const selectedForest = useMemo(() => {
-    return forests.find((forest) => forest.group_id === selectedForestId) || null;
+    return (
+      forests.find((forest) => forest.group_id === selectedForestId) || null
+    );
   }, [forests, selectedForestId]);
 
   const selectedForestTrees = useMemo(() => {
@@ -374,15 +552,21 @@ export default function MyTreesPage() {
   }, [trees, selectedForestId]);
 
   const criticalTrees = useMemo(() => {
-    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "CRITICAL");
+    return selectedForestTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "CRITICAL",
+    );
   }, [selectedForestTrees]);
 
   const attentionTrees = useMemo(() => {
-    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "ATTENTION");
+    return selectedForestTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "ATTENTION",
+    );
   }, [selectedForestTrees]);
 
   const protectedTrees = useMemo(() => {
-    return selectedForestTrees.filter((tree) => normalizeStatus(tree.alert_status) === "PROTECTED");
+    return selectedForestTrees.filter(
+      (tree) => getTreeProtectionBucket(tree) === "PROTECTED",
+    );
   }, [selectedForestTrees]);
 
   async function openEvidence(tree: TreeDetail, mode: EvidenceMode) {
@@ -410,7 +594,9 @@ export default function MyTreesPage() {
     if (mode === "GPS") {
       const { data, error } = await supabase
         .from("tree_gps_logs")
-        .select("id, latitude, longitude, accuracy_meters, gps_url, map_url, location_note, notes, status, created_at")
+        .select(
+          "id, latitude, longitude, accuracy_meters, gps_url, map_url, location_note, notes, status, created_at",
+        )
         .eq("tree_id", tree.tree_id)
         .order("created_at", { ascending: false });
 
@@ -424,7 +610,9 @@ export default function MyTreesPage() {
     if (mode === "HEALTH") {
       const { data, error } = await supabase
         .from("tree_health_reports")
-        .select("id, health_status, issue_severity, issue_summary, report_notes, notes, status, created_at")
+        .select(
+          "id, health_status, issue_severity, issue_summary, report_notes, notes, status, created_at",
+        )
         .eq("tree_id", tree.tree_id)
         .order("created_at", { ascending: false });
 
@@ -478,6 +666,10 @@ export default function MyTreesPage() {
     setActionLoading(false);
   }
 
+  function addTreesToForest(groupId: string) {
+    window.location.href = `/dashboard/marketplace?group_id=${encodeURIComponent(groupId)}&mode=add_to_forest`;
+  }
+
   function requestCare(tree: TreeDetail) {
     const params = new URLSearchParams();
 
@@ -501,7 +693,12 @@ export default function MyTreesPage() {
       .select("id, status")
       .eq("customer_profile_id", profile.id)
       .eq("tree_id", tree.tree_id)
-      .in("status", ["PENDING", "REQUESTED", "ASSIGNED", "INSPECTION_SUBMITTED"])
+      .in("status", [
+        "PENDING",
+        "REQUESTED",
+        "ASSIGNED",
+        "INSPECTION_SUBMITTED",
+      ])
       .order("created_at", { ascending: false })
       .limit(1);
 
@@ -517,16 +714,18 @@ export default function MyTreesPage() {
       return;
     }
 
-    const { error: insertError } = await supabase.from("tree_valuation_requests").insert({
-      customer_profile_id: profile.id,
-      tree_id: tree.tree_id,
-      group_id: tree.group_id,
-      status: "PENDING",
-      customer_notes: `Customer requested valuation for ${customerTreeName(tree)} in ${treeForestName(tree)}.`,
-      requested_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const { error: insertError } = await supabase
+      .from("tree_valuation_requests")
+      .insert({
+        customer_profile_id: profile.id,
+        tree_id: tree.tree_id,
+        group_id: tree.group_id,
+        status: "PENDING",
+        customer_notes: `Customer requested valuation for ${customerTreeName(tree)} in ${treeForestName(tree)}.`,
+        requested_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
     if (insertError) {
       setMessage(`Valuation request failed: ${insertError.message}`);
@@ -545,24 +744,37 @@ export default function MyTreesPage() {
       .eq("customer_profile_id", profile.id);
 
     await loadMyTrees(selectedForestId);
-    setMessage("Valuation requested. Admin will assign a gardener for inspection.");
+    setMessage(
+      "Valuation requested. Admin will assign a gardener for inspection.",
+    );
     setActionLoading(false);
   }
 
   function renderTreePremiumCard(tree: TreeDetail) {
     return (
-      <button className={`treeCard ${alertClass(tree.alert_status)}`} key={tree.tree_id} onClick={() => setSelectedTree(tree)}>
+      <button
+        className={`treeCard ${alertClass(tree.alert_status)}`}
+        key={tree.tree_id}
+        onClick={() => setSelectedTree(tree)}
+      >
         <div className="treeCardTop">
           <span>{alertIcon(tree.alert_status)}</span>
           <small>{alertLabel(tree.alert_status)}</small>
         </div>
 
         <b>{customerTreeName(tree)}</b>
+        <code>{tree.tree_code || "No tree code yet"}</code>
         <p>{tree.alert_reason || alertLabel(tree.alert_status)}</p>
 
         <div className="treeCardMeta">
           <span>{careLabel(tree.care_status)}</span>
-          <span>{formatShortDate(tree.latest_health_at || tree.latest_photo_at || tree.latest_gps_at)}</span>
+          <span>
+            {formatShortDate(
+              tree.latest_health_at ||
+                tree.latest_photo_at ||
+                tree.latest_gps_at,
+            )}
+          </span>
         </div>
       </button>
     );
@@ -579,8 +791,9 @@ export default function MyTreesPage() {
           <p className="eyebrow">Arganwood V6 Forest Command</p>
           <h1>My Forests</h1>
           <span>
-            Monitor every forest at a glance. Protected trees stay green, attention trees need follow-up, and critical
-            trees require care before they can be considered protected.
+            Monitor every forest at a glance. Protected trees stay green,
+            attention trees need follow-up, and critical trees require care
+            before they can be considered protected.
           </span>
 
           <div className="heroActions">
@@ -597,6 +810,10 @@ export default function MyTreesPage() {
 
           <div className="heroMiniStats">
             <div>
+              <small>Total Forests</small>
+              <b>{totals.forests}</b>
+            </div>
+            <div>
               <small>Protected</small>
               <b>{totals.protected}</b>
             </div>
@@ -607,6 +824,10 @@ export default function MyTreesPage() {
             <div>
               <small>Critical</small>
               <b>{totals.critical}</b>
+            </div>
+            <div>
+              <small>Pending Care</small>
+              <b>{totals.pendingCare}</b>
             </div>
           </div>
         </div>
@@ -622,8 +843,9 @@ export default function MyTreesPage() {
           <p className="eyebrow">No forest yet</p>
           <h2>Create your first forest</h2>
           <p>
-            Buy trees from Marketplace and choose Create New Forest. Your trees will appear here as friendly names like
-            Seedling 1, Seedling 2, and Seedling 3.
+            Buy trees from Marketplace and choose Create New Forest. Your trees
+            will appear here as friendly names like Seedling 1, Seedling 2, and
+            Seedling 3.
           </p>
           <Link href="/dashboard/marketplace">Go to Marketplace</Link>
         </section>
@@ -634,10 +856,9 @@ export default function MyTreesPage() {
               const isActive = selectedForestId === forest.group_id;
 
               return (
-                <button
+                <article
                   key={forest.group_id}
                   className={isActive ? "forestCard active" : "forestCard"}
-                  onClick={() => setSelectedForestId(forest.group_id)}
                 >
                   <div className="forestTop">
                     <div>
@@ -661,7 +882,32 @@ export default function MyTreesPage() {
                       <b>{Number(forest.critical_count || 0)}</b>
                     </div>
                   </div>
-                </button>
+
+                  <div className="forestMetaLine">
+                    Latest update:{" "}
+                    {formatShortDate(forest.updated_at || forest.created_at)}
+                  </div>
+
+                  <div className="forestCardActions">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedForestId(forest.group_id)}
+                    >
+                      Open Forest
+                    </button>
+                    <Link
+                      href={`/dashboard/tree-operations?group_id=${forest.group_id}`}
+                    >
+                      Request Care
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => addTreesToForest(forest.group_id)}
+                    >
+                      Add Trees
+                    </button>
+                  </div>
+                </article>
               );
             })}
           </section>
@@ -673,28 +919,40 @@ export default function MyTreesPage() {
                   <p className="eyebrow">Open Forest</p>
                   <h2>{forestName(selectedForest)}</h2>
                   <span>
-                    {Number(selectedForest.total_trees || 0)} trees • {Number(selectedForest.protected_count || 0)} protected •{" "}
-                    {Number(selectedForest.attention_count || 0)} attention • {Number(selectedForest.critical_count || 0)} critical
+                    {Number(selectedForest.total_trees || 0)} trees •{" "}
+                    {Number(selectedForest.protected_count || 0)} protected •{" "}
+                    {Number(selectedForest.attention_count || 0)} attention •{" "}
+                    {Number(selectedForest.critical_count || 0)} critical
                   </span>
                 </div>
 
                 <div className="forestHeadActions">
-                  <Link href="/dashboard/tree-operations">Request Care</Link>
-                  <Link href="/dashboard/marketplace">Add Trees</Link>
+                  <Link
+                    href={`/dashboard/tree-operations?group_id=${selectedForest.group_id}`}
+                  >
+                    Request Care
+                  </Link>
+                  <Link
+                    href={`/dashboard/marketplace?group_id=${selectedForest.group_id}&mode=add_to_forest`}
+                  >
+                    Add Trees
+                  </Link>
                 </div>
               </div>
 
               <div className="treeSections">
                 <section className="treeSection criticalBox">
                   <div className="treeSectionHead">
-                    <b>🔴 Critical</b>
+                    <b>🔴 Critical Trees</b>
                     <span>{criticalTrees.length}</span>
                   </div>
 
                   {criticalTrees.length === 0 ? (
                     <div className="softEmpty">No critical trees.</div>
                   ) : (
-                    <div className="treeList">{criticalTrees.map(renderTreePremiumCard)}</div>
+                    <div className="treeList">
+                      {criticalTrees.map(renderTreePremiumCard)}
+                    </div>
                   )}
                 </section>
 
@@ -707,20 +965,24 @@ export default function MyTreesPage() {
                   {attentionTrees.length === 0 ? (
                     <div className="softEmpty">No attention warnings.</div>
                   ) : (
-                    <div className="treeList">{attentionTrees.map(renderTreePremiumCard)}</div>
+                    <div className="treeList">
+                      {attentionTrees.map(renderTreePremiumCard)}
+                    </div>
                   )}
                 </section>
 
                 <section className="treeSection protectedBox">
                   <div className="treeSectionHead">
-                    <b>🟢 Protected</b>
+                    <b>🟢 Protected Trees</b>
                     <span>{protectedTrees.length}</span>
                   </div>
 
                   {protectedTrees.length === 0 ? (
                     <div className="softEmpty">No protected trees yet.</div>
                   ) : (
-                    <div className="treeList">{protectedTrees.map(renderTreePremiumCard)}</div>
+                    <div className="treeList">
+                      {protectedTrees.map(renderTreePremiumCard)}
+                    </div>
                   )}
                 </section>
               </div>
@@ -731,12 +993,17 @@ export default function MyTreesPage() {
 
       {selectedTree && (
         <div className="modalOverlay" onClick={() => setSelectedTree(null)}>
-          <div className="modal treeDetailModal" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="modal treeDetailModal"
+            onClick={(event) => event.stopPropagation()}
+          >
             <button className="closeBtn" onClick={() => setSelectedTree(null)}>
               ×
             </button>
 
-            <div className={`detailStatus ${alertClass(selectedTree.alert_status)}`}>
+            <div
+              className={`detailStatus ${alertClass(selectedTree.alert_status)}`}
+            >
               <span>{alertIcon(selectedTree.alert_status)}</span>
               <b>{alertLabel(selectedTree.alert_status)}</b>
             </div>
@@ -752,7 +1019,10 @@ export default function MyTreesPage() {
               </div>
               <div>
                 <small>Alert Reason</small>
-                <b>{selectedTree.alert_reason || alertLabel(selectedTree.alert_status)}</b>
+                <b>
+                  {selectedTree.alert_reason ||
+                    alertLabel(selectedTree.alert_status)}
+                </b>
               </div>
               <div>
                 <small>Last Photo</small>
@@ -764,11 +1034,19 @@ export default function MyTreesPage() {
               </div>
               <div>
                 <small>Last Health Report</small>
-                <b>{selectedTree.latest_health_status || formatShortDate(selectedTree.latest_health_at)}</b>
+                <b>
+                  {selectedTree.latest_health_status ||
+                    formatShortDate(selectedTree.latest_health_at)}
+                </b>
               </div>
               <div>
                 <small>Valuation</small>
-                <b>{valuationLabel(selectedTree.valuation_status, selectedTree.official_valuation_amount)}</b>
+                <b>
+                  {valuationLabel(
+                    selectedTree.valuation_status,
+                    selectedTree.official_valuation_amount,
+                  )}
+                </b>
               </div>
             </div>
 
@@ -780,11 +1058,22 @@ export default function MyTreesPage() {
             )}
 
             <div className="actionGrid">
-              <button onClick={() => openEvidence(selectedTree, "PHOTOS")}>View Photos</button>
-              <button onClick={() => openEvidence(selectedTree, "GPS")}>View GPS</button>
-              <button onClick={() => openEvidence(selectedTree, "HEALTH")}>View Health</button>
-              <button onClick={() => requestCare(selectedTree)}>Request Care</button>
-              <button disabled={actionLoading} onClick={() => requestValuation(selectedTree)}>
+              <button onClick={() => openEvidence(selectedTree, "PHOTOS")}>
+                View Photos
+              </button>
+              <button onClick={() => openEvidence(selectedTree, "GPS")}>
+                View GPS
+              </button>
+              <button onClick={() => openEvidence(selectedTree, "HEALTH")}>
+                View Health
+              </button>
+              <button onClick={() => requestCare(selectedTree)}>
+                Request Care
+              </button>
+              <button
+                disabled={actionLoading}
+                onClick={() => requestValuation(selectedTree)}
+              >
                 Request Valuation
               </button>
               <button onClick={() => setQrTree(selectedTree)}>View QR</button>
@@ -796,7 +1085,10 @@ export default function MyTreesPage() {
 
       {qrTree && (
         <div className="modalOverlay" onClick={() => setQrTree(null)}>
-          <div className="modal qrModal" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="modal qrModal"
+            onClick={(event) => event.stopPropagation()}
+          >
             <button className="closeBtn" onClick={() => setQrTree(null)}>
               ×
             </button>
@@ -806,7 +1098,9 @@ export default function MyTreesPage() {
               <div className="tagRows">
                 <div>
                   <small>Customer</small>
-                  <b>{profile?.full_name || profile?.display_name || "Customer"}</b>
+                  <b>
+                    {profile?.full_name || profile?.display_name || "Customer"}
+                  </b>
                 </div>
                 <div>
                   <small>Forest</small>
@@ -823,7 +1117,11 @@ export default function MyTreesPage() {
               </div>
 
               <div className="qrBox">
-                <QRCodeCanvas value={getQrValue(qrTree)} size={214} includeMargin />
+                <QRCodeCanvas
+                  value={getQrValue(qrTree)}
+                  size={214}
+                  includeMargin
+                />
               </div>
 
               <small className="qrHint">Scan to verify this tree.</small>
@@ -834,21 +1132,35 @@ export default function MyTreesPage() {
 
       {renameTree && (
         <div className="modalOverlay" onClick={() => setRenameTree(null)}>
-          <div className="modal renameModal" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="modal renameModal"
+            onClick={(event) => event.stopPropagation()}
+          >
             <button className="closeBtn" onClick={() => setRenameTree(null)}>
               ×
             </button>
 
             <p className="eyebrow">Friendly Name</p>
             <h2>Rename Tree</h2>
-            <p className="detailSubtitle">This changes the customer-visible name only. QR identity stays the same.</p>
+            <p className="detailSubtitle">
+              This changes the customer-visible name only. QR identity stays the
+              same.
+            </p>
 
             <label className="fieldLabel">
               Tree Name
-              <input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} placeholder="Seedling 1" />
+              <input
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                placeholder="Seedling 1"
+              />
             </label>
 
-            <button className="primaryBtn" disabled={actionLoading} onClick={saveRename}>
+            <button
+              className="primaryBtn"
+              disabled={actionLoading}
+              onClick={saveRename}
+            >
               {actionLoading ? "Saving..." : "Save Name"}
             </button>
           </div>
@@ -857,7 +1169,10 @@ export default function MyTreesPage() {
 
       {evidenceTree && (
         <div className="modalOverlay" onClick={() => setEvidenceTree(null)}>
-          <div className="modal evidenceModal" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="modal evidenceModal"
+            onClick={(event) => event.stopPropagation()}
+          >
             <button className="closeBtn" onClick={() => setEvidenceTree(null)}>
               ×
             </button>
@@ -880,9 +1195,18 @@ export default function MyTreesPage() {
 
                         return (
                           <article className="evidenceCard" key={item.id}>
-                            {src ? <img src={src} alt={item.caption || "Tree photo update"} /> : <div className="imageFallback">🌳</div>}
+                            {src ? (
+                              <img
+                                src={src}
+                                alt={item.caption || "Tree photo update"}
+                              />
+                            ) : (
+                              <div className="imageFallback">🌳</div>
+                            )}
                             <div>
-                              <b>{item.caption || item.status || "Photo Update"}</b>
+                              <b>
+                                {item.caption || item.status || "Photo Update"}
+                              </b>
                               <small>{formatDate(item.created_at)}</small>
                               <p>{item.notes || "No notes provided."}</p>
                             </div>
@@ -902,10 +1226,17 @@ export default function MyTreesPage() {
                         const mapLink = getMapLink(item);
 
                         return (
-                          <article className="evidenceCard gpsCard" key={item.id}>
+                          <article
+                            className="evidenceCard gpsCard"
+                            key={item.id}
+                          >
                             <div className="gpsIcon">📍</div>
                             <div>
-                              <b>{item.location_note || item.status || "GPS Update"}</b>
+                              <b>
+                                {item.location_note ||
+                                  item.status ||
+                                  "GPS Update"}
+                              </b>
                               <small>{formatDate(item.created_at)}</small>
                               <p>
                                 {item.latitude && item.longitude
@@ -913,7 +1244,11 @@ export default function MyTreesPage() {
                                   : item.notes || "Coordinates not provided."}
                               </p>
                               {mapLink && (
-                                <a href={mapLink} target="_blank" rel="noreferrer">
+                                <a
+                                  href={mapLink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
                                   Open Map
                                 </a>
                               )}
@@ -931,13 +1266,25 @@ export default function MyTreesPage() {
                       <div className="softEmpty">No health reports yet.</div>
                     ) : (
                       healthEvidence.map((item) => (
-                        <article className="evidenceCard healthCard" key={item.id}>
+                        <article
+                          className="evidenceCard healthCard"
+                          key={item.id}
+                        >
                           <div className="gpsIcon">💚</div>
                           <div>
                             <b>{item.health_status || "Health Report"}</b>
                             <small>{formatDate(item.created_at)}</small>
-                            <p>{item.issue_summary || item.report_notes || item.notes || "No health notes provided."}</p>
-                            {item.issue_severity && <span className="severity">{item.issue_severity}</span>}
+                            <p>
+                              {item.issue_summary ||
+                                item.report_notes ||
+                                item.notes ||
+                                "No health notes provided."}
+                            </p>
+                            {item.issue_severity && (
+                              <span className="severity">
+                                {item.issue_severity}
+                              </span>
+                            )}
                           </div>
                         </article>
                       ))
@@ -1285,6 +1632,35 @@ export default function MyTreesPage() {
 
         .forestCounts b {
           font-size: 22px;
+        }
+
+
+        .forestMetaLine {
+          margin-top: 12px;
+          color: rgba(255,247,223,.68);
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .forestCardActions {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .forestCardActions button,
+        .forestCardActions a {
+          border: 0;
+          border-radius: 14px;
+          padding: 10px 8px;
+          text-align: center;
+          text-decoration: none;
+          background: rgba(232,190,103,.16);
+          color: #f4d58b;
+          font-size: 11px;
+          font-weight: 900;
+          cursor: pointer;
         }
 
         .protected small,

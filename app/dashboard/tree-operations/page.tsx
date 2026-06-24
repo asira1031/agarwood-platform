@@ -80,6 +80,7 @@ type OperationRequest = {
   tree_id: string | null;
   group_id?: string | null;
   operation_type: string | null;
+  service_name?: string | null;
   operation_fee: number | null;
   platform_fee: number | null;
   total_amount: number | null;
@@ -145,14 +146,16 @@ const BASE_OPERATIONS: OperationItem[] = [
     category: "Service",
     price: 100,
     icon: "📸",
-    description: "Request a real caretaker photo update for the selected seedling or forest.",
+    description:
+      "Request a real caretaker photo update for the selected seedling or forest.",
   },
   {
     name: "GPS Verification",
     category: "Service",
     price: 80,
     icon: "📍",
-    description: "Request QR tag and plantation GPS verification from the field team.",
+    description:
+      "Request QR tag and plantation GPS verification from the field team.",
   },
   {
     name: "Watering Service",
@@ -166,7 +169,8 @@ const BASE_OPERATIONS: OperationItem[] = [
     category: "Inventory Use",
     price: 45,
     icon: "🌿",
-    description: "Request fertilizer application using your available inventory.",
+    description:
+      "Request fertilizer application using your available inventory.",
     requiredInventoryCategory: "Fertilizer",
     requiredQty: 1,
   },
@@ -175,7 +179,8 @@ const BASE_OPERATIONS: OperationItem[] = [
     category: "Inventory Use",
     price: 45,
     icon: "🛡️",
-    description: "Request fungicide application for fungal prevention or treatment.",
+    description:
+      "Request fungicide application for fungal prevention or treatment.",
     requiredInventoryCategory: "Fungicide",
     requiredQty: 1,
   },
@@ -184,7 +189,8 @@ const BASE_OPERATIONS: OperationItem[] = [
     category: "Inventory Use",
     price: 45,
     icon: "🐞",
-    description: "Request insecticide application when field team confirms need.",
+    description:
+      "Request insecticide application when field team confirms need.",
     requiredInventoryCategory: "Insecticide",
     requiredQty: 1,
   },
@@ -215,7 +221,9 @@ function normalize(value: string | null | undefined) {
 }
 
 function statusClass(value: string | null | undefined) {
-  return String(value || "pending").toLowerCase().replaceAll(" ", "_");
+  return String(value || "pending")
+    .toLowerCase()
+    .replaceAll(" ", "_");
 }
 
 function getForestName(forest: ForestSummary | null | undefined) {
@@ -223,7 +231,12 @@ function getForestName(forest: ForestSummary | null | undefined) {
 }
 
 function getTreeName(tree: TreeDetail | null | undefined) {
-  return tree?.custom_name || tree?.customer_tree_name || tree?.display_name || "Seedling";
+  return (
+    tree?.custom_name ||
+    tree?.customer_tree_name ||
+    tree?.display_name ||
+    "Seedling"
+  );
 }
 
 function alertClass(value: string | null | undefined) {
@@ -381,44 +394,72 @@ export default function TreeOperationsPage() {
         .eq("profile_id", currentProfile.id)
         .order("created_at", { ascending: false });
 
-      if (inventoryError) console.warn("Inventory load error:", inventoryError.message);
+      if (inventoryError)
+        console.warn("Inventory load error:", inventoryError.message);
 
       const { data: requestRows } = await supabase
         .from("tree_operation_requests")
         .select(
-          "id, profile_id, customer_profile_id, tree_id, group_id, operation_type, operation_fee, platform_fee, total_amount, notes, status, created_at, care_program_name, care_program_price, care_program_duration, care_program_status, next_renewal_date, auto_renew_enabled"
+          "id, profile_id, customer_profile_id, tree_id, group_id, operation_type, service_name, request_type, amount, operation_fee, platform_fee, total_amount, notes, status, created_at, care_program_name, care_program_price, care_program_duration, care_program_status, next_renewal_date, auto_renew_enabled",
         )
-        .or(`profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`)
+        .or(
+          `profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`,
+        )
         .order("created_at", { ascending: false });
 
       const { data: programRows, error: programError } = await supabase
         .from("marketplace_products")
         .select(
-          "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at"
+          "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at",
         )
         .eq("category", "Tree Care Programs")
         .eq("status", "ACTIVE")
         .order("price", { ascending: true });
 
-      if (programError) console.warn("Care program load error:", programError.message);
+      if (programError)
+        console.warn("Care program load error:", programError.message);
 
       const nextForests = (forestRows || []) as ForestSummary[];
       const nextTrees = (treeRows || []) as TreeDetail[];
-      const nextForestId =
-        keepForestId && nextForests.some((forest) => forest.group_id === keepForestId)
-          ? keepForestId
-          : nextForests[0]?.group_id || "";
 
-      const forestTrees = nextTrees.filter((tree) => tree.group_id === nextForestId);
+      const urlParams =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search)
+          : null;
+      const queryGroupId = urlParams?.get("group_id") || "";
+      const queryTreeId = urlParams?.get("tree_id") || "";
+
+      const requestedForestId = keepForestId || queryGroupId;
+      const requestedTreeId = keepTreeId || queryTreeId;
+      const treeFromQuery = requestedTreeId
+        ? nextTrees.find((tree) => tree.tree_id === requestedTreeId)
+        : null;
+      const treeGroupId = treeFromQuery?.group_id || "";
+
+      const nextForestId =
+        requestedForestId &&
+        nextForests.some((forest) => forest.group_id === requestedForestId)
+          ? requestedForestId
+          : treeGroupId &&
+              nextForests.some((forest) => forest.group_id === treeGroupId)
+            ? treeGroupId
+            : nextForests[0]?.group_id || "";
+
+      const forestTrees = nextTrees.filter(
+        (tree) => tree.group_id === nextForestId,
+      );
       const nextTreeId =
-        keepTreeId && forestTrees.some((tree) => tree.tree_id === keepTreeId)
-          ? keepTreeId
+        requestedTreeId &&
+        forestTrees.some((tree) => tree.tree_id === requestedTreeId)
+          ? requestedTreeId
           : forestTrees[0]?.tree_id || "";
 
       setWallet((walletRows?.[0] as Wallet) || null);
       setForests(nextForests);
       setTrees(nextTrees);
-      setInventory(inventoryError ? [] : ((inventoryRows || []) as InventoryItem[]));
+      setInventory(
+        inventoryError ? [] : ((inventoryRows || []) as InventoryItem[]),
+      );
       setRequests((requestRows || []) as OperationRequest[]);
       setCarePrograms((programRows || []) as MarketplaceProduct[]);
       setSelectedForestId(nextForestId);
@@ -448,7 +489,7 @@ export default function TreeOperationsPage() {
         coverage: getProgramCoverage(program),
         status: program.stock_status || "ACTIVE",
         sourceProduct: program,
-      })
+      }),
     );
   }, [carePrograms]);
 
@@ -457,7 +498,9 @@ export default function TreeOperationsPage() {
   }, [careProgramOperations]);
 
   const selectedForest = useMemo(() => {
-    return forests.find((forest) => forest.group_id === selectedForestId) || null;
+    return (
+      forests.find((forest) => forest.group_id === selectedForestId) || null
+    );
   }, [forests, selectedForestId]);
 
   const selectedForestTrees = useMemo(() => {
@@ -465,11 +508,17 @@ export default function TreeOperationsPage() {
   }, [trees, selectedForestId]);
 
   const selectedTree = useMemo(() => {
-    return selectedForestTrees.find((tree) => tree.tree_id === selectedTreeId) || null;
+    return (
+      selectedForestTrees.find((tree) => tree.tree_id === selectedTreeId) ||
+      null
+    );
   }, [selectedForestTrees, selectedTreeId]);
 
   const operation = useMemo<OperationItem | undefined>(() => {
-    return operations.find((item) => item.name === selectedOperation) || operations[0];
+    return (
+      operations.find((item) => item.name === selectedOperation) ||
+      operations[0]
+    );
   }, [operations, selectedOperation]);
 
   const requiredInventoryItem = useMemo(() => {
@@ -479,7 +528,9 @@ export default function TreeOperationsPage() {
       inventory.find((item) => {
         const category = String(item.category || "").toLowerCase();
         const name = String(item.item_name || "").toLowerCase();
-        const required = String(operation.requiredInventoryCategory || "").toLowerCase();
+        const required = String(
+          operation.requiredInventoryCategory || "",
+        ).toLowerCase();
 
         return (
           Number(item.remaining_qty || 0) > 0 &&
@@ -492,29 +543,44 @@ export default function TreeOperationsPage() {
   const hasRequiredInventory =
     operation?.category !== "Inventory Use" ||
     (requiredInventoryItem &&
-      Number(requiredInventoryItem.remaining_qty || 0) >= Number(operation.requiredQty || 1));
+      Number(requiredInventoryItem.remaining_qty || 0) >=
+        Number(operation.requiredQty || 1));
 
   const walletBalance = Number(wallet?.balance || 0);
   const baseOperationFee = Number(operation?.price || 0);
-  const platformFeePreview = operation?.category === "Care Program" ? 0 : baseOperationFee * 0.02;
+  const platformFeePreview =
+    operation?.category === "Care Program" ? 0 : baseOperationFee * 0.02;
   const totalPreview = baseOperationFee + platformFeePreview;
   const targetLabel =
     scope === "FOREST"
       ? getForestName(selectedForest)
       : selectedTree
-      ? getTreeName(selectedTree)
-      : "Select Seedling";
+        ? getTreeName(selectedTree)
+        : "Select Seedling";
 
   const activeSameRequest = useMemo(() => {
     if (!operation || !selectedForest) return null;
     if (scope === "TREE" && !selectedTree) return null;
 
-    const activeStatuses = ["PENDING", "ASSIGNED", "IN_PROGRESS", "PROCESSING"];
-    const operationName = String(operation.name || "").trim().toUpperCase();
+    const activeStatuses = [
+      "PENDING",
+      "ASSIGNED",
+      "IN_PROGRESS",
+      "SUBMITTED",
+      "PROCESSING",
+    ];
+    const operationName = String(operation.name || "")
+      .trim()
+      .toUpperCase();
 
     return (
       requests.find((request) => {
-        const requestName = String(request.care_program_name || request.operation_type || "")
+        const requestName = String(
+          request.service_name ||
+            request.care_program_name ||
+            request.operation_type ||
+            "",
+        )
           .trim()
           .toUpperCase();
         const requestStatus = String(request.status || "PENDING").toUpperCase();
@@ -523,10 +589,15 @@ export default function TreeOperationsPage() {
         if (requestName !== operationName) return false;
 
         if (scope === "FOREST") {
-          return String(request.group_id || "") === String(selectedForest.group_id || "") && !request.tree_id;
+          return (
+            String(request.group_id || "") ===
+              String(selectedForest.group_id || "") && !request.tree_id
+          );
         }
 
-        return String(request.tree_id || "") === String(selectedTree?.tree_id || "");
+        return (
+          String(request.tree_id || "") === String(selectedTree?.tree_id || "")
+        );
       }) || null
     );
   }, [requests, selectedForest, selectedTree, operation, scope]);
@@ -534,11 +605,23 @@ export default function TreeOperationsPage() {
   const hasActiveSameRequest = !!activeSameRequest;
 
   const stats = useMemo(() => {
-    const pending = requests.filter((item) => normalize(item.status || "PENDING") === "PENDING").length;
-    const completed = requests.filter((item) => normalize(item.status || "") === "COMPLETED").length;
+    const pending = requests.filter(
+      (item) => normalize(item.status || "PENDING") === "PENDING",
+    ).length;
+    const completed = requests.filter(
+      (item) => normalize(item.status || "") === "COMPLETED",
+    ).length;
     const totalSpent = requests
-      .filter((item) => ["APPROVED", "COMPLETED", "PENDING", "ASSIGNED"].includes(normalize(item.status || "")))
-      .reduce((sum, item) => sum + Number(item.total_amount || item.care_program_price || 0), 0);
+      .filter((item) =>
+        ["APPROVED", "COMPLETED", "PENDING", "ASSIGNED"].includes(
+          normalize(item.status || ""),
+        ),
+      )
+      .reduce(
+        (sum, item) =>
+          sum + Number(item.total_amount || item.care_program_price || 0),
+        0,
+      );
 
     return {
       forests: forests.length,
@@ -569,7 +652,8 @@ export default function TreeOperationsPage() {
     const currentBalance = Number(wallet.balance || 0);
 
     if (amount <= 0) throw new Error("Invalid service amount.");
-    if (currentBalance < amount) throw new Error("Insufficient wallet balance.");
+    if (currentBalance < amount)
+      throw new Error("wallet insufficient: Insufficient wallet balance.");
 
     const newBalance = currentBalance - amount;
 
@@ -622,14 +706,19 @@ export default function TreeOperationsPage() {
 
   async function deductInventoryForOperation() {
     if (!operation?.requiredInventoryCategory) return null;
-    if (!requiredInventoryItem) throw new Error(`${operation.requiredInventoryCategory} inventory not found.`);
+    if (!requiredInventoryItem)
+      throw new Error(
+        `${operation.requiredInventoryCategory} inventory not found.`,
+      );
 
     const currentQty = Number(requiredInventoryItem.remaining_qty || 0);
     const requiredQty = Number(operation.requiredQty || 1);
     const nextQty = currentQty - requiredQty;
 
     if (nextQty < 0) {
-      throw new Error(`Not enough ${operation.requiredInventoryCategory} inventory.`);
+      throw new Error(
+        `Not enough ${operation.requiredInventoryCategory} inventory.`,
+      );
     }
 
     const { error } = await supabase
@@ -648,7 +737,9 @@ export default function TreeOperationsPage() {
     };
   }
 
-  async function restoreInventory(snapshot: { id: string; previousQty: number } | null) {
+  async function restoreInventory(
+    snapshot: { id: string; previousQty: number } | null,
+  ) {
     if (!snapshot) return;
 
     await supabase
@@ -691,14 +782,18 @@ export default function TreeOperationsPage() {
       notes:
         note.trim() ||
         `${operationType} requested for ${scope === "FOREST" ? "entire forest" : targetLabel} in ${getForestName(
-          selectedForest
+          selectedForest,
         )}.`,
       status: "PENDING",
       requested_at: new Date().toISOString(),
       care_program_name: isCareProgram ? operation.name : null,
       care_program_price: isCareProgram ? operation.price : null,
-      care_program_duration: isCareProgram ? operation.duration || "Program" : null,
-      care_program_status: isCareProgram ? args.careProgramStatus || "PENDING" : null,
+      care_program_duration: isCareProgram
+        ? operation.duration || "Program"
+        : null,
+      care_program_status: isCareProgram
+        ? args.careProgramStatus || "PENDING"
+        : null,
       next_renewal_date: isCareProgram ? args.nextRenewalDate || null : null,
       auto_renew_enabled: isCareProgram ? !!args.autoRenewEnabled : false,
       created_at: new Date().toISOString(),
@@ -730,7 +825,7 @@ export default function TreeOperationsPage() {
     const { data, error } = await supabase
       .from("trees")
       .select(
-        "id, care_status, care_started_at, care_expires_at, care_program_name, care_program_price, care_program_started_at, care_program_next_renewal, care_program_coverage, care_program_status, auto_renew_enabled, updated_at"
+        "id, care_status, care_started_at, care_expires_at, care_program_name, care_program_price, care_program_started_at, care_program_next_renewal, care_program_coverage, care_program_status, auto_renew_enabled, updated_at",
       )
       .in("id", treeIds)
       .eq("customer_profile_id", profile.id);
@@ -740,7 +835,9 @@ export default function TreeOperationsPage() {
     return (data || []) as Array<Record<string, any>>;
   }
 
-  async function restoreTreeCareSnapshots(snapshots: Array<Record<string, any>>) {
+  async function restoreTreeCareSnapshots(
+    snapshots: Array<Record<string, any>>,
+  ) {
     if (!profile || snapshots.length === 0) return;
 
     for (const snapshot of snapshots) {
@@ -805,7 +902,13 @@ export default function TreeOperationsPage() {
   }) {
     if (!profile) return false;
 
-    const activeStatuses = ["PENDING", "ASSIGNED", "IN_PROGRESS", "SUBMITTED"];
+    const activeStatuses = [
+      "PENDING",
+      "ASSIGNED",
+      "IN_PROGRESS",
+      "SUBMITTED",
+      "PROCESSING",
+    ];
 
     let query = supabase
       .from("tree_operation_requests")
@@ -821,11 +924,10 @@ export default function TreeOperationsPage() {
       query = query.is("tree_id", null);
     }
 
-    if (args.careProgramName) {
-      query = query.eq("care_program_name", args.careProgramName);
-    } else {
-      query = query.eq("operation_type", args.operationName);
-    }
+    const exactName = args.careProgramName || args.operationName;
+    query = query.or(
+      `operation_type.eq.${exactName},service_name.eq.${exactName},care_program_name.eq.${exactName}`,
+    );
 
     const { data, error } = await query;
 
@@ -849,13 +951,16 @@ export default function TreeOperationsPage() {
       });
 
       if (duplicate) {
-        throw new Error("This care request is already active for this forest. Please wait for Admin/Gardener completion.");
+        throw new Error(
+          "This care request is already active for this forest. Please wait for Admin/Gardener completion.",
+        );
       }
 
       return;
     }
 
-    if (!selectedTree) throw new Error("Please select a seedling or choose entire forest.");
+    if (!selectedTree)
+      throw new Error("Please select a seedling or choose entire forest.");
 
     const duplicate = await hasDuplicateCareRequest({
       operationName: args.operationName,
@@ -865,7 +970,9 @@ export default function TreeOperationsPage() {
     });
 
     if (duplicate) {
-      throw new Error("This care request is already active for this tree. Please wait for Admin/Gardener completion.");
+      throw new Error(
+        "This care request is already active for this tree. Please wait for Admin/Gardener completion.",
+      );
     }
   }
 
@@ -874,9 +981,16 @@ export default function TreeOperationsPage() {
 
     if (!profile) return setMessage("Profile not found.");
     if (!wallet) return setMessage("Wallet not found.");
-    if (!selectedForest) return setMessage("Please select a forest.");
-    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
-    if (!operation) return setMessage("Please choose a care service.");
+    if (!selectedForest)
+      return setMessage(
+        "selectedForest missing: Please select a forest before creating a request.",
+      );
+    if (scope === "TREE" && !selectedTree)
+      return setMessage(
+        "selectedTree missing: Please select a seedling or choose entire forest.",
+      );
+    if (!operation)
+      return setMessage("operation missing: Please choose a care service.");
 
     if (operation.category === "Care Program") {
       setMessage("Use Buy Once or Subscribe for Forest Protection Plans.");
@@ -884,12 +998,16 @@ export default function TreeOperationsPage() {
     }
 
     if (hasActiveSameRequest) {
-      setMessage(`${operation.name} already has an active request for ${targetLabel}.`);
+      setMessage(
+        `hasActiveSameRequest: ${operation.name} already has an active request for this exact tree/service or forest/service target.`,
+      );
       return;
     }
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
-      setMessage(`${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`);
+      setMessage(
+        `inventory missing: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`,
+      );
       return;
     }
 
@@ -898,7 +1016,9 @@ export default function TreeOperationsPage() {
         operationName: operation.name,
       });
     } catch (error: any) {
-      setMessage(error?.message || "Duplicate care request check failed.");
+      setMessage(
+        `duplicate request detected: ${error?.message || "Duplicate care request check failed."}`,
+      );
       return;
     }
 
@@ -923,13 +1043,15 @@ export default function TreeOperationsPage() {
             totalAmount,
             operationFee,
             platformFee,
-          })
+          }),
         )
         .select("id")
         .single();
 
       if (requestError || !createdRequest) {
-        throw new Error(requestError?.message || "Forest care request creation failed.");
+        throw new Error(
+          `request insert failed: ${requestError?.message || "Forest care request creation failed."}`,
+        );
       }
 
       createdRequestId = createdRequest.id;
@@ -952,13 +1074,13 @@ export default function TreeOperationsPage() {
         throw new Error(
           `Treasury sync failed: ${
             treasuryError?.message || "Unknown treasury error"
-          }`
+          }`,
         );
       }
 
       setNote("");
       setMessage(
-        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
+        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`,
       );
 
       await loadData(selectedForestId, selectedTreeId);
@@ -966,7 +1088,10 @@ export default function TreeOperationsPage() {
       if (createdRequestId) await rollbackCreatedRequests([createdRequestId]);
       if (previousBalance !== null) await restoreWallet(previousBalance);
       await restoreInventory(inventorySnapshot);
-      setMessage(error?.message || "Forest care request failed. Wallet, request, and inventory were rolled back when possible.");
+      setMessage(
+        error?.message ||
+          "Forest care request failed. Wallet, request, and inventory were rolled back when possible.",
+      );
     } finally {
       setProcessing(false);
     }
@@ -977,10 +1102,18 @@ export default function TreeOperationsPage() {
 
     if (!profile) return setMessage("Profile not found.");
     if (!wallet) return setMessage("Wallet not found.");
-    if (!selectedForest) return setMessage("Please select a forest.");
-    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
+    if (!selectedForest)
+      return setMessage(
+        "selectedForest missing: Please select a forest before creating a request.",
+      );
+    if (scope === "TREE" && !selectedTree)
+      return setMessage(
+        "selectedTree missing: Please select a seedling or choose entire forest.",
+      );
     if (!operation || operation.category !== "Care Program") {
-      return setMessage("Please choose a Forest Protection Plan.");
+      return setMessage(
+        "operation missing: Please choose a Forest Protection Plan.",
+      );
     }
 
     try {
@@ -989,7 +1122,9 @@ export default function TreeOperationsPage() {
         careProgramName: operation.name,
       });
     } catch (error: any) {
-      setMessage(error?.message || "Duplicate care request check failed.");
+      setMessage(
+        `duplicate request detected: ${error?.message || "Duplicate care request check failed."}`,
+      );
       return;
     }
 
@@ -1005,7 +1140,10 @@ export default function TreeOperationsPage() {
     let treeSnapshots: Array<Record<string, any>> = [];
 
     try {
-      const treeIdsToUpdate = scope === "FOREST" ? selectedForestTrees.map((tree) => tree.tree_id) : [selectedTree!.tree_id];
+      const treeIdsToUpdate =
+        scope === "FOREST"
+          ? selectedForestTrees.map((tree) => tree.tree_id)
+          : [selectedTree!.tree_id];
 
       treeSnapshots = await getTreeCareSnapshots(treeIdsToUpdate);
       previousBalance = await deductWallet(programPrice);
@@ -1020,13 +1158,15 @@ export default function TreeOperationsPage() {
             autoRenewEnabled,
             careProgramStatus: "PENDING",
             nextRenewalDate,
-          })
+          }),
         )
         .select("id")
         .single();
 
       if (requestError || !createdRequest) {
-        throw new Error(requestError?.message || "Protection plan request creation failed.");
+        throw new Error(
+          `request insert failed: ${requestError?.message || "Protection plan request creation failed."}`,
+        );
       }
 
       createdRequestId = createdRequest.id;
@@ -1044,14 +1184,17 @@ export default function TreeOperationsPage() {
           next_renewal_date: nextRenewalDate,
         };
 
-        const { data: createdSubscription, error: subscriptionError } = await supabase
-          .from("care_program_subscriptions")
-          .insert(subscriptionPayload)
-          .select("id")
-          .single();
+        const { data: createdSubscription, error: subscriptionError } =
+          await supabase
+            .from("care_program_subscriptions")
+            .insert(subscriptionPayload)
+            .select("id")
+            .single();
 
         if (subscriptionError || !createdSubscription) {
-          throw new Error(subscriptionError?.message || "Subscription record failed.");
+          throw new Error(
+            subscriptionError?.message || "Subscription record failed.",
+          );
         }
 
         createdSubscriptionId = createdSubscription.id;
@@ -1068,7 +1211,8 @@ export default function TreeOperationsPage() {
             care_program_price: programPrice,
             care_program_started_at: null,
             care_program_next_renewal: nextRenewalDate,
-            care_program_coverage: operation.coverage || "Protection coverage pending",
+            care_program_coverage:
+              operation.coverage || "Protection coverage pending",
             care_program_status: "PENDING",
             auto_renew_enabled: autoRenewEnabled,
             updated_at: new Date().toISOString(),
@@ -1077,7 +1221,9 @@ export default function TreeOperationsPage() {
           .eq("customer_profile_id", profile.id);
 
         if (treeUpdateError) {
-          throw new Error(`Tree care status update failed: ${treeUpdateError.message}`);
+          throw new Error(
+            `Tree care status update failed: ${treeUpdateError.message}`,
+          );
         }
       }
 
@@ -1099,7 +1245,7 @@ export default function TreeOperationsPage() {
         throw new Error(
           `Treasury sync failed: ${
             treasuryError?.message || "Unknown treasury error"
-          }`
+          }`,
         );
       }
 
@@ -1107,14 +1253,18 @@ export default function TreeOperationsPage() {
       await loadData(selectedForestId, selectedTreeId);
 
       setMessage(
-        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
+        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`,
       );
     } catch (error: any) {
-      if (createdSubscriptionId) await rollbackCreatedSubscriptions([createdSubscriptionId]);
+      if (createdSubscriptionId)
+        await rollbackCreatedSubscriptions([createdSubscriptionId]);
       if (createdRequestId) await rollbackCreatedRequests([createdRequestId]);
       await restoreTreeCareSnapshots(treeSnapshots);
       if (previousBalance !== null) await restoreWallet(previousBalance);
-      setMessage(error?.message || "Protection plan failed. Wallet, request, subscription, and tree status were rolled back when possible.");
+      setMessage(
+        error?.message ||
+          "Protection plan failed. Wallet, request, subscription, and tree status were rolled back when possible.",
+      );
       await loadData(selectedForestId, selectedTreeId);
     } finally {
       setProcessing(false);
@@ -1124,7 +1274,7 @@ export default function TreeOperationsPage() {
   async function createAutoRenewWalletTransaction(
     currentProfile: Profile,
     amount: number,
-    description: string
+    description: string,
   ) {
     const referenceNo = `AUTO-RENEW-${Date.now()}`;
 
@@ -1147,7 +1297,7 @@ export default function TreeOperationsPage() {
     previousRenewalDate: string | null,
     nextRenewalDate: string,
     status: "COMPLETED" | "FAILED",
-    notes: string
+    notes: string,
   ) {
     await supabase.from("care_program_renewal_logs").insert({
       profile_id: subscription.profile_id,
@@ -1162,7 +1312,10 @@ export default function TreeOperationsPage() {
     });
   }
 
-  async function runAutoRenewEngine(currentProfile: Profile, currentWallet: Wallet | null) {
+  async function runAutoRenewEngine(
+    currentProfile: Profile,
+    currentWallet: Wallet | null,
+  ) {
     if (!currentWallet) {
       setMessage("Wallet not found. Auto-renew was not processed.");
       return;
@@ -1173,7 +1326,7 @@ export default function TreeOperationsPage() {
     const { data: dueSubscriptions, error: subscriptionError } = await supabase
       .from("care_program_subscriptions")
       .select(
-        "id, profile_id, tree_id, care_program_name, care_program_price, care_program_duration, status, auto_renew_enabled, started_at, next_renewal_date, created_at"
+        "id, profile_id, tree_id, care_program_name, care_program_price, care_program_duration, status, auto_renew_enabled, started_at, next_renewal_date, created_at",
       )
       .eq("profile_id", currentProfile.id)
       .eq("status", "ACTIVE")
@@ -1198,7 +1351,9 @@ export default function TreeOperationsPage() {
     for (const subscription of subscriptions) {
       const amount = Number(subscription.care_program_price || 0);
       const previousBalance = runningBalance;
-      const nextRenewalDate = getNextRenewalDate(subscription.care_program_duration || "Program");
+      const nextRenewalDate = getNextRenewalDate(
+        subscription.care_program_duration || "Program",
+      );
 
       if (amount <= 0) continue;
       if (runningBalance < amount) continue;
@@ -1219,7 +1374,7 @@ export default function TreeOperationsPage() {
         await createAutoRenewWalletTransaction(
           currentProfile,
           amount,
-          `Auto-renew: ${subscription.care_program_name || "Forest Protection Plan"}`
+          `Auto-renew: ${subscription.care_program_name || "Forest Protection Plan"}`,
         );
       } catch {
         await supabase
@@ -1250,7 +1405,7 @@ export default function TreeOperationsPage() {
         subscription.next_renewal_date,
         nextRenewalDate,
         "COMPLETED",
-        "Manual auto-renew completed from Forest Care."
+        "Manual auto-renew completed from Forest Care.",
       );
 
       renewedCount += 1;
@@ -1258,9 +1413,13 @@ export default function TreeOperationsPage() {
 
     if (renewedCount > 0) {
       setWallet({ ...currentWallet, balance: runningBalance });
-      setMessage(`Auto-renew completed for ${renewedCount} protection subscription(s).`);
+      setMessage(
+        `Auto-renew completed for ${renewedCount} protection subscription(s).`,
+      );
     } else {
-      setMessage("No subscriptions were renewed. Check due dates or wallet balance.");
+      setMessage(
+        "No subscriptions were renewed. Check due dates or wallet balance.",
+      );
     }
   }
 
@@ -1292,15 +1451,21 @@ export default function TreeOperationsPage() {
     setMessage("");
 
     if (!selectedForest) return setMessage("Please select a forest.");
-    if (scope === "TREE" && !selectedTree) return setMessage("Please select a seedling or choose entire forest.");
-    if (!operation) return setMessage("Please choose a care service.");
+    if (scope === "TREE" && !selectedTree)
+      return setMessage("Please select a seedling or choose entire forest.");
+    if (!operation)
+      return setMessage("operation missing: Please choose a care service.");
 
     if (operation.category === "Inventory Use" && !hasRequiredInventory) {
-      setMessage(`Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`);
+      setMessage(
+        `Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`,
+      );
       return;
     }
 
-    setMessage(`${operation.name} preview for ${targetLabel}. Total charge will be ${peso(totalPreview)}.`);
+    setMessage(
+      `${operation.name} preview for ${targetLabel}. Total charge will be ${peso(totalPreview)}.`,
+    );
   }
 
   return (
@@ -1314,8 +1479,9 @@ export default function TreeOperationsPage() {
           <p className="eyebrow">Arganwood Forest Care</p>
           <h1>Forest Care Center</h1>
           <span>
-            Protect your forest with care services, field verification, and protection plans. Choose an entire forest or
-            one seedling, then send the request to Admin for gardener assignment.
+            Protect your forest with care services, field verification, and
+            protection plans. Choose an entire forest or one seedling, then send
+            the request to Admin for gardener assignment.
           </span>
         </div>
 
@@ -1334,7 +1500,10 @@ export default function TreeOperationsPage() {
         <section className="emptyState">
           <div className="emptyIcon">🌳</div>
           <h2>No forest yet</h2>
-          <p>Buy trees from Marketplace first. Your new forest will appear here for care and protection.</p>
+          <p>
+            Buy trees from Marketplace first. Your new forest will appear here
+            for care and protection.
+          </p>
           <Link href="/dashboard/marketplace">Go to Marketplace</Link>
         </section>
       ) : (
@@ -1348,7 +1517,10 @@ export default function TreeOperationsPage() {
 
           <section className="careLayout">
             <section className="panel forestPanel">
-              <PanelHead title="1. Choose Forest" text="Start with the forest you want to protect." />
+              <PanelHead
+                title="1. Choose Forest"
+                text="Start with the forest you want to protect."
+              />
 
               <div className="forestList">
                 {forests.map((forest) => {
@@ -1367,9 +1539,15 @@ export default function TreeOperationsPage() {
                       <span>{Number(forest.total_trees || 0)} Trees</span>
 
                       <div className="forestMiniStats">
-                        <em className="protected">{Number(forest.protected_count || 0)} Protected</em>
-                        <em className="attention">{Number(forest.attention_count || 0)} Attention</em>
-                        <em className="critical">{Number(forest.critical_count || 0)} Critical</em>
+                        <em className="protected">
+                          {Number(forest.protected_count || 0)} Protected
+                        </em>
+                        <em className="attention">
+                          {Number(forest.attention_count || 0)} Attention
+                        </em>
+                        <em className="critical">
+                          {Number(forest.critical_count || 0)} Critical
+                        </em>
                       </div>
                     </button>
                   );
@@ -1378,23 +1556,33 @@ export default function TreeOperationsPage() {
             </section>
 
             <section className="panel targetPanel">
-              <PanelHead title="2. Select Coverage" text="Care can apply to the whole forest or one seedling." />
+              <PanelHead
+                title="2. Select Coverage"
+                text="Care can apply to the whole forest or one seedling."
+              />
 
               {selectedForest && (
                 <div className="selectedForestHero">
                   <small>Selected Forest</small>
                   <b>{getForestName(selectedForest)}</b>
                   <p>
-                    {Number(selectedForest.total_trees || 0)} trees • {Number(selectedForest.protected_count || 0)} protected •{" "}
-                    {Number(selectedForest.attention_count || 0)} attention • {Number(selectedForest.critical_count || 0)} critical
+                    {Number(selectedForest.total_trees || 0)} trees •{" "}
+                    {Number(selectedForest.protected_count || 0)} protected •{" "}
+                    {Number(selectedForest.attention_count || 0)} attention •{" "}
+                    {Number(selectedForest.critical_count || 0)} critical
                   </p>
                 </div>
               )}
 
               <div className="scopeGrid">
-                <button className={scope === "FOREST" ? "active" : ""} onClick={() => setScope("FOREST")}>
+                <button
+                  className={scope === "FOREST" ? "active" : ""}
+                  onClick={() => setScope("FOREST")}
+                >
                   <strong>🌳 Entire Forest</strong>
-                  <span>Best for protection plans and forest-wide maintenance.</span>
+                  <span>
+                    Best for protection plans and forest-wide maintenance.
+                  </span>
                 </button>
 
                 <button
@@ -1403,25 +1591,37 @@ export default function TreeOperationsPage() {
                   onClick={() => setScope("TREE")}
                 >
                   <strong>🌱 Single Seedling</strong>
-                  <span>Best for photo, GPS, health, or specific care requests.</span>
+                  <span>
+                    Best for photo, GPS, health, or specific care requests.
+                  </span>
                 </button>
               </div>
 
               {scope === "TREE" && (
                 <div className="seedlingList">
                   {selectedForestTrees.length === 0 ? (
-                    <div className="softEmpty">No seedlings found in this forest.</div>
+                    <div className="softEmpty">
+                      No seedlings found in this forest.
+                    </div>
                   ) : (
                     selectedForestTrees.map((tree) => (
                       <button
                         key={tree.tree_id}
-                        className={selectedTreeId === tree.tree_id ? "seedlingCard active" : "seedlingCard"}
+                        className={
+                          selectedTreeId === tree.tree_id
+                            ? "seedlingCard active"
+                            : "seedlingCard"
+                        }
                         onClick={() => setSelectedTreeId(tree.tree_id)}
                       >
                         <span>{alertIcon(tree.alert_status)}</span>
                         <div>
                           <b>{getTreeName(tree)}</b>
-                          <small>{tree.alert_reason || tree.care_status || "Care status pending"}</small>
+                          <small>
+                            {tree.alert_reason ||
+                              tree.care_status ||
+                              "Care status pending"}
+                          </small>
                         </div>
                       </button>
                     ))
@@ -1431,12 +1631,19 @@ export default function TreeOperationsPage() {
             </section>
 
             <section className="panel actionPanel">
-              <PanelHead title="3. Choose Care" text="Pick a care service or protection plan." />
+              <PanelHead
+                title="3. Choose Care"
+                text="Pick a care service or protection plan."
+              />
 
               <div className="operationPreview">
                 <small>Care Target</small>
                 <b>{targetLabel}</b>
-                <p>{scope === "FOREST" ? "This request will include group_id." : "This request will include group_id and tree_id."}</p>
+                <p>
+                  {scope === "FOREST"
+                    ? "This request will include group_id."
+                    : "This request will include group_id and tree_id."}
+                </p>
               </div>
 
               <div className="serviceList">
@@ -1450,10 +1657,18 @@ export default function TreeOperationsPage() {
                   >
                     <div className="serviceIcon">{getOperationIcon(item)}</div>
                     <div>
-                      <span>{item.category === "Care Program" ? "Protection Plan" : item.category}</span>
+                      <span>
+                        {item.category === "Care Program"
+                          ? "Protection Plan"
+                          : item.category}
+                      </span>
                       <strong>{item.name}</strong>
                       <p>{item.description}</p>
-                      <b>{item.category === "Care Program" ? `${peso(item.price)} • ${item.duration || "Program"}` : peso(item.price)}</b>
+                      <b>
+                        {item.category === "Care Program"
+                          ? `${peso(item.price)} • ${item.duration || "Program"}`
+                          : peso(item.price)}
+                      </b>
                     </div>
                   </button>
                 ))}
@@ -1478,20 +1693,28 @@ export default function TreeOperationsPage() {
             {hasActiveSameRequest && (
               <div className="inventoryCheck ok">
                 <strong>Active Request Found</strong>
-                <p>This same care request is already active for {targetLabel}.</p>
+                <p>
+                  This same care request is already active for {targetLabel}.
+                </p>
               </div>
             )}
 
             {operation?.category === "Inventory Use" && (
-              <div className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}>
+              <div
+                className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}
+              >
                 <strong>Inventory Preview</strong>
                 {hasRequiredInventory && requiredInventoryItem ? (
                   <p>
-                    Available: {requiredInventoryItem.item_name} — {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
+                    Available: {requiredInventoryItem.item_name} —{" "}
+                    {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
                     {requiredInventoryItem.unit || ""}
                   </p>
                 ) : (
-                  <p>No {operation.requiredInventoryCategory} in inventory. Please buy from Marketplace first.</p>
+                  <p>
+                    No {operation.requiredInventoryCategory} in inventory.
+                    Please buy from Marketplace first.
+                  </p>
                 )}
 
                 {!hasRequiredInventory && (
@@ -1508,21 +1731,41 @@ export default function TreeOperationsPage() {
                 <div className="miniGrid">
                   <Mini label="Plan" value={operation.name} />
                   <Mini label="Price" value={peso(operation.price)} />
-                  <Mini label="Duration" value={operation.duration || "Program"} />
-                  <Mini label="Target" value={scope === "FOREST" ? "Entire Forest" : "Single Seedling"} />
+                  <Mini
+                    label="Duration"
+                    value={operation.duration || "Program"}
+                  />
+                  <Mini
+                    label="Target"
+                    value={
+                      scope === "FOREST" ? "Entire Forest" : "Single Seedling"
+                    }
+                  />
                 </div>
                 <p>
-                  Forest Care creates a paid pending request first. The tree stays pending activation until Admin assigns
-                  the field team, gardener evidence is submitted, and Admin approves activation.
+                  Forest Care creates a paid pending request first. The tree
+                  stays pending activation until Admin assigns the field team,
+                  gardener evidence is submitted, and Admin approves activation.
                 </p>
               </div>
             )}
 
             <div className="checkoutGrid">
               <div className="feeBox">
-                <FeeRow label={operation?.category === "Care Program" ? "Program Price" : "Care Fee"} value={baseOperationFee} />
                 <FeeRow
-                  label={operation?.category === "Care Program" ? "Platform Fee" : "Platform Fee 2% Preview"}
+                  label={
+                    operation?.category === "Care Program"
+                      ? "Program Price"
+                      : "Care Fee"
+                  }
+                  value={baseOperationFee}
+                />
+                <FeeRow
+                  label={
+                    operation?.category === "Care Program"
+                      ? "Platform Fee"
+                      : "Platform Fee 2% Preview"
+                  }
                   value={platformFeePreview}
                 />
                 <FeeRow label="Total Charge" value={totalPreview} strong />
@@ -1541,52 +1784,89 @@ export default function TreeOperationsPage() {
 
             {operation?.category === "Care Program" ? (
               <div className="actionGrid">
-                <button className="submitButton secondary" disabled={processing} onClick={() => submitCareProgram(false)}>
+                <button
+                  className="submitButton secondary"
+                  disabled={processing}
+                  onClick={() => submitCareProgram(false)}
+                >
                   {processing ? "Processing..." : "Buy Once"}
                 </button>
 
-                <button className="submitButton" disabled={processing} onClick={() => submitCareProgram(true)}>
+                <button
+                  className="submitButton"
+                  disabled={processing}
+                  onClick={() => submitCareProgram(true)}
+                >
                   {processing ? "Processing..." : "Subscribe"}
                 </button>
               </div>
             ) : (
               <div className="actionGrid">
-                <button className="submitButton secondary" disabled={processing} onClick={previewOperation}>
+                <button
+                  className="submitButton secondary"
+                  disabled={processing}
+                  onClick={previewOperation}
+                >
                   Preview
                 </button>
 
-                <button className="submitButton" disabled={processing || hasActiveSameRequest} onClick={submitServiceRequest}>
-                  {processing ? "Processing..." : hasActiveSameRequest ? "Already Requested" : "Submit Care Request"}
+                <button
+                  className="submitButton"
+                  disabled={processing || hasActiveSameRequest}
+                  onClick={submitServiceRequest}
+                >
+                  {processing
+                    ? "Processing..."
+                    : hasActiveSameRequest
+                      ? "Already Requested"
+                      : "Submit Care Request"}
                 </button>
               </div>
             )}
 
-            <button className="autoRenewButton" disabled={processing || autoRenewProcessing} onClick={handleManualAutoRenew}>
-              {autoRenewProcessing ? "Running Auto Renew..." : "Run Auto Renew Check"}
+            <button
+              className="autoRenewButton"
+              disabled={processing || autoRenewProcessing}
+              onClick={handleManualAutoRenew}
+            >
+              {autoRenewProcessing
+                ? "Running Auto Renew..."
+                : "Run Auto Renew Check"}
             </button>
           </section>
 
           <section className="history panel">
-            <PanelHead title="Recent Care Activity" text="Read-only records from tree_operation_requests." />
+            <PanelHead
+              title="Recent Care Activity"
+              text="Read-only records from tree_operation_requests."
+            />
 
             {requests.length === 0 ? (
               <div className="softEmpty">No care requests yet.</div>
             ) : (
               <div className="requestList">
                 {requests.map((request) => {
-                  const requestTree = trees.find((item) => item.tree_id === request.tree_id);
-                  const requestForest = forests.find((item) => item.group_id === request.group_id);
+                  const requestTree = trees.find(
+                    (item) => item.tree_id === request.tree_id,
+                  );
+                  const requestForest = forests.find(
+                    (item) => item.group_id === request.group_id,
+                  );
                   const target =
                     request.tree_id && requestTree
                       ? getTreeName(requestTree)
                       : requestForest
-                      ? getForestName(requestForest)
-                      : request.tree_id || request.group_id || "Forest Care";
+                        ? getForestName(requestForest)
+                        : request.tree_id || request.group_id || "Forest Care";
 
                   return (
                     <div className="requestRow" key={request.id}>
                       <div>
-                        <strong>{request.care_program_name || request.operation_type || "Forest Care"}</strong>
+                        <strong>
+                          {request.care_program_name ||
+                            request.operation_type ||
+                            "Forest Care"}
+                        </strong>
                         <p>
                           {target} • {formatDate(request.created_at)}
                         </p>
@@ -1594,11 +1874,22 @@ export default function TreeOperationsPage() {
                       </div>
 
                       <div className="requestRight">
-                        <span className={`status ${statusClass(request.care_program_status || request.status)}`}>
-                          {request.care_program_status || request.status || "PENDING"}
+                        <span
+                          className={`status ${statusClass(request.care_program_status || request.status)}`}
+                        >
+                          {request.care_program_status ||
+                            request.status ||
+                            "PENDING"}
                         </span>
                         <b>
-                          {peso(Number(request.care_program_price || request.total_amount || request.operation_fee || 0))}
+                          {peso(
+                            Number(
+                              request.care_program_price ||
+                                request.total_amount ||
+                                request.operation_fee ||
+                                0,
+                            ),
+                          )}
                         </b>
                       </div>
                     </div>
