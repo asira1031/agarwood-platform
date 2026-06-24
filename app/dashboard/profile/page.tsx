@@ -1,13 +1,3 @@
-// app/dashboard/profile/page.tsx
-// FULL FILE REPLACEMENT
-// Revised from current Profile page:
-// - Keeps existing profile UI / KYC UI
-// - Adds functional KYC submission
-// - Resolves profile safely via auth user id then email
-// - Uploads to Supabase Storage bucket fallback
-// - Inserts new PENDING kyc_records row for Admin queue
-// - Does not mark APPROVED from customer side
-
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -38,25 +28,10 @@ function normalize(value: any) {
   return String(value || "").trim().toUpperCase();
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "Not recorded";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "Not recorded";
-
-  return date.toLocaleDateString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "Not recorded";
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return "Not recorded";
 
   return date.toLocaleString("en-PH", {
@@ -70,23 +45,19 @@ function formatDateTime(value: string | null | undefined) {
 
 function statusLabel(value: string | null | undefined) {
   const status = normalize(value);
-
   if (status === "APPROVED") return "APPROVED";
   if (status === "ACTIVE") return "ACTIVE";
   if (status === "PENDING") return "PENDING";
   if (status === "REJECTED") return "REJECTED";
   if (status === "INACTIVE") return "INACTIVE";
-
   return "NOT SUBMITTED";
 }
 
 function statusClass(value: string | null | undefined) {
   const status = normalize(value);
-
   if (status === "APPROVED" || status === "ACTIVE") return "approved";
   if (status === "PENDING") return "pending";
   if (status === "REJECTED") return "rejected";
-
   return "notSubmitted";
 }
 
@@ -100,29 +71,18 @@ function safeFileName(value: string) {
 
 function maskIdNumber(value: string | null | undefined) {
   if (!value) return "—";
-
   const clean = String(value).trim();
-
   if (clean.length <= 4) return "****";
-
   return `${"*".repeat(Math.max(clean.length - 4, 4))}${clean.slice(-4)}`;
 }
 
 function getSubmittedValue(record: KycRecord | null | undefined) {
   if (!record) return null;
-
-  return (
-    record.submitted_at ||
-    record.created_at ||
-    record.updated_at ||
-    record.createdAt ||
-    null
-  );
+  return record.submitted_at || record.created_at || record.updated_at || null;
 }
 
 function getAdminNotes(record: KycRecord | null | undefined) {
   if (!record) return "—";
-
   return (
     record.admin_notes ||
     record.rejection_reason ||
@@ -134,7 +94,6 @@ function getAdminNotes(record: KycRecord | null | undefined) {
 
 function getDocumentUrl(record: KycRecord | null | undefined) {
   if (!record) return null;
-
   return (
     record.document_url ||
     record.id_document_url ||
@@ -211,7 +170,6 @@ export default function ProfilePage() {
       .maybeSingle();
 
     if (byIdError) throw byIdError;
-
     if (profileById) return profileById as Profile;
 
     if (!cleanEmail) return null;
@@ -223,7 +181,6 @@ export default function ProfilePage() {
       .maybeSingle();
 
     if (byEmailError) throw byEmailError;
-
     if (profileByEmail) return profileByEmail as Profile;
 
     const { data: profileByEmailFallback, error: fallbackError } = await supabase
@@ -292,7 +249,6 @@ export default function ProfilePage() {
     loaded.sort((a, b) => {
       const aTime = new Date(getSubmittedValue(a) || 0).getTime();
       const bTime = new Date(getSubmittedValue(b) || 0).getTime();
-
       return bTime - aTime;
     });
 
@@ -350,9 +306,7 @@ export default function ProfilePage() {
     setMessage("");
 
     if (!profile) return setMessage("Profile not found.");
-    if (!profileForm.full_name.trim()) {
-      return setMessage("Full name is required.");
-    }
+    if (!profileForm.full_name.trim()) return setMessage("Full name is required.");
 
     setSavingProfile(true);
 
@@ -405,9 +359,7 @@ export default function ProfilePage() {
 
       const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
 
-      if (data?.publicUrl) {
-        return data.publicUrl;
-      }
+      if (data?.publicUrl) return data.publicUrl;
 
       return `${bucket}/${filePath}`;
     }
@@ -428,9 +380,7 @@ export default function ProfilePage() {
         error.message
       );
 
-      if (!nextPayload) {
-        throw new Error(error.message);
-      }
+      if (!nextPayload) throw new Error(error.message);
 
       currentPayload = nextPayload;
     }
@@ -447,9 +397,7 @@ export default function ProfilePage() {
       })
       .eq("id", profileId);
 
-    if (error) {
-      throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
   }
 
   async function submitKyc() {
@@ -460,15 +408,8 @@ export default function ProfilePage() {
       return;
     }
 
-    if (!kycForm.id_type) {
-      setMessage("Please select ID type.");
-      return;
-    }
-
-    if (!kycForm.id_number.trim()) {
-      setMessage("Please enter ID number.");
-      return;
-    }
+    if (!kycForm.id_type) return setMessage("Please select ID type.");
+    if (!kycForm.id_number.trim()) return setMessage("Please enter ID number.");
 
     if (!files.id_document && !files.id_front) {
       setMessage("Please upload an ID document/image.");
@@ -682,9 +623,7 @@ export default function ProfilePage() {
                 <div>
                   <p className="eyebrow">Verification</p>
                   <h2>KYC Documents</h2>
-                  <span>
-                    Upload identity documents for admin verification.
-                  </span>
+                  <span>Upload identity documents for admin verification.</span>
                 </div>
                 <b className={`pill ${statusClass(kycStatus)}`}>
                   {statusLabel(kycStatus)}
@@ -931,9 +870,7 @@ export default function ProfilePage() {
       )}
 
       <style>{`
-        * {
-          box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         .page {
           min-height: 100vh;
@@ -1044,9 +981,7 @@ export default function ProfilePage() {
           margin-bottom: 18px;
         }
 
-        .kycGrid {
-          align-items: start;
-        }
+        .kycGrid { align-items: start; }
 
         .panel {
           border-radius: 28px;
@@ -1084,9 +1019,7 @@ export default function ProfilePage() {
           letter-spacing: .12em;
         }
 
-        .notesLabel {
-          margin-bottom: 16px;
-        }
+        .notesLabel { margin-bottom: 16px; }
 
         input,
         select,
@@ -1106,13 +1039,9 @@ export default function ProfilePage() {
           font-family: inherit;
         }
 
-        input:disabled {
-          opacity: .65;
-        }
+        input:disabled { opacity: .65; }
 
-        option {
-          color: #07140f;
-        }
+        option { color: #07140f; }
 
         button {
           border: 0;
@@ -1144,10 +1073,7 @@ export default function ProfilePage() {
           background: rgba(0,0,0,.22);
         }
 
-        .trustList {
-          display: grid;
-          gap: 12px;
-        }
+        .trustList { display: grid; gap: 12px; }
 
         .info {
           display: flex;
@@ -1181,21 +1107,10 @@ export default function ProfilePage() {
           white-space: nowrap;
         }
 
-        .approved {
-          border-color: rgba(95,220,140,.35);
-        }
-
-        .pending {
-          border-color: rgba(214,178,94,.45);
-        }
-
-        .rejected {
-          border-color: rgba(255,105,105,.4);
-        }
-
-        .notSubmitted {
-          border-color: rgba(255,255,255,.16);
-        }
+        .approved { border-color: rgba(95,220,140,.35); }
+        .pending { border-color: rgba(214,178,94,.45); }
+        .rejected { border-color: rgba(255,105,105,.4); }
+        .notSubmitted { border-color: rgba(255,255,255,.16); }
 
         .lockedBox,
         .rejectedBox,
@@ -1209,9 +1124,7 @@ export default function ProfilePage() {
         }
 
         .lockedBox strong,
-        .rejectedBox strong {
-          color: #fff8dc;
-        }
+        .rejectedBox strong { color: #fff8dc; }
 
         .lockedBox p,
         .rejectedBox p {
@@ -1227,9 +1140,7 @@ export default function ProfilePage() {
           margin-bottom: 16px;
         }
 
-        .uploadBox {
-          margin-bottom: 0;
-        }
+        .uploadBox { margin-bottom: 0; }
 
         .uploadBox p {
           margin: 0 0 10px;
@@ -1277,9 +1188,7 @@ export default function ProfilePage() {
           background: rgba(0,0,0,.22);
         }
 
-        .docLinks span {
-          color: rgba(248,241,216,.45);
-        }
+        .docLinks span { color: rgba(248,241,216,.45); }
 
         .historyList {
           margin-top: 18px;
@@ -1302,18 +1211,14 @@ export default function ProfilePage() {
           padding: 12px;
         }
 
-        .historyItem strong {
-          color: #d6b25e;
-        }
+        .historyItem strong { color: #d6b25e; }
 
         .historyItem span {
           color: #fff8dc;
           font-weight: 900;
         }
 
-        .historyItem small {
-          color: rgba(248,241,216,.58);
-        }
+        .historyItem small { color: rgba(248,241,216,.58); }
 
         @media (max-width: 980px) {
           .hero,
@@ -1328,13 +1233,9 @@ export default function ProfilePage() {
             grid-template-columns: 1fr;
           }
 
-          .identityCard {
-            min-width: 0;
-          }
+          .identityCard { min-width: 0; }
 
-          h1 {
-            font-size: 36px;
-          }
+          h1 { font-size: 36px; }
         }
       `}</style>
     </main>
