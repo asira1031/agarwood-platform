@@ -757,24 +757,42 @@ export default function TreeOperationsPage() {
     }
   }
 
+  async function treasuryEntryExists(sourceType: string, sourceId: string) {
+    const { data, error } = await supabase
+      .from("platform_treasury")
+      .select("id")
+      .eq("source_type", sourceType)
+      .eq("source_id", sourceId)
+      .limit(1);
+
+    if (error) throw error;
+
+    return (data || []).length > 0;
+  }
+
   async function insertPlatformTreasury(args: {
     amount: number;
-    referenceNo: string;
+    sourceId: string;
     description: string;
   }) {
     if (!profile || args.amount <= 0) return;
 
-    const payload = {
-      profile_id: profile.id,
-      source: "CARE_SERVICE",
-      amount: args.amount,
-      reference_no: args.referenceNo,
-      description: args.description,
-      status: "RECEIVED",
-      created_at: new Date().toISOString(),
-    };
+    const exists = await treasuryEntryExists("CARE_SERVICE", args.sourceId);
+    if (exists) return;
 
-    const { error } = await supabase.from("platform_treasury").insert(payload);
+    const { error } = await supabase.from("platform_treasury").insert({
+      source: "CARE_SERVICE",
+      source_type: "CARE_SERVICE",
+      source_id: args.sourceId,
+      reference_id: args.sourceId,
+      reference_no: args.sourceId,
+      customer_profile_id: profile.id,
+      profile_id: profile.id,
+      amount: Math.abs(Number(args.amount || 0)),
+      description: args.description,
+      status: "POSTED",
+      created_at: new Date().toISOString(),
+    });
 
     if (error) throw error;
   }
@@ -916,21 +934,30 @@ export default function TreeOperationsPage() {
 
       createdRequestId = createdRequest.id;
 
-      await insertPlatformTreasury({
-        amount: platformFee,
-        referenceNo: createdRequest.id,
-        description: "Platform fee for care request",
-      });
-
       await createWalletTransactionLog({
         amount: -Math.abs(totalAmount),
         description: `${operation.name} request for ${targetLabel}`,
         referenceId: createdRequest.id,
       });
 
+      let treasurySynced = true;
+
+      try {
+        await insertPlatformTreasury({
+          amount: platformFee,
+          sourceId: createdRequest.id,
+          description: "Platform fee for care request",
+        });
+      } catch (treasuryError) {
+        console.error("Care service treasury sync failed:", treasuryError);
+        treasurySynced = false;
+      }
+
       setNote("");
       setMessage(
-        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
+        treasurySynced
+          ? `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
+          : "Request was created, but treasury sync failed. Please check platform_treasury."
       );
 
       await loadData(selectedForestId, selectedTreeId);
@@ -1059,11 +1086,26 @@ export default function TreeOperationsPage() {
         referenceId: createdRequest.id,
       });
 
+      let treasurySynced = true;
+
+      try {
+        await insertPlatformTreasury({
+          amount: programPrice,
+          sourceId: createdRequest.id,
+          description: "Care service payment",
+        });
+      } catch (treasuryError) {
+        console.error("Care program treasury sync failed:", treasuryError);
+        treasurySynced = false;
+      }
+
       setNote("");
       await loadData(selectedForestId, selectedTreeId);
 
       setMessage(
-        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
+        treasurySynced
+          ? `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
+          : "Request was created, but treasury sync failed. Please check platform_treasury."
       );
     } catch (error: any) {
       if (createdSubscriptionId) await rollbackCreatedSubscriptions([createdSubscriptionId]);

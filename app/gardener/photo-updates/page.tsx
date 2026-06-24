@@ -9,21 +9,92 @@ type AssignedTask = {
   operation_request_id: string;
   task_log_id?: string | null;
   caretaker_id: string;
+  caretaker_profile_id?: string | null;
   tree_id: string;
+  group_id?: string | null;
   tree_code?: string | null;
   tree_name?: string | null;
+  forest_name?: string | null;
   customer_profile_id: string;
   customer_name?: string | null;
   customer_email?: string | null;
   request_type?: string | null;
   operation_type?: string | null;
   service_name?: string | null;
+  admin_notes?: string | null;
   assignment_status?: string | null;
   task_status?: string | null;
   evidence_status?: string | null;
 };
 
+type EvidenceRule = {
+  title: string;
+  mainRequired: boolean;
+  beforeRequired: boolean;
+  afterRequired: boolean;
+  notesRequired: boolean;
+  helper: string;
+};
+
 const verifiedKey = (id: string) => `verified_tree_assignment_${id}`;
+const oldVerifiedKey = (id: string) => `arganwood_tree_verified_assignment_${id}`;
+
+function normalizeService(task: AssignedTask | null) {
+  return String(task?.service_name || task?.request_type || task?.operation_type || "PHOTO_UPDATE")
+    .trim()
+    .toUpperCase()
+    .replaceAll(" ", "_");
+}
+
+function getEvidenceRule(task: AssignedTask | null): EvidenceRule {
+  const service = normalizeService(task);
+
+  if (service === "PHOTO_UPDATE" || service === "PHOTO" || service === "TREE_PHOTO_UPDATE") {
+    return {
+      title: "Photo Update",
+      mainRequired: true,
+      beforeRequired: false,
+      afterRequired: false,
+      notesRequired: false,
+      helper: "Current tree photo is required. Notes are optional.",
+    };
+  }
+
+  if (service === "WATERING_SERVICE" || service === "WATERING") {
+    return {
+      title: "Watering Service Evidence",
+      mainRequired: false,
+      beforeRequired: true,
+      afterRequired: true,
+      notesRequired: true,
+      helper: "Before photo, after photo, and notes are required.",
+    };
+  }
+
+  if (
+    ["FERTILIZER", "FERTILIZER_SERVICE", "FUNGICIDE", "INSECTICIDE", "PRUNING", "PEST_CONTROL"].includes(
+      service
+    )
+  ) {
+    return {
+      title: "Care Service Evidence",
+      mainRequired: false,
+      beforeRequired: true,
+      afterRequired: true,
+      notesRequired: true,
+      helper: "Before photo, after photo, and notes are required for this care service.",
+    };
+  }
+
+  return {
+    title: "Photo Evidence",
+    mainRequired: true,
+    beforeRequired: false,
+    afterRequired: false,
+    notesRequired: false,
+    helper: "Current photo is required. Notes are optional.",
+  };
+}
 
 export default function GardenerPhotoUpdatesPage() {
   const searchParams = useSearchParams();
@@ -53,6 +124,8 @@ export default function GardenerPhotoUpdatesPage() {
     [tasks, selectedAssignmentId]
   );
 
+  const evidenceRule = useMemo(() => getEvidenceRule(lockedTask || selectedTask), [lockedTask, selectedTask]);
+
   function parseQr(raw: string) {
     const value = raw.trim();
     if (!value) return null;
@@ -73,7 +146,11 @@ export default function GardenerPhotoUpdatesPage() {
 
   function matchesTask(task: AssignedTask, parsed: { tree_id: string | null; tree_code: string | null }) {
     const byId = parsed.tree_id && parsed.tree_id === task.tree_id;
-    const byCode = parsed.tree_code && task.tree_code && parsed.tree_code.toLowerCase() === task.tree_code.toLowerCase();
+    const byCode =
+      parsed.tree_code &&
+      task.tree_code &&
+      parsed.tree_code.toLowerCase() === task.tree_code.toLowerCase();
+
     return Boolean(byId || byCode);
   }
 
@@ -89,8 +166,18 @@ export default function GardenerPhotoUpdatesPage() {
       return;
     }
 
-    const { data: profileById } = await supabase.from("profiles").select("id,email,full_name").eq("id", user.id).maybeSingle();
-    const { data: profileByEmail } = await supabase.from("profiles").select("id,email,full_name").ilike("email", user.email || "").maybeSingle();
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id,email,full_name")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id,email,full_name")
+      .ilike("email", user.email || "")
+      .maybeSingle();
+
     const profile = profileById || profileByEmail;
 
     if (!profile) {
@@ -98,51 +185,129 @@ export default function GardenerPhotoUpdatesPage() {
       return;
     }
 
-    const { data: caretaker } = await supabase.from("caretakers").select("id,caretaker_profile_id").eq("caretaker_profile_id", profile.id).maybeSingle();
+    const { data: caretakerByProfile } = await supabase
+      .from("caretakers")
+      .select("*")
+      .eq("caretaker_profile_id", profile.id)
+      .maybeSingle();
+
+    const { data: caretakerByEmail } = await supabase
+      .from("caretakers")
+      .select("*")
+      .ilike("email", user.email || "")
+      .maybeSingle();
+
+    const caretaker = caretakerByProfile || caretakerByEmail;
 
     if (!caretaker) {
       setLoading(false);
       return;
     }
 
-    const { data: assignments } = await supabase
+    const assignmentFilters = [
+      `caretaker_id.eq.${caretaker.id}`,
+      caretaker.caretaker_profile_id ? `caretaker_profile_id.eq.${caretaker.caretaker_profile_id}` : "",
+    ].filter(Boolean);
+
+    const { data: assignments, error: assignmentError } = await supabase
       .from("caretaker_assignments")
-      .select(`
-        id,status,tree_id,customer_profile_id,operation_request_id,
-        trees:tree_id(id,tree_code,name),
-        profiles:customer_profile_id(id,full_name,email),
-        tree_operation_requests:operation_request_id(id,request_type,service_name,operation_type,status,assignment_status)
-      `)
-      .eq("caretaker_id", caretaker.id)
-      .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"])
+      .select("*")
+      .or(assignmentFilters.join(","))
+      .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED", "REWORK_REQUESTED"])
       .order("assigned_at", { ascending: false });
 
-    const assignmentIds = (assignments || []).map((a: any) => a.id);
+    if (assignmentError) {
+      setQrError(assignmentError.message);
+      setLoading(false);
+      return;
+    }
+
+    const assignmentRows = assignments || [];
+    const assignmentIds = assignmentRows.map((a: any) => a.id);
+    const operationRequestIds = assignmentRows.map((a: any) => a.operation_request_id).filter(Boolean);
+    const treeIds = assignmentRows.map((a: any) => a.tree_id).filter(Boolean);
+    const customerIds = assignmentRows.map((a: any) => a.customer_profile_id).filter(Boolean);
 
     const { data: logs } = assignmentIds.length
       ? await supabase
           .from("caretaker_task_logs")
-          .select("id,assignment_id,operation_request_id,status,evidence_status")
+          .select("*")
           .in("assignment_id", assignmentIds)
       : { data: [] };
 
-    const mapped: AssignedTask[] = (assignments || []).map((a: any) => {
+    const { data: requests } = operationRequestIds.length
+      ? await supabase
+          .from("tree_operation_requests")
+          .select("*")
+          .in("id", operationRequestIds)
+      : { data: [] };
+
+    const requestRows = requests || [];
+
+    const mergedTreeIds = Array.from(
+      new Set([...treeIds, ...requestRows.map((request: any) => request.tree_id).filter(Boolean)])
+    );
+
+    const mergedCustomerIds = Array.from(
+      new Set([
+        ...customerIds,
+        ...requestRows.map((request: any) => request.customer_profile_id).filter(Boolean),
+        ...requestRows.map((request: any) => request.profile_id).filter(Boolean),
+      ])
+    );
+
+    const groupIds = Array.from(
+      new Set([
+        ...assignmentRows.map((assignment: any) => assignment.group_id).filter(Boolean),
+        ...requestRows.map((request: any) => request.group_id).filter(Boolean),
+      ])
+    );
+
+    const { data: treeRows } = mergedTreeIds.length
+      ? await supabase.from("trees").select("*").in("id", mergedTreeIds)
+      : { data: [] };
+
+    const { data: groupRows } = groupIds.length
+      ? await supabase.from("tree_groups").select("*").in("id", groupIds)
+      : { data: [] };
+
+    const { data: customerRows } = mergedCustomerIds.length
+      ? await supabase.from("profiles").select("id,full_name,email").in("id", mergedCustomerIds)
+      : { data: [] };
+
+    const mapped: AssignedTask[] = assignmentRows.map((a: any) => {
       const log = (logs || []).find((l: any) => l.assignment_id === a.id);
+      const request = (requestRows || []).find((r: any) => r.id === a.operation_request_id);
+      const treeId = a.tree_id || request?.tree_id;
+      const tree = (treeRows || []).find((t: any) => t.id === treeId);
+      const groupId = a.group_id || request?.group_id || tree?.group_id;
+      const group = (groupRows || []).find((g: any) => g.id === groupId);
+      const customerProfileId =
+        a.customer_profile_id ||
+        request?.customer_profile_id ||
+        request?.profile_id ||
+        tree?.customer_profile_id ||
+        tree?.profile_id;
+      const customer = (customerRows || []).find((p: any) => p.id === customerProfileId);
 
       return {
         assignment_id: a.id,
-        operation_request_id: a.operation_request_id,
+        operation_request_id: a.operation_request_id || request?.id || "",
         task_log_id: log?.id || null,
         caretaker_id: caretaker.id,
-        tree_id: a.tree_id,
-        tree_code: a.trees?.tree_code || null,
-        tree_name: a.trees?.name || null,
-        customer_profile_id: a.customer_profile_id,
-        customer_name: a.profiles?.full_name || "Customer",
-        customer_email: a.profiles?.email || "",
-        request_type: a.tree_operation_requests?.request_type || "",
-        operation_type: a.tree_operation_requests?.operation_type || "",
-        service_name: a.tree_operation_requests?.service_name || "",
+        caretaker_profile_id: caretaker.caretaker_profile_id || null,
+        tree_id: treeId || "",
+        group_id: groupId || null,
+        tree_code: tree?.tree_code || a.tree_code || request?.tree_code || null,
+        tree_name: tree?.display_name || tree?.custom_name || tree?.name || a.tree_name || request?.tree_name || null,
+        forest_name: group?.forest_name || group?.group_name || tree?.tree_group_name || null,
+        customer_profile_id: customerProfileId || "",
+        customer_name: customer?.full_name || "Customer",
+        customer_email: customer?.email || "",
+        request_type: request?.request_type || "",
+        operation_type: request?.operation_type || "",
+        service_name: request?.service_name || "",
+        admin_notes: a.admin_notes || request?.admin_notes || log?.admin_notes || "",
         assignment_status: a.status,
         task_status: log?.status || "",
         evidence_status: log?.evidence_status || "PENDING",
@@ -156,9 +321,13 @@ export default function GardenerPhotoUpdatesPage() {
       setSelectedAssignmentId(assignmentFromUrl);
 
       const found = mapped.find((t) => t.assignment_id === assignmentFromUrl);
-      if (found && localStorage.getItem(verifiedKey(found.assignment_id)) === "true") {
+      if (
+        found &&
+        (localStorage.getItem(verifiedKey(found.assignment_id)) === "true" ||
+          localStorage.getItem(oldVerifiedKey(found.assignment_id)) === "VERIFIED")
+      ) {
         setLockedTask(found);
-        setSuccess("✓ Tree Verified");
+        setSuccess("Tree Verified. Evidence Center enabled.");
       }
     }
 
@@ -202,13 +371,37 @@ export default function GardenerPhotoUpdatesPage() {
     if (!parsed || !matchesTask(selectedTask, parsed)) {
       setLockedTask(null);
       localStorage.removeItem(verifiedKey(selectedTask.assignment_id));
-      setQrError("Scanned tree does not match this assigned task.");
+      localStorage.removeItem(oldVerifiedKey(selectedTask.assignment_id));
+      setQrError("Scanned tree does not match this assigned task. Evidence upload is blocked.");
       return;
     }
 
     localStorage.setItem(verifiedKey(selectedTask.assignment_id), "true");
+    localStorage.setItem(oldVerifiedKey(selectedTask.assignment_id), "VERIFIED");
     setLockedTask(selectedTask);
-    setSuccess("✓ Tree Verified");
+    setSuccess("Tree Verified. Evidence Center enabled.");
+  }
+
+  function validateRequiredEvidence(rule: EvidenceRule, photoUrl: string, beforeUrl: string, afterUrl: string) {
+    if (rule.mainRequired && !photoUrl) {
+      throw new Error("Current photo is required for this service.");
+    }
+
+    if (rule.beforeRequired && !beforeUrl) {
+      throw new Error("Before photo is required for this service.");
+    }
+
+    if (rule.afterRequired && !afterUrl) {
+      throw new Error("After photo is required for this service.");
+    }
+
+    if (rule.notesRequired && !notes.trim()) {
+      throw new Error("Notes are required for this service.");
+    }
+
+    if (!photoUrl && !beforeUrl && !afterUrl) {
+      throw new Error("At least one photo is required.");
+    }
   }
 
   async function submitPhotoEvidence() {
@@ -232,9 +425,8 @@ export default function GardenerPhotoUpdatesPage() {
       if (beforeFile) beforeUrl = await uploadWithFallback(beforeFile, `before/${lockedTask.tree_id}`);
       if (afterFile) afterUrl = await uploadWithFallback(afterFile, `after/${lockedTask.tree_id}`);
 
-      if (!photoUrl && !beforeUrl && !afterUrl) {
-        throw new Error("At least one photo is required.");
-      }
+      const rule = getEvidenceRule(lockedTask);
+      validateRequiredEvidence(rule, photoUrl, beforeUrl, afterUrl);
 
       const now = new Date().toISOString();
 
@@ -247,7 +439,7 @@ export default function GardenerPhotoUpdatesPage() {
         photo_url: photoUrl || beforeUrl || afterUrl,
         before_photo_url: beforeUrl || null,
         after_photo_url: afterUrl || null,
-        notes: notes || null,
+        notes: notes.trim() || null,
         status: "SUBMITTED",
         created_at: now,
         updated_at: now,
@@ -255,29 +447,43 @@ export default function GardenerPhotoUpdatesPage() {
 
       if (insertError) throw insertError;
 
+      const taskUpdate = {
+        status: "SUBMITTED",
+        evidence_status: "SUBMITTED",
+        submitted_at: now,
+        updated_at: now,
+      };
+
       if (lockedTask.task_log_id) {
-        await supabase
+        const { error } = await supabase
           .from("caretaker_task_logs")
-          .update({
-            status: "SUBMITTED",
-            evidence_status: "SUBMITTED",
-            submitted_at: now,
-            updated_at: now,
-          })
+          .update(taskUpdate)
           .eq("id", lockedTask.task_log_id);
+
+        if (error) throw error;
       } else {
-        await supabase
-          .from("caretaker_task_logs")
-          .update({
-            status: "SUBMITTED",
-            evidence_status: "SUBMITTED",
-            submitted_at: now,
-            updated_at: now,
-          })
-          .eq("assignment_id", lockedTask.assignment_id);
+        const { error } = await supabase.from("caretaker_task_logs").insert({
+          assignment_id: lockedTask.assignment_id,
+          operation_request_id: lockedTask.operation_request_id,
+          tree_id: lockedTask.tree_id,
+          group_id: lockedTask.group_id || null,
+          customer_profile_id: lockedTask.customer_profile_id,
+          caretaker_id: lockedTask.caretaker_id,
+          caretaker_profile_id: lockedTask.caretaker_profile_id || null,
+          task_type: normalizeService(lockedTask),
+          source_type: normalizeService(lockedTask),
+          notes: "Evidence submitted by gardener.",
+          status: "SUBMITTED",
+          evidence_status: "SUBMITTED",
+          created_at: now,
+          updated_at: now,
+          submitted_at: now,
+        });
+
+        if (error) throw error;
       }
 
-      await supabase
+      const { error: assignmentError } = await supabase
         .from("caretaker_assignments")
         .update({
           status: "SUBMITTED",
@@ -286,7 +492,9 @@ export default function GardenerPhotoUpdatesPage() {
         })
         .eq("id", lockedTask.assignment_id);
 
-      await supabase
+      if (assignmentError) throw assignmentError;
+
+      const { error: requestError } = await supabase
         .from("tree_operation_requests")
         .update({
           status: "SUBMITTED",
@@ -294,6 +502,8 @@ export default function GardenerPhotoUpdatesPage() {
           updated_at: now,
         })
         .eq("id", lockedTask.operation_request_id);
+
+      if (requestError) throw requestError;
 
       await supabase
         .from("trees")
@@ -303,7 +513,7 @@ export default function GardenerPhotoUpdatesPage() {
         })
         .eq("id", lockedTask.tree_id);
 
-      setSuccess("Photo evidence submitted for admin review.");
+      setSuccess("Evidence submitted for Admin Review. This is not marked COMPLETED until Admin approves.");
       setPhotoFile(null);
       setBeforeFile(null);
       setAfterFile(null);
@@ -313,7 +523,7 @@ export default function GardenerPhotoUpdatesPage() {
       setNotes("");
       await loadTasks();
     } catch (err: any) {
-      setQrError(err.message || "Failed to submit photo evidence.");
+      setQrError(err.message || "Failed to submit evidence.");
     } finally {
       setSubmitting(false);
     }
@@ -325,20 +535,29 @@ export default function GardenerPhotoUpdatesPage() {
 
   return (
     <main className="min-h-screen bg-[#06140f] p-6 text-white">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <div>
-          <p className="text-sm uppercase tracking-[0.35em] text-amber-300">Tree Field Verification</p>
-          <h1 className="text-3xl font-bold">Scan Tree QR & Photo Evidence</h1>
-          <p className="text-white/60">Verify the physical tree before submitting any evidence.</p>
-        </div>
+      <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.18),transparent_34%),radial-gradient(circle_at_top_right,rgba(34,197,94,0.14),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
+
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl">
+          <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
+            Gardener Field Workflow
+          </p>
+          <h1 className="mt-3 text-4xl font-black">Photo Updates / Evidence Center</h1>
+          <p className="mt-3 max-w-3xl text-white/60">
+            Verify the assigned tree first. Required evidence changes based on the requested service.
+            Gardener submit sends the work to Admin Review only.
+          </p>
+        </section>
 
         {qrError && <div className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-red-200">{qrError}</div>}
         {success && <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-200">{success}</div>}
 
         <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 shadow-2xl">
-          <h2 className="text-xl font-semibold">🌳 Scan Tree QR</h2>
+          <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+            1. Work Queue
+          </p>
 
-          <label className="mt-4 block text-sm text-white/70">Assigned Task</label>
+          <label className="mt-4 block text-sm font-bold text-white/70">Assigned Task</label>
           <select
             value={selectedAssignmentId}
             disabled={!!lockedTask}
@@ -353,6 +572,42 @@ export default function GardenerPhotoUpdatesPage() {
               </option>
             ))}
           </select>
+        </section>
+
+        {(selectedTask || lockedTask) && (
+          <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 shadow-2xl">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+              2. Work Order
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <Info label="Tree Name" value={(lockedTask || selectedTask)?.tree_name || "Agarwood Tree"} />
+              <Info label="Tree Code" value={(lockedTask || selectedTask)?.tree_code || "—"} />
+              <Info label="Forest / Group" value={(lockedTask || selectedTask)?.forest_name || "Single Tree"} />
+              <Info label="Customer Name" value={(lockedTask || selectedTask)?.customer_name || "Customer"} />
+              <Info label="Customer Email" value={(lockedTask || selectedTask)?.customer_email || "—"} />
+              <Info
+                label="Requested Service"
+                value={
+                  (lockedTask || selectedTask)?.service_name ||
+                  (lockedTask || selectedTask)?.request_type ||
+                  (lockedTask || selectedTask)?.operation_type ||
+                  "—"
+                }
+              />
+              <Info label="Assignment Status" value={(lockedTask || selectedTask)?.assignment_status || "—"} />
+              <Info label="Evidence Status" value={(lockedTask || selectedTask)?.evidence_status || "PENDING"} />
+              <Info label="Admin Notes" value={(lockedTask || selectedTask)?.admin_notes || "—"} />
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-3xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-5 shadow-2xl">
+          <p className="text-xs font-black uppercase tracking-[0.25em] text-[#ffe49a]">
+            3. Scan Tree QR
+          </p>
+          <p className="mt-2 text-sm text-white/65">
+            Scan or enter tree_code / tree_id. If it does not match the assigned task, evidence upload stays blocked.
+          </p>
 
           <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
             <input
@@ -361,7 +616,7 @@ export default function GardenerPhotoUpdatesPage() {
               placeholder="Scan or enter tree QR code"
               className="rounded-xl border border-white/10 bg-black/30 p-3 text-white placeholder:text-white/40"
             />
-            <button onClick={scanQr} className="rounded-xl bg-amber-400 px-5 py-3 font-semibold text-black hover:bg-amber-300">
+            <button onClick={scanQr} className="rounded-xl bg-[#d9b45f] px-5 py-3 font-black text-black hover:bg-[#f7d774]">
               Verify Tree
             </button>
           </div>
@@ -369,30 +624,43 @@ export default function GardenerPhotoUpdatesPage() {
 
         {lockedTask && (
           <section className="rounded-3xl border border-emerald-400/30 bg-emerald-400/10 p-5">
-            <h2 className="text-xl font-semibold text-emerald-200">✓ Tree Verified</h2>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <Info label="Tree Name" value={lockedTask.tree_name || "Agarwood Tree"} />
-              <Info label="Tree Code" value={lockedTask.tree_code || "—"} />
-              <Info label="Customer Name" value={lockedTask.customer_name || "Customer"} />
-              <Info label="Customer Email" value={lockedTask.customer_email || "—"} />
-              <Info label="Service Requested" value={lockedTask.service_name || lockedTask.request_type || lockedTask.operation_type || "—"} />
-              <Info label="Assignment ID" value={lockedTask.assignment_id} small />
-            </div>
+            <h2 className="text-xl font-black text-emerald-200">Tree Verified</h2>
+            <p className="mt-1 text-sm text-emerald-100/80">
+              Evidence Center is unlocked for this assignment.
+            </p>
           </section>
         )}
 
-        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
-          <h2 className="text-xl font-semibold">Upload Photo Evidence</h2>
-          <p className="mt-1 text-sm text-white/50">Enabled only after Tree Verified.</p>
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 shadow-2xl">
+          <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+            4. Evidence Center
+          </p>
+          <h2 className="mt-2 text-2xl font-black">{evidenceRule.title}</h2>
+          <p className="mt-1 text-sm text-white/50">{evidenceRule.helper}</p>
 
           <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <FileBox label="Main Photo" file={photoFile} setFile={setPhotoFile} disabled={!lockedTask} />
-            <FileBox label="Before Photo" file={beforeFile} setFile={setBeforeFile} disabled={!lockedTask} />
-            <FileBox label="After Photo" file={afterFile} setFile={setAfterFile} disabled={!lockedTask} />
+            <FileBox
+              label={`Current Photo${evidenceRule.mainRequired ? " *" : ""}`}
+              file={photoFile}
+              setFile={setPhotoFile}
+              disabled={!lockedTask}
+            />
+            <FileBox
+              label={`Before Photo${evidenceRule.beforeRequired ? " *" : ""}`}
+              file={beforeFile}
+              setFile={setBeforeFile}
+              disabled={!lockedTask}
+            />
+            <FileBox
+              label={`After Photo${evidenceRule.afterRequired ? " *" : ""}`}
+              file={afterFile}
+              setFile={setAfterFile}
+              disabled={!lockedTask}
+            />
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <input disabled={!lockedTask} value={fallbackPhotoUrl} onChange={(e) => setFallbackPhotoUrl(e.target.value)} placeholder="Fallback main photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
+            <input disabled={!lockedTask} value={fallbackPhotoUrl} onChange={(e) => setFallbackPhotoUrl(e.target.value)} placeholder="Fallback current photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
             <input disabled={!lockedTask} value={fallbackBeforeUrl} onChange={(e) => setFallbackBeforeUrl(e.target.value)} placeholder="Fallback before photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
             <input disabled={!lockedTask} value={fallbackAfterUrl} onChange={(e) => setFallbackAfterUrl(e.target.value)} placeholder="Fallback after photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
           </div>
@@ -401,21 +669,30 @@ export default function GardenerPhotoUpdatesPage() {
             disabled={!lockedTask}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Field notes"
-            className="mt-4 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40"
+            placeholder={evidenceRule.notesRequired ? "Field notes required" : "Field notes optional"}
+            className="mt-4 min-h-[120px] w-full rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40"
           />
+        </section>
+
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 shadow-2xl">
+          <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+            5. Submit Work
+          </p>
+          <p className="mt-2 text-sm text-white/60">
+            Submit changes status to SUBMITTED only. Admin must approve before customer sees COMPLETED.
+          </p>
 
           <button
             onClick={submitPhotoEvidence}
             disabled={submitting || !lockedTask}
-            className="mt-5 rounded-xl bg-emerald-500 px-6 py-3 font-semibold text-black disabled:opacity-50"
+            className="mt-5 rounded-xl bg-emerald-500 px-6 py-3 font-black text-black disabled:opacity-50"
           >
-            {submitting ? "Submitting..." : "Submit Photo Evidence"}
+            {submitting ? "Submitting..." : "Submit Evidence for Admin Review"}
           </button>
         </section>
 
         <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-          <h2 className="mb-4 text-xl font-semibold">Assigned Tasks</h2>
+          <h2 className="mb-4 text-xl font-black">Assigned Tasks</h2>
           {loading ? (
             <p className="text-white/60">Loading...</p>
           ) : tasks.length === 0 ? (
@@ -426,7 +703,7 @@ export default function GardenerPhotoUpdatesPage() {
                 <div key={task.assignment_id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h3 className="text-lg font-semibold">{task.tree_name || "Agarwood Tree"}</h3>
+                      <h3 className="text-lg font-black">{task.tree_name || "Agarwood Tree"}</h3>
                       <p className="text-sm text-amber-200">{task.tree_code || "No tree code"}</p>
                       <p className="text-sm text-white/60">{task.customer_name} • {task.customer_email}</p>
                     </div>
@@ -444,11 +721,11 @@ export default function GardenerPhotoUpdatesPage() {
   );
 }
 
-function Info({ label, value, small = false }: { label: string; value: string; small?: boolean }) {
+function Info({ label, value }: { label: string; value?: string | null }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
       <p className="text-xs uppercase tracking-widest text-white/40">{label}</p>
-      <p className={small ? "break-all text-xs text-white/70" : "text-white"}>{value}</p>
+      <p className="mt-1 text-sm font-bold text-white">{value || "—"}</p>
     </div>
   );
 }
@@ -466,7 +743,7 @@ function FileBox({
 }) {
   return (
     <label className="rounded-2xl border border-dashed border-white/20 bg-black/20 p-4">
-      <p className="font-medium">{label}</p>
+      <p className="font-bold">{label}</p>
       <input
         disabled={disabled}
         type="file"

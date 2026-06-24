@@ -1,43 +1,44 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 type Row = Record<string, any>;
 
-type Filter =
-  | "ALL"
-  | "TREE_OPERATION"
-  | "TREE_VALUATION_INSPECTION"
-  | "SELL_TREE_INSPECTION"
-  | "ASSIGNED"
-  | "IN_PROGRESS"
-  | "SUBMITTED"
-  | "COMPLETED";
-
-type DisplayTask = {
+type WorkItem = {
   key: string;
-  assignment: Row | null;
+  assignment: Row;
   task: Row | null;
   request: Row | null;
   tree: Row | null;
   group: Row | null;
   customer: Row | null;
   status: string;
-  sourceType: string;
-  assignmentType: string;
-  title: string;
-  treeId: string | null;
-  groupId: string | null;
-  customerProfileId: string | null;
-  operationRequestId: string | null;
-  assignmentId: string | null;
-  createdAt: string | null;
+  evidenceStatus: string;
 };
 
-function normalizeStatus(value: any) {
-  return String(value || "ASSIGNED").toUpperCase();
+const SERVICE_LABELS: Record<string, string> = {
+  PHOTO_UPDATE: "Photo Update",
+  GPS_VERIFICATION: "GPS Verification",
+  HEALTH_CHECK: "Health Check",
+  WATERING_SERVICE: "Watering Service",
+  FERTILIZER: "Fertilizer",
+  FUNGICIDE: "Fungicide",
+  INSECTICIDE: "Insecticide",
+  PRUNING: "Pruning",
+  PEST_CONTROL: "Pest Control",
+};
+
+function normalize(value: any) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function statusOf(value: any) {
+  return normalize(value || "ASSIGNED");
+}
+
+function unique(values: any[]) {
+  return Array.from(new Set(values.filter(Boolean).map(String)));
 }
 
 function makeMap(rows: Row[]) {
@@ -46,57 +47,92 @@ function makeMap(rows: Row[]) {
   return map;
 }
 
-function uniqueStrings(values: any[]) {
-  return Array.from(new Set(values.filter(Boolean).map((value) => String(value))));
+function serviceOf(item: WorkItem | null) {
+  const raw =
+    item?.request?.operation_type ||
+    item?.request?.request_type ||
+    item?.request?.service_name ||
+    item?.task?.task_type ||
+    item?.assignment?.assignment_type ||
+    "PHOTO_UPDATE";
+
+  return normalize(raw).replaceAll(" ", "_");
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "—";
-  return new Date(value).toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+function serviceLabel(value: string) {
+  return SERVICE_LABELS[value] || value.replaceAll("_", " ");
 }
 
-function getSourceType(task?: Row | null, assignment?: Row | null, request?: Row | null) {
-  return (
-    task?.source_type ||
-    assignment?.source_type ||
-    request?.source_type ||
-    request?.request_type ||
-    request?.operation_type ||
-    "TREE_OPERATION"
-  );
-}
+function evidenceRules(service: string) {
+  if (service === "PHOTO_UPDATE") {
+    return {
+      photo: true,
+      gps: false,
+      health: false,
+      before: false,
+      after: false,
+      notes: false,
+      notesLabel: "Notes optional",
+    };
+  }
 
-function getTitle(task?: Row | null, assignment?: Row | null, request?: Row | null) {
-  const sourceType = getSourceType(task, assignment, request);
+  if (service === "GPS_VERIFICATION") {
+    return {
+      photo: false,
+      gps: true,
+      health: false,
+      before: false,
+      after: false,
+      notes: false,
+      notesLabel: "Notes optional",
+    };
+  }
 
-  if (sourceType === "TREE_VALUATION_INSPECTION") return "Tree Valuation Inspection";
-  if (sourceType === "SELL_TREE_INSPECTION") return "Sell Tree Inspection";
+  if (service === "HEALTH_CHECK") {
+    return {
+      photo: false,
+      gps: false,
+      health: true,
+      before: false,
+      after: false,
+      notes: true,
+      notesLabel: "Notes required",
+    };
+  }
 
-  return request?.service_name || request?.operation_type || task?.task_type || "Tree Operation";
+  return {
+    photo: false,
+    gps: false,
+    health: false,
+    before: true,
+    after: true,
+    notes: true,
+    notesLabel: "Notes required",
+  };
 }
 
 export default function GardenerTasksPage() {
   const [caretaker, setCaretaker] = useState<Row | null>(null);
   const [assignments, setAssignments] = useState<Row[]>([]);
-  const [taskLogs, setTaskLogs] = useState<Row[]>([]);
+  const [tasks, setTasks] = useState<Row[]>([]);
   const [requests, setRequests] = useState<Row[]>([]);
   const [trees, setTrees] = useState<Row[]>([]);
   const [groups, setGroups] = useState<Row[]>([]);
   const [customers, setCustomers] = useState<Row[]>([]);
-  const [filter, setFilter] = useState<Filter>("ALL");
+  const [selectedKey, setSelectedKey] = useState("");
+  const [scanValue, setScanValue] = useState("");
+  const [verifiedKey, setVerifiedKey] = useState("");
+  const [currentPhoto, setCurrentPhoto] = useState<File | null>(null);
+  const [beforePhoto, setBeforePhoto] = useState<File | null>(null);
+  const [afterPhoto, setAfterPhoto] = useState<File | null>(null);
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [healthStatus, setHealthStatus] = useState("");
+  const [notes, setNotes] = useState("");
+  const [filter, setFilter] = useState("ACTIVE");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [savingKey, setSavingKey] = useState("");
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   async function loadData() {
     setLoading(true);
@@ -112,8 +148,7 @@ export default function GardenerTasksPage() {
       return;
     }
 
-    const email = user.email?.trim() || "";
-    const lowerEmail = email.toLowerCase();
+    const email = user.email?.trim().toLowerCase() || "";
 
     const { data: profileById } = await supabase
       .from("profiles")
@@ -124,46 +159,33 @@ export default function GardenerTasksPage() {
     const { data: profileByEmail } = await supabase
       .from("profiles")
       .select("id, full_name, email")
-      .eq("email", lowerEmail)
+      .eq("email", email)
       .maybeSingle();
 
     const profile = profileById || profileByEmail;
 
-    const { data: caretakerByProfile, error: caretakerProfileError } = profile?.id
+    const { data: caretakerByProfile } = profile?.id
       ? await supabase
           .from("caretakers")
           .select("*")
           .eq("caretaker_profile_id", profile.id)
           .maybeSingle()
-      : { data: null, error: null };
+      : { data: null };
 
-    if (caretakerProfileError) return fail(caretakerProfileError.message);
-
-    const { data: caretakerByEmail, error: caretakerEmailError } = await supabase
+    const { data: caretakerByEmail } = await supabase
       .from("caretakers")
       .select("*")
       .ilike("email", email)
       .maybeSingle();
 
-    if (caretakerEmailError) return fail(caretakerEmailError.message);
-
     const caretakerRow = caretakerByProfile || caretakerByEmail;
 
-    if (!caretakerRow) return fail("Caretaker profile not found.");
-    if (normalizeStatus(caretakerRow.status) !== "ACTIVE") {
-      return fail("Your gardener account is not ACTIVE.");
-    }
+    if (!caretakerRow) return fail("Gardener profile not found.");
+    if (statusOf(caretakerRow.status) !== "ACTIVE") return fail("Your gardener account is not ACTIVE.");
 
     setCaretaker(caretakerRow);
 
-    const assignmentFilters = [
-      `caretaker_id.eq.${caretakerRow.id}`,
-      caretakerRow.caretaker_profile_id
-        ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}`
-        : "",
-    ].filter(Boolean);
-
-    const taskFilters = [
+    const filters = [
       `caretaker_id.eq.${caretakerRow.id}`,
       caretakerRow.caretaker_profile_id
         ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}`
@@ -174,89 +196,77 @@ export default function GardenerTasksPage() {
       supabase
         .from("caretaker_assignments")
         .select("*")
-        .or(assignmentFilters.join(","))
+        .or(filters.join(","))
         .order("created_at", { ascending: false }),
 
       supabase
         .from("caretaker_task_logs")
         .select("*")
-        .or(taskFilters.join(","))
+        .or(filters.join(","))
         .order("created_at", { ascending: false }),
     ]);
 
     if (assignmentResult.error) return fail(assignmentResult.error.message);
     if (taskResult.error) return fail(taskResult.error.message);
 
-    const safeAssignments = assignmentResult.data || [];
-    const safeTasks = taskResult.data || [];
+    const assignmentRows = assignmentResult.data || [];
+    const taskRows = taskResult.data || [];
 
-    const operationRequestIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.operation_request_id),
-      ...safeTasks.map((item) => item.operation_request_id),
+    const requestIds = unique([
+      ...assignmentRows.map((x) => x.operation_request_id),
+      ...taskRows.map((x) => x.operation_request_id),
     ]);
 
     let requestRows: Row[] = [];
-
-    if (operationRequestIds.length > 0) {
-      const { data, error } = await supabase
-        .from("tree_operation_requests")
-        .select("*")
-        .in("id", operationRequestIds);
-
-      if (!error) requestRows = data || [];
+    if (requestIds.length) {
+      const { data } = await supabase.from("tree_operation_requests").select("*").in("id", requestIds);
+      requestRows = data || [];
     }
 
-    const treeIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.tree_id),
-      ...safeTasks.map((item) => item.tree_id),
-      ...requestRows.map((item) => item.tree_id),
+    const treeIds = unique([
+      ...assignmentRows.map((x) => x.tree_id),
+      ...taskRows.map((x) => x.tree_id),
+      ...requestRows.map((x) => x.tree_id),
     ]);
 
     let treeRows: Row[] = [];
-
-    if (treeIds.length > 0) {
-      const { data, error } = await supabase.from("trees").select("*").in("id", treeIds);
-      if (!error) treeRows = data || [];
+    if (treeIds.length) {
+      const { data } = await supabase.from("trees").select("*").in("id", treeIds);
+      treeRows = data || [];
     }
 
-    const groupIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.group_id),
-      ...safeTasks.map((item) => item.group_id),
-      ...requestRows.map((item) => item.group_id),
-      ...treeRows.map((item) => item.group_id),
+    const groupIds = unique([
+      ...assignmentRows.map((x) => x.group_id),
+      ...taskRows.map((x) => x.group_id),
+      ...requestRows.map((x) => x.group_id),
+      ...treeRows.map((x) => x.group_id),
     ]);
 
     let groupRows: Row[] = [];
-
-    if (groupIds.length > 0) {
-      const { data, error } = await supabase.from("tree_groups").select("*").in("id", groupIds);
-      if (!error) groupRows = data || [];
+    if (groupIds.length) {
+      const { data } = await supabase.from("tree_groups").select("*").in("id", groupIds);
+      groupRows = data || [];
     }
 
-    const customerIds = uniqueStrings([
-      ...safeAssignments.map((item) => item.customer_profile_id),
-      ...safeTasks.map((item) => item.customer_profile_id),
-      ...requestRows.map((item) => item.customer_profile_id),
-      ...requestRows.map((item) => item.profile_id),
-      ...treeRows.map((item) => item.customer_profile_id),
-      ...treeRows.map((item) => item.profile_id),
-      ...groupRows.map((item) => item.customer_profile_id),
-      ...groupRows.map((item) => item.profile_id),
+    const customerIds = unique([
+      ...assignmentRows.map((x) => x.customer_profile_id),
+      ...taskRows.map((x) => x.customer_profile_id),
+      ...requestRows.map((x) => x.customer_profile_id),
+      ...requestRows.map((x) => x.profile_id),
+      ...treeRows.map((x) => x.customer_profile_id),
+      ...treeRows.map((x) => x.profile_id),
+      ...groupRows.map((x) => x.customer_profile_id),
+      ...groupRows.map((x) => x.profile_id),
     ]);
 
     let customerRows: Row[] = [];
-
-    if (customerIds.length > 0) {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, email, phone")
-        .in("id", customerIds);
-
-      if (!error) customerRows = data || [];
+    if (customerIds.length) {
+      const { data } = await supabase.from("profiles").select("id, full_name, email").in("id", customerIds);
+      customerRows = data || [];
     }
 
-    setAssignments(safeAssignments);
-    setTaskLogs(safeTasks);
+    setAssignments(assignmentRows);
+    setTasks(taskRows);
     setRequests(requestRows);
     setTrees(treeRows);
     setGroups(groupRows);
@@ -269,537 +279,689 @@ export default function GardenerTasksPage() {
     setLoading(false);
   }
 
-  const requestMap = useMemo(() => makeMap(requests), [requests]);
-  const treeMap = useMemo(() => makeMap(trees), [trees]);
-  const groupMap = useMemo(() => makeMap(groups), [groups]);
-  const customerMap = useMemo(() => makeMap(customers), [customers]);
+  useEffect(() => {
+    loadData();
+  }, []);
 
-  const displayTasks = useMemo<DisplayTask[]>(() => {
-    const rows: DisplayTask[] = [];
-    const coveredTaskIds = new Set<string>();
+  const workItems = useMemo<WorkItem[]>(() => {
+    const requestMap = makeMap(requests);
+    const treeMap = makeMap(trees);
+    const groupMap = makeMap(groups);
+    const customerMap = makeMap(customers);
 
-    assignments.forEach((assignment) => {
+    return assignments.map((assignment) => {
       const task =
-        taskLogs.find((item) => String(item.assignment_id || "") === String(assignment.id)) ||
-        taskLogs.find(
-          (item) =>
-            String(item.operation_request_id || "") ===
-            String(assignment.operation_request_id || "")
-        ) ||
+        tasks.find((x) => String(x.assignment_id || "") === String(assignment.id)) ||
+        tasks.find((x) => String(x.operation_request_id || "") === String(assignment.operation_request_id || "")) ||
         null;
-
-      if (task?.id) coveredTaskIds.add(String(task.id));
 
       const request = assignment.operation_request_id
         ? requestMap.get(String(assignment.operation_request_id)) || null
         : null;
 
-      const treeId = task?.tree_id || assignment.tree_id || request?.tree_id || null;
+      const treeId = assignment.tree_id || task?.tree_id || request?.tree_id;
       const tree = treeId ? treeMap.get(String(treeId)) || null : null;
 
-      const groupId =
-        task?.group_id || assignment.group_id || request?.group_id || tree?.group_id || null;
+      const groupId = assignment.group_id || task?.group_id || request?.group_id || tree?.group_id;
       const group = groupId ? groupMap.get(String(groupId)) || null : null;
 
-      const customerProfileId =
-        task?.customer_profile_id ||
+      const customerId =
         assignment.customer_profile_id ||
+        task?.customer_profile_id ||
         request?.customer_profile_id ||
         request?.profile_id ||
         tree?.customer_profile_id ||
         tree?.profile_id ||
         group?.customer_profile_id ||
-        group?.profile_id ||
-        null;
+        group?.profile_id;
 
-      const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
-      const sourceType = getSourceType(task, assignment, request);
+      const customer = customerId ? customerMap.get(String(customerId)) || null : null;
 
-      rows.push({
-        key: `assignment-${assignment.id}`,
+      return {
+        key: String(assignment.id),
         assignment,
         task,
         request,
         tree,
         group,
         customer,
-        status: normalizeStatus(task?.status || assignment.status || request?.status),
-        sourceType,
-        assignmentType: groupId ? "FOREST ASSIGNMENT" : "TREE ASSIGNMENT",
-        title: getTitle(task, assignment, request),
-        treeId,
-        groupId,
-        customerProfileId,
-        operationRequestId:
-          task?.operation_request_id || assignment.operation_request_id || request?.id || null,
-        assignmentId: assignment.id || task?.assignment_id || null,
-        createdAt: task?.created_at || assignment.created_at || request?.created_at || null,
-      });
+        status: statusOf(task?.status || assignment.status || request?.assignment_status || request?.status),
+        evidenceStatus: statusOf(task?.evidence_status || "PENDING"),
+      };
     });
+  }, [assignments, tasks, requests, trees, groups, customers]);
 
-    taskLogs.forEach((task) => {
-      if (coveredTaskIds.has(String(task.id))) return;
+  const selected = useMemo(() => {
+    return workItems.find((x) => x.key === selectedKey) || workItems[0] || null;
+  }, [workItems, selectedKey]);
 
-      const assignment = task.assignment_id
-        ? assignments.find((item) => String(item.id) === String(task.assignment_id)) || null
-        : null;
+  useEffect(() => {
+    if (!selectedKey && workItems[0]) setSelectedKey(workItems[0].key);
+  }, [workItems, selectedKey]);
 
-      const request = task.operation_request_id
-        ? requestMap.get(String(task.operation_request_id)) || null
-        : null;
-
-      const treeId = task.tree_id || assignment?.tree_id || request?.tree_id || null;
-      const tree = treeId ? treeMap.get(String(treeId)) || null : null;
-
-      const groupId = task.group_id || assignment?.group_id || request?.group_id || tree?.group_id || null;
-      const group = groupId ? groupMap.get(String(groupId)) || null : null;
-
-      const customerProfileId =
-        task.customer_profile_id ||
-        assignment?.customer_profile_id ||
-        request?.customer_profile_id ||
-        request?.profile_id ||
-        tree?.customer_profile_id ||
-        tree?.profile_id ||
-        group?.customer_profile_id ||
-        group?.profile_id ||
-        null;
-
-      const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
-      const sourceType = getSourceType(task, assignment, request);
-
-      rows.push({
-        key: `task-${task.id}`,
-        assignment,
-        task,
-        request,
-        tree,
-        group,
-        customer,
-        status: normalizeStatus(task.status || assignment?.status || request?.status),
-        sourceType,
-        assignmentType: groupId ? "FOREST ASSIGNMENT" : "TREE ASSIGNMENT",
-        title: getTitle(task, assignment, request),
-        treeId,
-        groupId,
-        customerProfileId,
-        operationRequestId: task.operation_request_id || assignment?.operation_request_id || request?.id || null,
-        assignmentId: task.assignment_id || assignment?.id || null,
-        createdAt: task.created_at || assignment?.created_at || request?.created_at || null,
-      });
-    });
-
-    return rows.sort((a, b) => {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA;
-    });
-  }, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
-
-  const filteredTasks = useMemo(() => {
-    if (filter === "ALL") return displayTasks;
-
-    if (["TREE_OPERATION", "TREE_VALUATION_INSPECTION", "SELL_TREE_INSPECTION"].includes(filter)) {
-      return displayTasks.filter((item) => item.sourceType === filter);
-    }
-
-    return displayTasks.filter((item) => item.status === filter);
-  }, [displayTasks, filter]);
+  const visibleItems = useMemo(() => {
+    if (filter === "ALL") return workItems;
+    if (filter === "ACTIVE") return workItems.filter((x) => !["COMPLETED", "CANCELLED"].includes(x.status));
+    return workItems.filter((x) => x.status === filter);
+  }, [workItems, filter]);
 
   const stats = useMemo(() => {
     return {
-      total: displayTasks.length,
-      treeOps: displayTasks.filter((item) => item.sourceType === "TREE_OPERATION").length,
-      valuation: displayTasks.filter((item) => item.sourceType === "TREE_VALUATION_INSPECTION").length,
-      sellTree: displayTasks.filter((item) => item.sourceType === "SELL_TREE_INSPECTION").length,
-      assigned: displayTasks.filter((item) => item.status === "ASSIGNED").length,
-      inProgress: displayTasks.filter((item) => item.status === "IN_PROGRESS").length,
-      submitted: displayTasks.filter((item) => item.status === "SUBMITTED").length,
-      completed: displayTasks.filter((item) => item.status === "COMPLETED").length,
+      assigned: workItems.filter((x) => x.status === "ASSIGNED").length,
+      inProgress: workItems.filter((x) => x.status === "IN_PROGRESS").length,
+      submitted: workItems.filter((x) => x.status === "SUBMITTED").length,
+      completed: workItems.filter((x) => x.status === "COMPLETED").length,
     };
-  }, [displayTasks]);
+  }, [workItems]);
 
-  async function ensureTaskLog(item: DisplayTask, status: string) {
-    if (!caretaker) throw new Error("Caretaker not loaded.");
+  const selectedService = serviceOf(selected);
+  const rules = evidenceRules(selectedService);
+  const isVerified = selected && verifiedKey === selected.key;
 
-    const now = new Date().toISOString();
-
-    const payload = {
-      assignment_id: item.assignmentId || null,
-      caretaker_id: caretaker.id,
-      caretaker_profile_id: caretaker.caretaker_profile_id || null,
-      customer_profile_id: item.customerProfileId || null,
-      tree_id: item.treeId || null,
-      group_id: item.groupId || null,
-      operation_request_id: item.operationRequestId || null,
-      task_type: item.sourceType || "TREE_OPERATION",
-      source_type: item.sourceType || "TREE_OPERATION",
-      evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
-      notes: `Gardener updated task to ${status.replace("_", " ")}.`,
-      status,
-      created_at: now,
-      updated_at: now,
-      started_at: status === "IN_PROGRESS" ? now : null,
-      submitted_at: status === "SUBMITTED" ? now : null,
-      completed_at: status === "COMPLETED" ? now : null,
-    };
-
-    const { data, error } = await supabase
-      .from("caretaker_task_logs")
-      .insert(payload)
-      .select("id")
-      .single();
-
-    if (error || !data) throw new Error(error?.message || "Failed to create task log.");
-    return data.id;
+  function resetEvidenceForm() {
+    setCurrentPhoto(null);
+    setBeforePhoto(null);
+    setAfterPhoto(null);
+    setLatitude("");
+    setLongitude("");
+    setHealthStatus("");
+    setNotes("");
   }
 
-  async function updateTaskStatus(item: DisplayTask, nextStatus: string) {
-    setMessage("");
-    setSavingKey(item.key);
+  function verifyTree() {
+    if (!selected) return;
 
-    const status = normalizeStatus(nextStatus);
+    const scanned = scanValue.trim().toLowerCase();
+    const treeCode = String(selected.tree?.tree_code || "").trim().toLowerCase();
+    const treeId = String(selected.tree?.id || selected.assignment.tree_id || "").trim().toLowerCase();
+
+    if (!scanned) {
+      setMessage("Scan or manually enter tree QR / tree code first.");
+      return;
+    }
+
+    if (scanned === treeCode || scanned === treeId) {
+      setVerifiedKey(selected.key);
+      setMessage("Tree Verified. Evidence upload is now unlocked.");
+      return;
+    }
+
+    setVerifiedKey("");
+    setMessage("Tree mismatch. Evidence upload blocked.");
+  }
+
+  async function startWork() {
+    if (!selected || !caretaker) return;
+    setSaving(true);
+    setMessage("");
+
     const now = new Date().toISOString();
 
     try {
-      if (item.task?.id) {
-        const taskUpdate: Row = {
-          status,
-          evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
-          updated_at: now,
-        };
-
-        if (status === "IN_PROGRESS") taskUpdate.started_at = item.task.started_at || now;
-        if (status === "SUBMITTED") taskUpdate.submitted_at = now;
-        if (status === "COMPLETED") taskUpdate.completed_at = now;
-
+      if (selected.task?.id) {
         const { error } = await supabase
           .from("caretaker_task_logs")
-          .update(taskUpdate)
-          .eq("id", item.task.id);
+          .update({
+            status: "IN_PROGRESS",
+            evidence_status: "PENDING",
+            started_at: selected.task.started_at || now,
+            updated_at: now,
+          })
+          .eq("id", selected.task.id);
 
         if (error) throw error;
       } else {
-        await ensureTaskLog(item, status);
-      }
-
-      if (item.assignmentId) {
-        const assignmentUpdate: Row = {
-          status,
+        const { error } = await supabase.from("caretaker_task_logs").insert({
+          assignment_id: selected.assignment.id,
+          operation_request_id: selected.assignment.operation_request_id || selected.request?.id,
+          tree_id: selected.assignment.tree_id || selected.request?.tree_id,
+          group_id: selected.assignment.group_id || selected.request?.group_id,
+          customer_profile_id:
+            selected.assignment.customer_profile_id ||
+            selected.request?.customer_profile_id ||
+            selected.request?.profile_id,
+          caretaker_id: caretaker.id,
+          caretaker_profile_id: caretaker.caretaker_profile_id || null,
+          task_type: selectedService,
+          source_type: "TREE_OPERATION",
+          status: "IN_PROGRESS",
+          evidence_status: "PENDING",
+          notes: "Gardener started field work.",
+          started_at: now,
+          created_at: now,
           updated_at: now,
-        };
-
-        if (status === "IN_PROGRESS") assignmentUpdate.started_at = item.assignment?.started_at || now;
-        if (status === "SUBMITTED") assignmentUpdate.submitted_at = now;
-        if (status === "COMPLETED") assignmentUpdate.completed_at = now;
-
-        const { error } = await supabase
-          .from("caretaker_assignments")
-          .update(assignmentUpdate)
-          .eq("id", item.assignmentId);
+        });
 
         if (error) throw error;
       }
 
-      if (item.operationRequestId && item.sourceType === "TREE_OPERATION") {
-        const requestUpdate: Row = {
-          status,
-          assignment_status: status,
+      const { error: assignmentError } = await supabase
+        .from("caretaker_assignments")
+        .update({
+          status: "IN_PROGRESS",
+          started_at: selected.assignment.started_at || now,
           updated_at: now,
-        };
+        })
+        .eq("id", selected.assignment.id);
 
-        if (status === "COMPLETED") requestUpdate.completed_at = now;
+      if (assignmentError) throw assignmentError;
 
-        const { error } = await supabase
+      if (selected.assignment.operation_request_id || selected.request?.id) {
+        const { error: requestError } = await supabase
           .from("tree_operation_requests")
-          .update(requestUpdate)
-          .eq("id", item.operationRequestId);
+          .update({
+            status: "IN_PROGRESS",
+            assignment_status: "IN_PROGRESS",
+            updated_at: now,
+          })
+          .eq("id", selected.assignment.operation_request_id || selected.request?.id);
 
-        if (error) throw error;
+        if (requestError) throw requestError;
       }
 
-      setMessage(`Task synced as ${status.replace("_", " ")}.`);
+      setMessage("Work started. Verify tree QR before submitting evidence.");
       await loadData();
     } catch (error: any) {
-      setMessage(error?.message || "Task update failed.");
+      setMessage(error?.message || "Failed to start work.");
     }
 
-    setSavingKey("");
+    setSaving(false);
+  }
+
+  async function uploadEvidenceFile(file: File | null, folder: string) {
+    if (!file || !selected) return null;
+
+    const ext = file.name.split(".").pop() || "jpg";
+    const path = `${folder}/${selected.assignment.id}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${ext}`;
+
+    let bucket = "tree-evidence";
+    let upload = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
+
+    if (upload.error) {
+      bucket = "tree-photos";
+      upload = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
+    }
+
+    if (upload.error) throw upload.error;
+
+    return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  }
+
+  function validateSubmission() {
+    if (!selected || !caretaker) return "Work order not loaded.";
+    if (!selected.assignment.id) return "Missing assignment_id.";
+    if (!(selected.assignment.operation_request_id || selected.request?.id)) return "Missing operation_request_id.";
+    if (!(selected.assignment.tree_id || selected.request?.tree_id)) return "Missing tree_id.";
+    if (
+      !(
+        selected.assignment.customer_profile_id ||
+        selected.request?.customer_profile_id ||
+        selected.request?.profile_id ||
+        selected.tree?.customer_profile_id ||
+        selected.tree?.profile_id
+      )
+    ) {
+      return "Missing customer_profile_id.";
+    }
+    if (!caretaker.id) return "Missing caretaker_id.";
+    if (!isVerified) return "Tree QR must be verified before evidence upload.";
+    if (rules.photo && !currentPhoto) return "Current photo is required.";
+    if (rules.before && !beforePhoto) return "Before photo is required.";
+    if (rules.after && !afterPhoto) return "After photo is required.";
+    if (rules.gps && (!latitude || !longitude)) return "GPS latitude and longitude are required.";
+    if (rules.health && !healthStatus) return "Health status is required.";
+    if (rules.notes && !notes.trim()) return "Notes are required.";
+    return "";
+  }
+
+  async function submitWork() {
+    const validationError = validateSubmission();
+    if (validationError || !selected || !caretaker) {
+      setMessage(validationError);
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+
+    const now = new Date().toISOString();
+    const operationRequestId = selected.assignment.operation_request_id || selected.request?.id;
+    const treeId = selected.assignment.tree_id || selected.request?.tree_id;
+    const customerProfileId =
+      selected.assignment.customer_profile_id ||
+      selected.request?.customer_profile_id ||
+      selected.request?.profile_id ||
+      selected.tree?.customer_profile_id ||
+      selected.tree?.profile_id;
+
+    try {
+      const currentPhotoUrl = await uploadEvidenceFile(currentPhoto, "current");
+      const beforePhotoUrl = await uploadEvidenceFile(beforePhoto, "before");
+      const afterPhotoUrl = await uploadEvidenceFile(afterPhoto, "after");
+
+      if (currentPhotoUrl || beforePhotoUrl || afterPhotoUrl) {
+        const { error } = await supabase.from("tree_photo_updates").insert({
+          assignment_id: selected.assignment.id,
+          operation_request_id: operationRequestId,
+          tree_id: treeId,
+          customer_profile_id: customerProfileId,
+          caretaker_id: caretaker.id,
+          photo_url: currentPhotoUrl,
+          before_photo_url: beforePhotoUrl,
+          after_photo_url: afterPhotoUrl,
+          notes: notes || null,
+          status: "SUBMITTED",
+          created_at: now,
+          updated_at: now,
+        });
+
+        if (error) throw error;
+      }
+
+      if (rules.gps || latitude || longitude) {
+        const { error } = await supabase.from("tree_gps_logs").insert({
+          assignment_id: selected.assignment.id,
+          operation_request_id: operationRequestId,
+          tree_id: treeId,
+          customer_profile_id: customerProfileId,
+          caretaker_id: caretaker.id,
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          notes: notes || null,
+          status: "SUBMITTED",
+          created_at: now,
+          updated_at: now,
+        });
+
+        if (error) throw error;
+      }
+
+      if (rules.health || healthStatus) {
+        const { error } = await supabase.from("tree_health_reports").insert({
+          assignment_id: selected.assignment.id,
+          operation_request_id: operationRequestId,
+          tree_id: treeId,
+          customer_profile_id: customerProfileId,
+          caretaker_id: caretaker.id,
+          health_status: healthStatus,
+          notes: notes || null,
+          status: "SUBMITTED",
+          created_at: now,
+          updated_at: now,
+        });
+
+        if (error) throw error;
+      }
+
+      const taskId =
+        selected.task?.id ||
+        (
+          await supabase
+            .from("caretaker_task_logs")
+            .insert({
+              assignment_id: selected.assignment.id,
+              operation_request_id: operationRequestId,
+              tree_id: treeId,
+              group_id: selected.assignment.group_id || selected.request?.group_id || null,
+              customer_profile_id: customerProfileId,
+              caretaker_id: caretaker.id,
+              caretaker_profile_id: caretaker.caretaker_profile_id || null,
+              task_type: selectedService,
+              source_type: "TREE_OPERATION",
+              status: "SUBMITTED",
+              evidence_status: "SUBMITTED",
+              notes: notes || "Evidence submitted.",
+              submitted_at: now,
+              created_at: now,
+              updated_at: now,
+            })
+            .select("id")
+            .single()
+        ).data?.id;
+
+      if (taskId) {
+        const { error } = await supabase
+          .from("caretaker_task_logs")
+          .update({
+            status: "SUBMITTED",
+            evidence_status: "SUBMITTED",
+            notes: notes || selected.task?.notes || "Evidence submitted.",
+            submitted_at: now,
+            updated_at: now,
+          })
+          .eq("id", taskId);
+
+        if (error) throw error;
+      }
+
+      const { error: assignmentError } = await supabase
+        .from("caretaker_assignments")
+        .update({
+          status: "SUBMITTED",
+          submitted_at: now,
+          updated_at: now,
+        })
+        .eq("id", selected.assignment.id);
+
+      if (assignmentError) throw assignmentError;
+
+      const { error: requestError } = await supabase
+        .from("tree_operation_requests")
+        .update({
+          status: "SUBMITTED",
+          assignment_status: "SUBMITTED",
+          updated_at: now,
+        })
+        .eq("id", operationRequestId);
+
+      if (requestError) throw requestError;
+
+      setMessage("Evidence submitted. Waiting for Admin approval.");
+      resetEvidenceForm();
+      await loadData();
+    } catch (error: any) {
+      setMessage(error?.message || "Submit work failed.");
+    }
+
+    setSaving(false);
   }
 
   return (
     <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.28),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
 
-      <div className="mx-auto max-w-7xl space-y-8">
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl md:p-9">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
-                Arganwood Field Work
-              </p>
-              <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
-                Forest Work Center
-              </h1>
-              <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-                Supports tree operations, valuation inspections, and sell tree inspections through
-                caretaker_assignments and caretaker_task_logs.
-              </p>
-            </div>
-
-            <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">
-                Logged Gardener
-              </p>
-              <p className="mt-2 text-xl font-black text-[#ffe49a]">
-                {caretaker?.full_name || caretaker?.email || "—"}
-              </p>
-              <p className="mt-1 text-xs font-semibold text-white/45">
-                {caretaker?.email || "No email"} • {caretaker?.status || "—"}
-              </p>
-            </div>
-          </div>
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl">
+          <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
+            Gardener Field Workflow
+          </p>
+          <h1 className="mt-3 text-4xl font-black tracking-tight">Forest Work Center</h1>
+          <p className="mt-3 max-w-4xl text-sm font-semibold leading-relaxed text-white/65">
+            Start assigned work, verify tree QR, submit required evidence, then wait for Admin
+            completion approval.
+          </p>
 
           {message && (
             <div className="mt-6 rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-4 text-sm font-bold text-[#ffe49a]">
               {message}
             </div>
           )}
-
-          <div className="mt-8 grid gap-4 md:grid-cols-4 xl:grid-cols-8">
-            <StatCard label="Total" value={stats.total} />
-            <StatCard label="Tree Ops" value={stats.treeOps} />
-            <StatCard label="Valuation" value={stats.valuation} />
-            <StatCard label="Sell Tree" value={stats.sellTree} />
-            <StatCard label="Assigned" value={stats.assigned} />
-            <StatCard label="In Progress" value={stats.inProgress} />
-            <StatCard label="Submitted" value={stats.submitted} />
-            <StatCard label="Completed" value={stats.completed} />
-          </div>
         </section>
 
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl backdrop-blur-xl">
-          <div className="flex flex-wrap gap-3">
-            {([
-              "ALL",
-              "TREE_OPERATION",
-              "TREE_VALUATION_INSPECTION",
-              "SELL_TREE_INSPECTION",
-              "ASSIGNED",
-              "IN_PROGRESS",
-              "SUBMITTED",
-              "COMPLETED",
-            ] as Filter[]).map((item) => (
+        <section className="grid gap-6 xl:grid-cols-[380px_1fr]">
+          <div className="space-y-6">
+            <Card title="1. Work Queue">
+              <div className="grid grid-cols-2 gap-3">
+                <MiniStat label="Assigned" value={stats.assigned} />
+                <MiniStat label="In Progress" value={stats.inProgress} />
+                <MiniStat label="Submitted" value={stats.submitted} />
+                <MiniStat label="Completed" value={stats.completed} />
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                {["ACTIVE", "ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"].map((x) => (
+                  <button
+                    key={x}
+                    onClick={() => setFilter(x)}
+                    className={`rounded-full px-4 py-2 text-xs font-black ${
+                      filter === x
+                        ? "bg-[#d9b45f] text-[#071f16]"
+                        : "border border-white/10 bg-white/10 text-white/65"
+                    }`}
+                  >
+                    {x.replaceAll("_", " ")}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {loading ? (
+                  <p className="text-sm font-bold text-white/50">Loading work queue...</p>
+                ) : visibleItems.length === 0 ? (
+                  <p className="text-sm font-bold text-white/50">No work orders found.</p>
+                ) : (
+                  visibleItems.map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => {
+                        setSelectedKey(item.key);
+                        setVerifiedKey("");
+                        setScanValue("");
+                        resetEvidenceForm();
+                      }}
+                      className={`w-full rounded-2xl border p-4 text-left transition ${
+                        selected?.key === item.key
+                          ? "border-[#d9b45f]/60 bg-[#d9b45f]/15"
+                          : "border-white/10 bg-black/20 hover:bg-white/10"
+                      }`}
+                    >
+                      <p className="text-sm font-black text-[#ffe49a]">
+                        {serviceLabel(serviceOf(item))}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-white/55">
+                        {item.tree?.display_name ||
+                          item.tree?.custom_name ||
+                          item.tree?.tree_code ||
+                          "Assigned Tree"}
+                      </p>
+                      <p className="mt-2 text-xs font-black text-white/40">
+                        {item.status.replaceAll("_", " ")}
+                      </p>
+                    </button>
+                  ))
+                )}
+              </div>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card title="2. Work Order">
+              {!selected ? (
+                <p className="text-sm font-bold text-white/55">Select a work order.</p>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Info label="Tree Name" value={selected.tree?.display_name || selected.tree?.custom_name || "Friendly Tree"} />
+                  <Info label="Tree Code" value={selected.tree?.tree_code || selected.tree?.id || "—"} />
+                  <Info label="Forest / Group" value={selected.group?.forest_name || selected.group?.group_name || "Single Tree"} />
+                  <Info label="Customer" value={selected.customer?.full_name || selected.customer?.email || "Unknown Customer"} />
+                  <Info label="Requested Service" value={serviceLabel(selectedService)} />
+                  <Info label="Admin Notes" value={selected.assignment.admin_notes || selected.request?.admin_notes || selected.request?.notes || "—"} />
+                  <Info label="Assignment Status" value={selected.status.replaceAll("_", " ")} />
+                  <Info label="Evidence Status" value={selected.evidenceStatus.replaceAll("_", " ")} />
+                </div>
+              )}
+
+              {selected && selected.status === "ASSIGNED" && (
+                <button
+                  onClick={startWork}
+                  disabled={saving}
+                  className="mt-5 w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
+                >
+                  Start Work
+                </button>
+              )}
+            </Card>
+
+            <Card title="3. Scan Tree QR">
+              <p className="text-sm font-semibold text-white/60">
+                Scan or manually enter the assigned tree_code or tree_id. Evidence upload stays blocked
+                until this matches.
+              </p>
+
+              <div className="mt-4 flex flex-col gap-3 md:flex-row">
+                <input
+                  value={scanValue}
+                  onChange={(e) => setScanValue(e.target.value)}
+                  placeholder="Enter scanned tree_code or tree_id"
+                  className="min-h-[50px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
+                />
+                <button
+                  onClick={verifyTree}
+                  className="rounded-2xl bg-[#d9b45f] px-6 py-4 text-sm font-black text-[#071f16]"
+                >
+                  Verify Tree
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm font-black">
+                {isVerified ? (
+                  <span className="text-emerald-300">Tree Verified</span>
+                ) : (
+                  <span className="text-red-200">Not verified — evidence blocked</span>
+                )}
+              </div>
+            </Card>
+
+            <Card title="4. Evidence Center">
+              <p className="text-sm font-bold text-[#ffe49a]">{serviceLabel(selectedService)}</p>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                {(rules.photo || selectedService === "GPS_VERIFICATION" || selectedService === "HEALTH_CHECK") && (
+                  <FileInput
+                    label={rules.photo ? "Current Photo Required" : "Photo Optional"}
+                    file={currentPhoto}
+                    setFile={setCurrentPhoto}
+                  />
+                )}
+
+                {rules.before && (
+                  <FileInput label="Before Photo Required" file={beforePhoto} setFile={setBeforePhoto} />
+                )}
+
+                {rules.after && (
+                  <FileInput label="After Photo Required" file={afterPhoto} setFile={setAfterPhoto} />
+                )}
+
+                {rules.gps && (
+                  <>
+                    <TextInput label="Latitude Required" value={latitude} setValue={setLatitude} />
+                    <TextInput label="Longitude Required" value={longitude} setValue={setLongitude} />
+                  </>
+                )}
+
+                {rules.health && (
+                  <div>
+                    <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">
+                      Health Status Required
+                    </p>
+                    <select
+                      value={healthStatus}
+                      onChange={(e) => setHealthStatus(e.target.value)}
+                      className="min-h-[50px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none"
+                    >
+                      <option value="">Select status</option>
+                      <option value="HEALTHY">Healthy</option>
+                      <option value="NEEDS_ATTENTION">Needs Attention</option>
+                      <option value="CRITICAL">Critical</option>
+                    </select>
+                  </div>
+                )}
+
+                <div className="md:col-span-2">
+                  <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">
+                    {rules.notesLabel}
+                  </p>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={4}
+                    className="w-full rounded-2xl border border-white/10 bg-black/30 p-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
+                    placeholder="Field notes / observations"
+                  />
+                </div>
+              </div>
+            </Card>
+
+            <Card title="5. Submit Work">
+              <p className="text-sm font-semibold leading-relaxed text-white/60">
+                Submit changes task, assignment, and customer operation request to SUBMITTED only.
+                Admin must approve before this becomes COMPLETED.
+              </p>
+
               <button
-                key={item}
-                onClick={() => setFilter(item)}
-                className={`rounded-full px-5 py-3 text-sm font-black transition ${
-                  filter === item
-                    ? "bg-[#d9b45f] text-[#071f16]"
-                    : "border border-white/10 bg-white/10 text-white/70 hover:bg-white/15"
-                }`}
+                onClick={submitWork}
+                disabled={saving || !selected || !isVerified}
+                className="mt-5 w-full rounded-2xl bg-emerald-500 px-6 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {item.replaceAll("_", " ")}
+                Submit Work for Admin Review
               </button>
-            ))}
+            </Card>
           </div>
         </section>
-
-        {loading ? (
-          <EmptyCard text="Loading forest work center..." />
-        ) : filteredTasks.length === 0 ? (
-          <EmptyCard text="No tasks found for this gardener." />
-        ) : (
-          <section className="space-y-5">
-            {filteredTasks.map((item) => (
-              <TaskCard
-                key={item.key}
-                item={item}
-                saving={savingKey === item.key}
-                updateTaskStatus={(status) => updateTaskStatus(item, status)}
-              />
-            ))}
-          </section>
-        )}
       </div>
     </main>
   );
 }
 
-function TaskCard({
-  item,
-  saving,
-  updateTaskStatus,
-}: {
-  item: DisplayTask;
-  saving: boolean;
-  updateTaskStatus: (status: string) => void;
-}) {
-  const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
-  const assignmentQuery = item.assignmentId ? `?assignment_id=${item.assignmentId}` : "";
-
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-        <div className="flex-1 space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <StatusBadge status={item.status} />
-            <span className="rounded-full border border-[#d9b45f]/30 bg-[#d9b45f]/10 px-3 py-1 text-xs font-black text-[#ffe49a]">
-              {item.sourceType.replaceAll("_", " ")}
-            </span>
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-black text-white/60">
-              {item.assignmentType}
-            </span>
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-black text-[#ffe49a]">{item.title}</h2>
-
-            <p className="mt-2 text-sm text-white/65">
-              Forest:{" "}
-              <b className="text-white">
-                {item.group?.forest_name ||
-                  item.group?.group_name ||
-                  item.tree?.tree_group_name ||
-                  "Single Tree"}
-              </b>
-            </p>
-
-            <p className="mt-1 text-sm text-white/65">
-              Tree:{" "}
-              <b className="text-white">
-                {item.tree?.display_name || item.tree?.custom_name || "Friendly Tree"}
-              </b>
-            </p>
-
-            <p className="mt-1 text-sm text-white/65">
-              Customer:{" "}
-              <b className="text-white">
-                {item.customer?.full_name || item.customer?.email || "Unknown Customer"}
-              </b>
-            </p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <Info label="Created" value={formatDate(item.createdAt)} />
-            <Info
-              label="Care Status"
-              value={item.tree?.care_status || item.request?.care_program_status || "—"}
-            />
-            <Info label="Evidence" value={item.task?.evidence_status || "PENDING"} />
-          </div>
-        </div>
-
-        <div className="w-full space-y-3 xl:w-80">
-          {!closed && item.status === "ASSIGNED" && (
-            <button
-              onClick={() => updateTaskStatus("IN_PROGRESS")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
-            >
-              Start Work
-            </button>
-          )}
-
-          {!closed && item.status === "IN_PROGRESS" && (
-            <button
-              onClick={() => updateTaskStatus("SUBMITTED")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-blue-400 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-blue-300 disabled:opacity-50"
-            >
-              Submit Evidence
-            </button>
-          )}
-
-          {!closed && item.status === "SUBMITTED" && (
-            <button
-              onClick={() => updateTaskStatus("COMPLETED")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-emerald-500 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:opacity-50"
-            >
-              Complete Task
-            </button>
-          )}
-
-          <div className="grid gap-2">
-            <Link
-              href={`/gardener/photo-updates${assignmentQuery}`}
-              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
-            >
-              Upload Photo Evidence
-            </Link>
-
-            <Link
-              href={`/gardener/gps-updates${assignmentQuery}`}
-              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
-            >
-              Upload GPS Evidence
-            </Link>
-
-            <Link
-              href={`/gardener/health-reports${assignmentQuery}`}
-              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
-            >
-              Submit Health Report
-            </Link>
-          </div>
-        </div>
-      </div>
-    </article>
+    <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+      <h2 className="mb-5 text-xl font-black text-[#ffe49a]">{title}</h2>
+      {children}
+    </section>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-      <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">
-        {label}
-      </p>
-      <p className="mt-3 text-3xl font-black text-[#ffe49a]">{value}</p>
-    </div>
-  );
-}
-
-function Info({
-  label,
-  value,
-}: {
-  label: string;
-  value?: string;
-}) {
+function MiniStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">
-        {label}
-      </p>
-      <p className="mt-2 text-sm font-bold text-white/80">{value || "—"}</p>
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-white/35">{label}</p>
+      <p className="mt-2 text-2xl font-black text-[#ffe49a]">{value}</p>
     </div>
   );
 }
 
-function EmptyCard({ text }: { text: string }) {
+function Info({ label, value }: { label: string; value: any }) {
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-8 text-white/65 shadow-2xl backdrop-blur-xl">
-      {text}
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">{label}</p>
+      <p className="mt-2 break-words text-sm font-bold text-white/80">{value || "—"}</p>
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const value = normalizeStatus(status);
-  let classes = "border-yellow-400/30 bg-yellow-500/15 text-yellow-200";
-
-  if (value === "IN_PROGRESS") classes = "border-blue-400/30 bg-blue-500/15 text-blue-200";
-  if (value === "SUBMITTED") classes = "border-purple-400/30 bg-purple-500/15 text-purple-200";
-  if (value === "COMPLETED") classes = "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
-
-  if (["REJECTED", "CANCELLED", "FAILED"].includes(value)) {
-    classes = "border-red-400/30 bg-red-500/15 text-red-200";
-  }
-
+function TextInput({
+  label,
+  value,
+  setValue,
+}: {
+  label: string;
+  value: string;
+  setValue: (value: string) => void;
+}) {
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs font-black ${classes}`}>
-      {value.replaceAll("_", " ")}
-    </span>
+    <div>
+      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</p>
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="min-h-[50px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
+      />
+    </div>
+  );
+}
+
+function FileInput({
+  label,
+  file,
+  setFile,
+}: {
+  label: string;
+  file: File | null;
+  setFile: (file: File | null) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</p>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => setFile(e.target.files?.[0] || null)}
+        className="w-full rounded-2xl border border-white/10 bg-black/30 p-3 text-sm font-bold text-white file:mr-4 file:rounded-xl file:border-0 file:bg-[#d9b45f] file:px-4 file:py-2 file:font-black file:text-[#071f16]"
+      />
+      {file && <p className="mt-2 text-xs font-bold text-emerald-200">{file.name}</p>}
+    </div>
   );
 }

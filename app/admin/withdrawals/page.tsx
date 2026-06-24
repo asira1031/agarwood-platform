@@ -220,7 +220,7 @@ export default function AdminWithdrawalsPage() {
         : `Withdrawal rejected and wallet restored once. Amount: ${peso(request.amount)}.`;
 
     if (existing) {
-      const { error } = await supabase
+      const { data: updatedTx, error } = await supabase
         .from("wallet_transactions")
         .update({
           transaction_type: "WITHDRAWAL",
@@ -228,23 +228,38 @@ export default function AdminWithdrawalsPage() {
           status,
           description,
         })
-        .eq("id", existing.id);
+        .eq("id", existing.id)
+        .select("id,status")
+        .maybeSingle();
 
       if (error) throw error;
+
+      if (!updatedTx || normalize(updatedTx.status) !== status) {
+        throw new Error("Wallet transaction status was not updated.");
+      }
+
       return;
     }
 
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "WITHDRAWAL",
-      amount,
-      reference_no: request.id,
-      description,
-      status,
-      created_at: new Date().toISOString(),
-    });
+    const { data: insertedTx, error } = await supabase
+      .from("wallet_transactions")
+      .insert({
+        profile_id: request.profile_id,
+        transaction_type: "WITHDRAWAL",
+        amount,
+        reference_no: request.id,
+        description,
+        status,
+        created_at: new Date().toISOString(),
+      })
+      .select("id,status")
+      .maybeSingle();
 
     if (error) throw error;
+
+    if (!insertedTx || normalize(insertedTx.status) !== status) {
+      throw new Error("Wallet transaction status was not updated.");
+    }
   }
 
   async function restoreWalletOnce(request: WithdrawalRequest) {
@@ -317,28 +332,27 @@ export default function AdminWithdrawalsPage() {
     setActionLoading("");
   }
 
-  async function treasuryEntryExists(sourceType: string, sourceId: string) {
-    const { data, error } = await supabase
+  async function insertWithdrawalTreasury(request: WithdrawalRequest) {
+    if (!request.id || !request.profile_id) {
+      throw new Error("Missing withdrawal request profile.");
+    }
+
+    const { data: existingTreasury, error: treasuryCheckError } = await supabase
       .from("platform_treasury")
       .select("id")
-      .eq("source_type", sourceType)
-      .eq("source_id", sourceId)
+      .eq("source_type", "WITHDRAWAL")
+      .eq("source_id", request.id)
       .limit(1);
 
-    if (error) throw error;
+    if (treasuryCheckError) {
+      throw treasuryCheckError;
+    }
 
-    return (data || []).length > 0;
-  }
+    if (existingTreasury && existingTreasury.length > 0) {
+      return;
+    }
 
-  async function insertWithdrawalTreasuryEntry(request: WithdrawalRequest) {
-    if (!request.id || !request.profile_id) throw new Error("Withdrawal request profile missing.");
-
-    const exists = await treasuryEntryExists("WITHDRAWAL", request.id);
-    if (exists) return;
-
-    const amount = -Math.abs(Number(request.amount || 0));
-
-    const { error } = await supabase.from("platform_treasury").insert({
+    const { error: treasuryError } = await supabase.from("platform_treasury").insert({
       source: "WITHDRAWAL",
       source_type: "WITHDRAWAL",
       source_id: request.id,
@@ -346,13 +360,15 @@ export default function AdminWithdrawalsPage() {
       reference_no: request.id,
       customer_profile_id: request.profile_id,
       profile_id: request.profile_id,
-      amount,
+      amount: -Math.abs(Number(request.amount || 0)),
       description: "Withdrawal paid",
       status: "POSTED",
       created_at: new Date().toISOString(),
     });
 
-    if (error) throw error;
+    if (treasuryError) {
+      throw treasuryError;
+    }
   }
 
   async function markPaid(request: WithdrawalRequest) {
@@ -392,13 +408,26 @@ export default function AdminWithdrawalsPage() {
 
       await updateWithdrawalTransaction(request, "COMPLETED");
 
-      try {
-        await insertWithdrawalTreasuryEntry(request);
-        setMessage("Withdrawal marked as PAID. Wallet was not deducted again. Platform treasury synced.");
-      } catch (treasuryError) {
-        console.error("Withdrawal treasury sync failed:", treasuryError);
-        setMessage("Withdrawal marked as PAID and wallet transaction completed. Request was created, but treasury sync failed. Please check platform_treasury.");
+      const completedTx = await getFreshTransaction(request.id);
+      if (!completedTx || normalize(completedTx.status) !== "COMPLETED") {
+        throw new Error("Wallet transaction status was not updated.");
       }
+
+      try {
+        await insertWithdrawalTreasury(request);
+      } catch (treasuryError: any) {
+        console.error("Withdrawal treasury sync failed:", treasuryError);
+
+        setMessage(
+          `Treasury sync failed: ${
+            treasuryError?.message || "Unknown treasury error"
+          }`
+        );
+
+        return;
+      }
+
+      setMessage("Withdrawal marked as PAID. Wallet transaction completed. Platform treasury synced.");
       await loadData();
       setTab("PAID");
     } catch (error: any) {

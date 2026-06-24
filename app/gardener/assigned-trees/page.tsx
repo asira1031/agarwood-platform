@@ -117,7 +117,7 @@ export default function GardenerAssignedTreesPage() {
     const { data: profileByEmail } = await supabase
       .from("profiles")
       .select("id, full_name, email")
-      .eq("email", lowerEmail)
+      .ilike("email", lowerEmail)
       .maybeSingle();
 
     const profile = profileById || profileByEmail;
@@ -169,7 +169,6 @@ export default function GardenerAssignedTreesPage() {
         .select("*")
         .or(assignmentFilters.join(","))
         .order("created_at", { ascending: false }),
-
       supabase
         .from("caretaker_task_logs")
         .select("*")
@@ -250,9 +249,13 @@ export default function GardenerAssignedTreesPage() {
 
     const nextVerifiedMap: Record<string, boolean> = {};
     safeAssignments.forEach((assignment) => {
-      const key = getVerificationKey(assignment.id);
-      nextVerifiedMap[String(assignment.id)] =
-        typeof window !== "undefined" && localStorage.getItem(key) === "VERIFIED";
+      const assignmentId = String(assignment.id);
+      const oldKey = `arganwood_tree_verified_assignment_${assignmentId}`;
+      const sharedKey = `verified_tree_assignment_${assignmentId}`;
+      nextVerifiedMap[assignmentId] =
+        typeof window !== "undefined" &&
+        (localStorage.getItem(oldKey) === "VERIFIED" ||
+          localStorage.getItem(sharedKey) === "true");
     });
 
     setAssignments(safeAssignments);
@@ -274,12 +277,16 @@ export default function GardenerAssignedTreesPage() {
     return `arganwood_tree_verified_assignment_${assignmentId}`;
   }
 
+  function getSharedVerificationKey(assignmentId: string) {
+    return `verified_tree_assignment_${assignmentId}`;
+  }
+
   const requestMap = useMemo(() => makeMap(requests), [requests]);
   const treeMap = useMemo(() => makeMap(trees), [trees]);
   const groupMap = useMemo(() => makeMap(groups), [groups]);
   const customerMap = useMemo(() => makeMap(customers), [customers]);
 
-  const assignedTrees = useMemo<AssignedTree[]>((() => {
+  const assignedTrees = useMemo<AssignedTree[]>(() => {
     return assignments
       .map((assignment) => {
         const task =
@@ -324,7 +331,7 @@ export default function GardenerAssignedTreesPage() {
           tree,
           group,
           customer,
-          status: normalizeStatus(task?.status || assignment.status || request?.status),
+          status: normalizeStatus(task?.status || assignment.status || request?.assignment_status || request?.status),
           sourceType,
           title: getTitle(assignment, task, request),
           treeId,
@@ -341,7 +348,7 @@ export default function GardenerAssignedTreesPage() {
         const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return dateB - dateA;
       });
-  }) as any, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
+  }, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
 
   const filteredTrees = useMemo(() => {
     if (filter === "ALL") return assignedTrees;
@@ -369,17 +376,6 @@ export default function GardenerAssignedTreesPage() {
     );
   }
 
-  function getTreeName(item: AssignedTree) {
-    return (
-      item.tree?.display_name ||
-      item.tree?.custom_name ||
-      item.tree?.name ||
-      item.assignment?.tree_name ||
-      item.request?.tree_name ||
-      "Assigned Tree"
-    );
-  }
-
   function verifyTree(item: AssignedTree) {
     const expectedCode = String(getTreeCode(item) || "").trim().toLowerCase();
     const enteredCode = String(verifyInputMap[item.assignmentId] || "").trim().toLowerCase();
@@ -389,13 +385,19 @@ export default function GardenerAssignedTreesPage() {
       return;
     }
 
+    if (!enteredCode) {
+      setMessage("Scan or enter the assigned tree code first.");
+      return;
+    }
+
     if (enteredCode !== expectedCode) {
-      setMessage("Tree QR/code verification failed. Please scan or enter the correct tree code.");
+      setMessage("Tree QR/code verification failed. Evidence upload is blocked for this task.");
       return;
     }
 
     if (typeof window !== "undefined") {
       localStorage.setItem(getVerificationKey(item.assignmentId), "VERIFIED");
+      localStorage.setItem(getSharedVerificationKey(item.assignmentId), "true");
     }
 
     setVerifiedMap((prev) => ({
@@ -403,7 +405,7 @@ export default function GardenerAssignedTreesPage() {
       [item.assignmentId]: true,
     }));
 
-    setMessage("Tree verified. Photo, GPS, and Health evidence are now enabled.");
+    setMessage("Tree Verified. Evidence Center is now enabled for this assignment.");
   }
 
   async function ensureTaskLog(item: AssignedTree, status: string) {
@@ -421,14 +423,12 @@ export default function GardenerAssignedTreesPage() {
       operation_request_id: item.operationRequestId || null,
       task_type: item.sourceType || "TREE_OPERATION",
       source_type: item.sourceType || "TREE_OPERATION",
-      evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
-      notes: `Gardener updated assignment to ${status.replace("_", " ")}.`,
+      evidence_status: "PENDING",
+      notes: `Gardener started work for ${item.title}.`,
       status,
       created_at: now,
       updated_at: now,
       started_at: status === "IN_PROGRESS" ? now : null,
-      submitted_at: status === "SUBMITTED" ? now : null,
-      completed_at: status === "COMPLETED" ? now : null,
     };
 
     const { data, error } = await supabase
@@ -449,14 +449,20 @@ export default function GardenerAssignedTreesPage() {
     const now = new Date().toISOString();
 
     try {
+      if (status === "COMPLETED") {
+        throw new Error("Gardener cannot mark work as COMPLETED. Admin approval is required.");
+      }
+
+      if (status === "SUBMITTED") {
+        throw new Error("Submit Work is done inside Photo Updates / Evidence Center after uploading required evidence.");
+      }
+
       const assignmentUpdate: Row = {
         status,
         updated_at: now,
       };
 
       if (status === "IN_PROGRESS") assignmentUpdate.started_at = item.assignment.started_at || now;
-      if (status === "SUBMITTED") assignmentUpdate.submitted_at = now;
-      if (status === "COMPLETED") assignmentUpdate.completed_at = now;
 
       const { error: assignmentError } = await supabase
         .from("caretaker_assignments")
@@ -468,13 +474,11 @@ export default function GardenerAssignedTreesPage() {
       if (item.task?.id) {
         const taskUpdate: Row = {
           status,
-          evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
+          evidence_status: item.task.evidence_status || "PENDING",
           updated_at: now,
         };
 
         if (status === "IN_PROGRESS") taskUpdate.started_at = item.task.started_at || now;
-        if (status === "SUBMITTED") taskUpdate.submitted_at = now;
-        if (status === "COMPLETED") taskUpdate.completed_at = now;
 
         const { error: taskError } = await supabase
           .from("caretaker_task_logs")
@@ -488,12 +492,11 @@ export default function GardenerAssignedTreesPage() {
 
       if (item.operationRequestId && item.sourceType === "TREE_OPERATION") {
         const requestUpdate: Row = {
-          status,
           assignment_status: status,
           updated_at: now,
         };
 
-        if (status === "COMPLETED") requestUpdate.completed_at = now;
+        if (status === "IN_PROGRESS") requestUpdate.status = "IN_PROGRESS";
 
         const { error: requestError } = await supabase
           .from("tree_operation_requests")
@@ -527,8 +530,7 @@ export default function GardenerAssignedTreesPage() {
                 Assigned Forest Portfolio
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-                View assigned trees, verify QR identity, and submit field evidence only after tree
-                verification.
+                Field workflow: Start Work → Verify Tree QR → Submit Required Evidence → Admin Review → Customer Timeline.
               </p>
             </div>
 
@@ -550,18 +552,21 @@ export default function GardenerAssignedTreesPage() {
               {message}
             </div>
           )}
+        </section>
 
-          <div className="mt-8 grid gap-4 md:grid-cols-5">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+          <p className="text-xs font-black uppercase tracking-[0.3em] text-[#d9b45f]">
+            1. Work Queue
+          </p>
+          <div className="mt-5 grid gap-4 md:grid-cols-5">
             <StatCard label="Total" value={stats.total} />
             <StatCard label="Assigned" value={stats.assigned} />
             <StatCard label="In Progress" value={stats.inProgress} />
             <StatCard label="Submitted" value={stats.submitted} />
             <StatCard label="Completed" value={stats.completed} />
           </div>
-        </section>
 
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl backdrop-blur-xl">
-          <div className="flex flex-wrap gap-3">
+          <div className="mt-6 flex flex-wrap gap-3">
             {(["ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"] as Filter[]).map(
               (item) => (
                 <button
@@ -645,9 +650,18 @@ function AssignedTreeCard({
     item.request?.tree_name ||
     "Assigned Tree";
 
+  const forestName =
+    item.group?.forest_name ||
+    item.group?.group_name ||
+    item.tree?.tree_group_name ||
+    "Single Tree";
+
+  const evidenceStatus = item.task?.evidence_status || item.request?.evidence_status || "PENDING";
+  const adminNotes = item.assignment?.admin_notes || item.request?.admin_notes || item.task?.admin_notes || "—";
+
   return (
     <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+      <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge status={item.status} />
@@ -665,60 +679,48 @@ function AssignedTreeCard({
             </span>
           </div>
 
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.25em] text-white/40">
-              Tree Name
+          <section className="rounded-3xl border border-white/10 bg-black/20 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+              2. Work Order
             </p>
-            <h2 className="mt-2 text-3xl font-black text-[#ffe49a]">{treeName}</h2>
-
-            <p className="mt-3 text-sm text-white/65">
+            <h2 className="mt-3 text-3xl font-black text-[#ffe49a]">{treeName}</h2>
+            <p className="mt-2 text-sm text-white/65">
               Tree Code: <b className="text-white">{treeCode}</b>
             </p>
 
-            <p className="mt-1 text-sm text-white/65">
-              Customer:{" "}
-              <b className="text-white">
-                {item.customer?.full_name || item.customer?.email || "Unknown Customer"}
-              </b>
-            </p>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <Info label="Forest / Group" value={forestName} />
+              <Info label="Customer Name" value={item.customer?.full_name || "Unknown Customer"} />
+              <Info label="Customer Email" value={item.customer?.email || "—"} />
+              <Info label="Requested Service" value={item.title} />
+              <Info label="Assignment Status" value={item.status.replaceAll("_", " ")} />
+              <Info label="Evidence Status" value={String(evidenceStatus).replaceAll("_", " ")} />
+            </div>
 
-            <p className="mt-1 text-sm text-white/65">
-              Customer Email: <b className="text-white">{item.customer?.email || "—"}</b>
-            </p>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">
+                Admin Notes / Instructions
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm font-semibold text-white/75">
+                {adminNotes}
+              </p>
+            </div>
+          </section>
 
-            <p className="mt-1 text-sm text-white/65">
-              Operation Type: <b className="text-white">{item.title}</b>
-            </p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <Info label="Assigned Date" value={formatDate(item.createdAt)} />
-            <Info label="Evidence Status" value={item.task?.evidence_status || "PENDING"} />
-            <Info
-              label="Forest"
-              value={
-                item.group?.forest_name ||
-                item.group?.group_name ||
-                item.tree?.tree_group_name ||
-                "Single Tree"
-              }
-            />
-          </div>
-
-          <div className="rounded-3xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-5">
+          <section className="rounded-3xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-5">
             <p className="text-xs font-black uppercase tracking-[0.25em] text-[#ffe49a]">
-              QR Verification Card
+              3. Scan Tree QR
             </p>
             <p className="mt-2 text-sm leading-relaxed text-white/65">
-              Scan the physical tree QR or enter the exact Tree Code before uploading Photo, GPS, or
-              Health evidence.
+              Scan the physical tree QR or enter the exact Tree Code before uploading evidence.
+              Mismatched tree codes are blocked.
             </p>
 
             <div className="mt-4 flex flex-col gap-3 md:flex-row">
               <input
                 value={verifyValue}
                 onChange={(event) => setVerifyValue(event.target.value)}
-                placeholder="Enter scanned Tree Code"
+                placeholder="Scan or enter assigned Tree Code"
                 className="min-h-[48px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30 focus:border-[#d9b45f]/60"
               />
               <button
@@ -728,57 +730,84 @@ function AssignedTreeCard({
                 Verify Tree
               </button>
             </div>
-          </div>
+          </section>
         </div>
 
-        <div className="space-y-3">
-          {!closed && item.status === "ASSIGNED" && (
-            <button
-              onClick={() => updateAssignmentStatus("IN_PROGRESS")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
-            >
-              Start Work
-            </button>
-          )}
+        <div className="space-y-4">
+          <section className="rounded-3xl border border-white/10 bg-black/20 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+              4. Evidence Center
+            </p>
+            <p className="mt-2 text-sm text-white/60">
+              Evidence upload is enabled only after Tree Verified.
+            </p>
 
-          {!closed && item.status === "IN_PROGRESS" && (
-            <button
-              onClick={() => updateAssignmentStatus("SUBMITTED")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-blue-400 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-blue-300 disabled:opacity-50"
-            >
-              Submit Assignment
-            </button>
-          )}
+            <div className="mt-4 space-y-3">
+              <EvidenceLink
+                enabled={isVerified}
+                href={`/gardener/photo-updates?assignment_id=${item.assignment.id}`}
+                label="Open Evidence Center"
+              />
 
-          {!closed && item.status === "SUBMITTED" && (
-            <button
-              onClick={() => updateAssignmentStatus("COMPLETED")}
-              disabled={saving}
-              className="w-full rounded-2xl bg-emerald-500 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:opacity-50"
-            >
-              Mark Complete
-            </button>
-          )}
+              <EvidenceLink
+                enabled={isVerified}
+                href={`/gardener/gps-updates?assignment_id=${item.assignment.id}`}
+                label="Submit GPS"
+              />
 
-          <EvidenceLink
-            enabled={isVerified}
-            href={`/gardener/photo-updates?assignment_id=${item.assignment.id}`}
-            label="Upload Photo"
-          />
+              <EvidenceLink
+                enabled={isVerified}
+                href={`/gardener/health-reports?assignment_id=${item.assignment.id}`}
+                label="Submit Health"
+              />
+            </div>
+          </section>
 
-          <EvidenceLink
-            enabled={isVerified}
-            href={`/gardener/gps-updates?assignment_id=${item.assignment.id}`}
-            label="Submit GPS"
-          />
+          <section className="rounded-3xl border border-white/10 bg-black/20 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]">
+              5. Submit Work
+            </p>
+            <p className="mt-2 text-sm text-white/60">
+              Gardener submits evidence for Admin Review. Customer will not see COMPLETED until Admin approves.
+            </p>
 
-          <EvidenceLink
-            enabled={isVerified}
-            href={`/gardener/health-reports?assignment_id=${item.assignment.id}`}
-            label="Submit Health"
-          />
+            <div className="mt-4 space-y-3">
+              {!closed && item.status === "ASSIGNED" && (
+                <button
+                  onClick={() => updateAssignmentStatus("IN_PROGRESS")}
+                  disabled={saving}
+                  className="w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
+                >
+                  Start Work
+                </button>
+              )}
+
+              {!closed && item.status === "IN_PROGRESS" && (
+                <Link
+                  href={`/gardener/photo-updates?assignment_id=${item.assignment.id}`}
+                  className={`block w-full rounded-2xl px-5 py-4 text-center text-sm font-black ${
+                    isVerified
+                      ? "bg-emerald-500 text-[#03130d] hover:bg-emerald-400"
+                      : "border border-white/10 bg-white/5 text-white/30"
+                  }`}
+                >
+                  {isVerified ? "Submit Required Evidence" : "Verify Tree First"}
+                </Link>
+              )}
+
+              {item.status === "SUBMITTED" && (
+                <div className="rounded-2xl border border-purple-400/25 bg-purple-500/10 p-4 text-sm font-bold text-purple-100">
+                  Submitted to Admin. Waiting for approval, rejection, or rework request.
+                </div>
+              )}
+
+              {item.status === "COMPLETED" && (
+                <div className="rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4 text-sm font-bold text-emerald-100">
+                  Completed by Admin approval.
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       </div>
     </article>
