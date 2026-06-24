@@ -6,47 +6,71 @@ import { supabase } from "@/lib/supabase";
 
 type Row = Record<string, any>;
 
-type Filter = "ALL" | "PROTECTED" | "ATTENTION" | "CRITICAL";
+type Filter = "ALL" | "ASSIGNED" | "IN_PROGRESS" | "SUBMITTED" | "COMPLETED";
 
-type PortfolioTree = {
+type AssignedTree = {
   key: string;
-  assignment: Row | null;
+  assignment: Row;
   task: Row | null;
+  request: Row | null;
   tree: Row | null;
   group: Row | null;
   customer: Row | null;
   status: string;
-  taskStatus: string;
-  careStatus: string;
-  warning: {
-    severity: "PROTECTED" | "ATTENTION" | "CRITICAL";
-    reason: string;
-  };
+  sourceType: string;
+  title: string;
   treeId: string | null;
   groupId: string | null;
   customerProfileId: string | null;
-  assignmentId: string | null;
   operationRequestId: string | null;
-  lastUpdate: string | null;
+  assignmentId: string;
+  createdAt: string | null;
 };
 
-type ForestPortfolio = {
-  key: string;
-  groupId: string | null;
-  forestName: string;
-  customerName: string;
-  customerEmail: string;
-  totalTrees: number;
-  protectedCount: number;
-  attentionCount: number;
-  criticalCount: number;
-  assignedCount: number;
-  inProgressCount: number;
-  submittedCount: number;
-  completedCount: number;
-  lastUpdate: string | null;
-  trees: PortfolioTree[];
-};
+function normalizeStatus(value: any) {
+  return String(value || "ASSIGNED").toUpperCase();
+}
+
+function makeMap(rows: Row[]) {
+  const map = new Map<string, Row>();
+  rows.forEach((row) => map.set(String(row.id), row));
+  return map;
+}
+
+function uniqueStrings(values: any[]) {
+  return Array.from(new Set(values.filter(Boolean).map((value) => String(value))));
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getSourceType(assignment?: Row | null, task?: Row | null, request?: Row | null) {
+  return (
+    assignment?.source_type ||
+    task?.source_type ||
+    request?.source_type ||
+    request?.request_type ||
+    request?.operation_type ||
+    "TREE_OPERATION"
+  );
+}
+
+function getTitle(assignment?: Row | null, task?: Row | null, request?: Row | null) {
+  const sourceType = getSourceType(assignment, task, request);
+
+  if (sourceType === "TREE_VALUATION_INSPECTION") return "Tree Valuation Inspection";
+  if (sourceType === "SELL_TREE_INSPECTION") return "Sell Tree Inspection";
+
+  return request?.service_name || request?.operation_type || task?.task_type || "Tree Operation";
+}
 
 export default function GardenerAssignedTreesPage() {
   const [caretaker, setCaretaker] = useState<Row | null>(null);
@@ -56,9 +80,12 @@ export default function GardenerAssignedTreesPage() {
   const [trees, setTrees] = useState<Row[]>([]);
   const [groups, setGroups] = useState<Row[]>([]);
   const [customers, setCustomers] = useState<Row[]>([]);
+  const [verifiedMap, setVerifiedMap] = useState<Record<string, boolean>>({});
+  const [verifyInputMap, setVerifyInputMap] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<Filter>("ALL");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [savingKey, setSavingKey] = useState("");
 
   useEffect(() => {
     loadData();
@@ -103,64 +130,21 @@ export default function GardenerAssignedTreesPage() {
           .maybeSingle()
       : { data: null, error: null };
 
-    if (caretakerProfileError) {
-      setMessage(caretakerProfileError.message);
-      setLoading(false);
-      return;
-    }
+    if (caretakerProfileError) return fail(caretakerProfileError.message);
 
-    const { data: caretakerByLowerEmail, error: lowerError } = await supabase
-      .from("caretakers")
-      .select("*")
-      .eq("email", lowerEmail)
-      .maybeSingle();
-
-    if (lowerError) {
-      setMessage(lowerError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: caretakerByExactEmail, error: exactError } = await supabase
-      .from("caretakers")
-      .select("*")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (exactError) {
-      setMessage(exactError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: caretakerByEmailFallback, error: fallbackError } = await supabase
+    const { data: caretakerByEmail, error: caretakerEmailError } = await supabase
       .from("caretakers")
       .select("*")
       .ilike("email", email)
       .maybeSingle();
 
-    if (fallbackError) {
-      setMessage(fallbackError.message);
-      setLoading(false);
-      return;
-    }
+    if (caretakerEmailError) return fail(caretakerEmailError.message);
 
-    const caretakerRow =
-      caretakerByProfile ||
-      caretakerByLowerEmail ||
-      caretakerByExactEmail ||
-      caretakerByEmailFallback;
+    const caretakerRow = caretakerByProfile || caretakerByEmail;
 
-    if (!caretakerRow) {
-      setMessage("Caretaker profile not found. Ask admin to create your gardener account.");
-      setLoading(false);
-      return;
-    }
-
-    if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
-      setMessage("Your gardener account is not ACTIVE. Please contact admin.");
-      setLoading(false);
-      return;
+    if (!caretakerRow) return fail("Caretaker profile not found.");
+    if (normalizeStatus(caretakerRow.status) !== "ACTIVE") {
+      return fail("Your gardener account is not ACTIVE.");
     }
 
     setCaretaker(caretakerRow);
@@ -179,32 +163,25 @@ export default function GardenerAssignedTreesPage() {
         : "",
     ].filter(Boolean);
 
-    const { data: assignmentRows, error: assignmentError } = await supabase
-      .from("caretaker_assignments")
-      .select("*")
-      .or(assignmentFilters.join(","))
-      .order("created_at", { ascending: false });
+    const [assignmentResult, taskResult] = await Promise.all([
+      supabase
+        .from("caretaker_assignments")
+        .select("*")
+        .or(assignmentFilters.join(","))
+        .order("created_at", { ascending: false }),
 
-    if (assignmentError) {
-      setMessage(assignmentError.message);
-      setLoading(false);
-      return;
-    }
+      supabase
+        .from("caretaker_task_logs")
+        .select("*")
+        .or(taskFilters.join(","))
+        .order("created_at", { ascending: false }),
+    ]);
 
-    const { data: taskRows, error: taskError } = await supabase
-      .from("caretaker_task_logs")
-      .select("*")
-      .or(taskFilters.join(","))
-      .order("created_at", { ascending: false });
+    if (assignmentResult.error) return fail(assignmentResult.error.message);
+    if (taskResult.error) return fail(taskResult.error.message);
 
-    if (taskError) {
-      setMessage(taskError.message);
-      setLoading(false);
-      return;
-    }
-
-    const safeAssignments = assignmentRows || [];
-    const safeTasks = taskRows || [];
+    const safeAssignments = assignmentResult.data || [];
+    const safeTasks = taskResult.data || [];
 
     const operationRequestIds = uniqueStrings([
       ...safeAssignments.map((item) => item.operation_request_id),
@@ -217,88 +194,45 @@ export default function GardenerAssignedTreesPage() {
       const { data, error } = await supabase
         .from("tree_operation_requests")
         .select("*")
-        .in("id", operationRequestIds)
-        .order("created_at", { ascending: false });
+        .in("id", operationRequestIds);
 
-      if (error) {
-        console.warn("Assigned trees request load warning:", error.message);
-      } else {
-        requestRows = data || [];
-      }
+      if (!error) requestRows = data || [];
     }
 
-    const directTreeIds = uniqueStrings([
+    const treeIds = uniqueStrings([
       ...safeAssignments.map((item) => item.tree_id),
       ...safeTasks.map((item) => item.tree_id),
       ...requestRows.map((item) => item.tree_id),
     ]);
 
-    const directGroupIds = uniqueStrings([
+    let treeRows: Row[] = [];
+
+    if (treeIds.length > 0) {
+      const { data, error } = await supabase.from("trees").select("*").in("id", treeIds);
+      if (!error) treeRows = data || [];
+    }
+
+    const groupIds = uniqueStrings([
       ...safeAssignments.map((item) => item.group_id),
       ...safeTasks.map((item) => item.group_id),
       ...requestRows.map((item) => item.group_id),
-    ]);
-
-    let directTrees: Row[] = [];
-
-    if (directTreeIds.length > 0) {
-      const { data, error } = await supabase
-        .from("trees")
-        .select("*")
-        .in("id", directTreeIds);
-
-      if (error) {
-        console.warn("Assigned trees direct tree load warning:", error.message);
-      } else {
-        directTrees = data || [];
-      }
-    }
-
-    const derivedGroupIds = uniqueStrings([
-      ...directGroupIds,
-      ...directTrees.map((item) => item.group_id),
+      ...treeRows.map((item) => item.group_id),
     ]);
 
     let groupRows: Row[] = [];
 
-    if (derivedGroupIds.length > 0) {
-      const { data, error } = await supabase
-        .from("tree_groups")
-        .select("*")
-        .in("id", derivedGroupIds);
-
-      if (error) {
-        console.warn("Assigned trees group load warning:", error.message);
-      } else {
-        groupRows = data || [];
-      }
+    if (groupIds.length > 0) {
+      const { data, error } = await supabase.from("tree_groups").select("*").in("id", groupIds);
+      if (!error) groupRows = data || [];
     }
-
-    let forestTrees: Row[] = [];
-
-    if (derivedGroupIds.length > 0) {
-      const { data, error } = await supabase
-        .from("trees")
-        .select("*")
-        .in("group_id", derivedGroupIds)
-        .order("display_name", { ascending: true });
-
-      if (error) {
-        console.warn("Assigned trees forest tree load warning:", error.message);
-      } else {
-        forestTrees = data || [];
-      }
-    }
-
-    const allTrees = mergeById([...directTrees, ...forestTrees]);
 
     const customerIds = uniqueStrings([
       ...safeAssignments.map((item) => item.customer_profile_id),
       ...safeTasks.map((item) => item.customer_profile_id),
       ...requestRows.map((item) => item.customer_profile_id),
       ...requestRows.map((item) => item.profile_id),
-      ...allTrees.map((item) => item.customer_profile_id),
-      ...allTrees.map((item) => item.profile_id),
+      ...treeRows.map((item) => item.customer_profile_id),
+      ...treeRows.map((item) => item.profile_id),
       ...groupRows.map((item) => item.customer_profile_id),
       ...groupRows.map((item) => item.profile_id),
     ]);
@@ -308,23 +242,36 @@ export default function GardenerAssignedTreesPage() {
     if (customerIds.length > 0) {
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, email, phone, membership_status, kyc_status")
+        .select("id, full_name, email, phone")
         .in("id", customerIds);
 
-      if (error) {
-        console.warn("Assigned trees customer load warning:", error.message);
-      } else {
-        customerRows = data || [];
-      }
+      if (!error) customerRows = data || [];
     }
+
+    const nextVerifiedMap: Record<string, boolean> = {};
+    safeAssignments.forEach((assignment) => {
+      const key = getVerificationKey(assignment.id);
+      nextVerifiedMap[String(assignment.id)] =
+        typeof window !== "undefined" && localStorage.getItem(key) === "VERIFIED";
+    });
 
     setAssignments(safeAssignments);
     setTaskLogs(safeTasks);
     setRequests(requestRows);
-    setTrees(allTrees);
+    setTrees(treeRows);
     setGroups(groupRows);
     setCustomers(customerRows);
+    setVerifiedMap(nextVerifiedMap);
     setLoading(false);
+  }
+
+  function fail(text: string) {
+    setMessage(text);
+    setLoading(false);
+  }
+
+  function getVerificationKey(assignmentId: string) {
+    return `arganwood_tree_verified_assignment_${assignmentId}`;
   }
 
   const requestMap = useMemo(() => makeMap(requests), [requests]);
@@ -332,228 +279,238 @@ export default function GardenerAssignedTreesPage() {
   const groupMap = useMemo(() => makeMap(groups), [groups]);
   const customerMap = useMemo(() => makeMap(customers), [customers]);
 
-  const portfolioTrees = useMemo<PortfolioTree[]>(() => {
-    const items: PortfolioTree[] = [];
-    const seen = new Set<string>();
-
-    assignments.forEach((assignment) => {
-      const request = assignment.operation_request_id
-        ? requestMap.get(String(assignment.operation_request_id)) || null
-        : null;
-
-      const assignedGroupId = assignment.group_id || request?.group_id || null;
-      const assignedTreeId = assignment.tree_id || request?.tree_id || null;
-
-      const candidateTrees =
-        assignedGroupId
-          ? trees.filter((tree) => String(tree.group_id || "") === String(assignedGroupId))
-          : assignedTreeId
-          ? trees.filter((tree) => String(tree.id || "") === String(assignedTreeId))
-          : [];
-
-      if (candidateTrees.length === 0) {
+  const assignedTrees = useMemo<AssignedTree[]>((() => {
+    return assignments
+      .map((assignment) => {
         const task =
           taskLogs.find((item) => String(item.assignment_id || "") === String(assignment.id)) ||
-          null;
-
-        const group = assignedGroupId ? groupMap.get(String(assignedGroupId)) || null : null;
-
-        const customerProfileId =
-          assignment.customer_profile_id ||
-          request?.customer_profile_id ||
-          request?.profile_id ||
-          group?.customer_profile_id ||
-          group?.profile_id ||
-          null;
-
-        const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
-
-        const key = `assignment-${assignment.id}`;
-
-        if (!seen.has(key)) {
-          seen.add(key);
-
-          const status = normalizeStatus(assignment.status || task?.status || request?.status);
-
-          items.push({
-            key,
-            assignment,
-            task,
-            tree: null,
-            group,
-            customer,
-            status,
-            taskStatus: normalizeStatus(task?.status || assignment.status || request?.status),
-            careStatus: "Forest Care Review",
-            warning: { severity: "ATTENTION", reason: "Forest Scope" },
-            treeId: assignedTreeId,
-            groupId: assignedGroupId,
-            customerProfileId,
-            assignmentId: assignment.id || null,
-            operationRequestId: assignment.operation_request_id || request?.id || null,
-            lastUpdate: task?.updated_at || assignment.updated_at || assignment.created_at || request?.updated_at || request?.created_at || null,
-          });
-        }
-
-        return;
-      }
-
-      candidateTrees.forEach((tree) => {
-        const task =
           taskLogs.find(
             (item) =>
-              String(item.assignment_id || "") === String(assignment.id) &&
-              String(item.tree_id || "") === String(tree.id)
+              String(item.operation_request_id || "") ===
+              String(assignment.operation_request_id || "")
           ) ||
-          taskLogs.find((item) => String(item.assignment_id || "") === String(assignment.id)) ||
-          taskLogs.find((item) => String(item.tree_id || "") === String(tree.id)) ||
           null;
 
-        const groupId = assignment.group_id || request?.group_id || tree.group_id || null;
+        const request = assignment.operation_request_id
+          ? requestMap.get(String(assignment.operation_request_id)) || null
+          : null;
+
+        const treeId = task?.tree_id || assignment.tree_id || request?.tree_id || null;
+        const tree = treeId ? treeMap.get(String(treeId)) || null : null;
+
+        const groupId =
+          task?.group_id || assignment.group_id || request?.group_id || tree?.group_id || null;
         const group = groupId ? groupMap.get(String(groupId)) || null : null;
 
         const customerProfileId =
+          task?.customer_profile_id ||
           assignment.customer_profile_id ||
           request?.customer_profile_id ||
           request?.profile_id ||
-          tree.customer_profile_id ||
-          tree.profile_id ||
+          tree?.customer_profile_id ||
+          tree?.profile_id ||
           group?.customer_profile_id ||
           group?.profile_id ||
           null;
 
         const customer = customerProfileId ? customerMap.get(String(customerProfileId)) || null : null;
+        const sourceType = getSourceType(assignment, task, request);
 
-        const key = `assignment-${assignment.id}-tree-${tree.id}`;
-
-        if (seen.has(key)) return;
-        seen.add(key);
-
-        const status = normalizeStatus(assignment.status || task?.status || request?.status);
-        const taskStatus = normalizeStatus(task?.status || assignment.status || request?.status);
-        const warning = treeWarning(tree);
-
-        items.push({
-          key,
+        return {
+          key: `assignment-${assignment.id}`,
           assignment,
           task,
+          request,
           tree,
           group,
           customer,
-          status,
-          taskStatus,
-          careStatus: tree.care_status || "NOT_SUBSCRIBED",
-          warning,
-          treeId: tree.id || null,
+          status: normalizeStatus(task?.status || assignment.status || request?.status),
+          sourceType,
+          title: getTitle(assignment, task, request),
+          treeId,
           groupId,
           customerProfileId,
-          assignmentId: assignment.id || null,
-          operationRequestId: assignment.operation_request_id || request?.id || null,
-          lastUpdate:
-            latestValue([
-              task?.updated_at,
-              task?.created_at,
-              assignment.updated_at,
-              assignment.created_at,
-              tree.last_photo_update_at,
-              tree.last_gps_update_at,
-              tree.last_health_report_at,
-              tree.updated_at,
-              tree.created_at,
-            ]) || null,
-        });
+          operationRequestId:
+            task?.operation_request_id || assignment.operation_request_id || request?.id || null,
+          assignmentId: assignment.id,
+          createdAt: task?.created_at || assignment.created_at || request?.created_at || null,
+        };
+      })
+      .sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
       });
-    });
+  }) as any, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
 
-    return items.sort((a, b) => {
-      const forestA = forestName(a.group, a.tree);
-      const forestB = forestName(b.group, b.tree);
-
-      if (forestA !== forestB) return forestA.localeCompare(forestB);
-
-      return treeName(a.tree).localeCompare(treeName(b.tree));
-    });
-  }, [assignments, taskLogs, requests, trees, requestMap, groupMap, customerMap]);
-
-  const forestPortfolios = useMemo<ForestPortfolio[]>(() => {
-    const map = new Map<string, ForestPortfolio>();
-
-    portfolioTrees.forEach((item) => {
-      const key = item.groupId
-        ? `group-${item.groupId}`
-        : `loose-${item.customerProfileId || "customer"}-${forestName(item.group, item.tree)}`;
-
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          groupId: item.groupId,
-          forestName: forestName(item.group, item.tree),
-          customerName: customerName(item.customer),
-          customerEmail: item.customer?.email || "No email",
-          totalTrees: 0,
-          protectedCount: 0,
-          attentionCount: 0,
-          criticalCount: 0,
-          assignedCount: 0,
-          inProgressCount: 0,
-          submittedCount: 0,
-          completedCount: 0,
-          lastUpdate: null,
-          trees: [],
-        });
-      }
-
-      const forest = map.get(key);
-      if (!forest) return;
-
-      forest.totalTrees += 1;
-      forest.trees.push(item);
-
-      if (item.warning.severity === "PROTECTED") forest.protectedCount += 1;
-      if (item.warning.severity === "ATTENTION") forest.attentionCount += 1;
-      if (item.warning.severity === "CRITICAL") forest.criticalCount += 1;
-
-      if (item.taskStatus === "ASSIGNED") forest.assignedCount += 1;
-      if (item.taskStatus === "IN_PROGRESS") forest.inProgressCount += 1;
-      if (item.taskStatus === "SUBMITTED") forest.submittedCount += 1;
-      if (item.taskStatus === "COMPLETED") forest.completedCount += 1;
-
-      forest.lastUpdate = latestValue([forest.lastUpdate, item.lastUpdate]);
-    });
-
-    return Array.from(map.values()).sort((a, b) => {
-      const riskA = a.criticalCount * 3 + a.attentionCount * 2;
-      const riskB = b.criticalCount * 3 + b.attentionCount * 2;
-
-      if (riskB !== riskA) return riskB - riskA;
-
-      return a.forestName.localeCompare(b.forestName);
-    });
-  }, [portfolioTrees]);
-
-  const filteredForests = useMemo(() => {
-    if (filter === "ALL") return forestPortfolios;
-
-    return forestPortfolios
-      .map((forest) => ({
-        ...forest,
-        trees: forest.trees.filter((tree) => tree.warning.severity === filter),
-      }))
-      .filter((forest) => forest.trees.length > 0);
-  }, [forestPortfolios, filter]);
+  const filteredTrees = useMemo(() => {
+    if (filter === "ALL") return assignedTrees;
+    return assignedTrees.filter((item) => item.status === filter);
+  }, [assignedTrees, filter]);
 
   const stats = useMemo(() => {
     return {
-      forests: forestPortfolios.length,
-      seedlings: portfolioTrees.filter((item) => item.tree).length,
-      protected: portfolioTrees.filter((item) => item.warning.severity === "PROTECTED").length,
-      attention: portfolioTrees.filter((item) => item.warning.severity === "ATTENTION").length,
-      critical: portfolioTrees.filter((item) => item.warning.severity === "CRITICAL").length,
-      activeTasks: portfolioTrees.filter((item) =>
-        ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"].includes(item.taskStatus)
-      ).length,
+      total: assignedTrees.length,
+      assigned: assignedTrees.filter((item) => item.status === "ASSIGNED").length,
+      inProgress: assignedTrees.filter((item) => item.status === "IN_PROGRESS").length,
+      submitted: assignedTrees.filter((item) => item.status === "SUBMITTED").length,
+      completed: assignedTrees.filter((item) => item.status === "COMPLETED").length,
     };
-  }, [forestPortfolios, portfolioTrees]);
+  }, [assignedTrees]);
+
+  function getTreeCode(item: AssignedTree) {
+    return (
+      item.tree?.tree_code ||
+      item.assignment?.tree_code ||
+      item.request?.tree_code ||
+      item.tree?.id ||
+      item.treeId ||
+      ""
+    );
+  }
+
+  function getTreeName(item: AssignedTree) {
+    return (
+      item.tree?.display_name ||
+      item.tree?.custom_name ||
+      item.tree?.name ||
+      item.assignment?.tree_name ||
+      item.request?.tree_name ||
+      "Assigned Tree"
+    );
+  }
+
+  function verifyTree(item: AssignedTree) {
+    const expectedCode = String(getTreeCode(item) || "").trim().toLowerCase();
+    const enteredCode = String(verifyInputMap[item.assignmentId] || "").trim().toLowerCase();
+
+    if (!expectedCode) {
+      setMessage("Tree code not found for this assignment.");
+      return;
+    }
+
+    if (enteredCode !== expectedCode) {
+      setMessage("Tree QR/code verification failed. Please scan or enter the correct tree code.");
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem(getVerificationKey(item.assignmentId), "VERIFIED");
+    }
+
+    setVerifiedMap((prev) => ({
+      ...prev,
+      [item.assignmentId]: true,
+    }));
+
+    setMessage("Tree verified. Photo, GPS, and Health evidence are now enabled.");
+  }
+
+  async function ensureTaskLog(item: AssignedTree, status: string) {
+    if (!caretaker) throw new Error("Caretaker not loaded.");
+
+    const now = new Date().toISOString();
+
+    const payload = {
+      assignment_id: item.assignmentId || null,
+      caretaker_id: caretaker.id,
+      caretaker_profile_id: caretaker.caretaker_profile_id || null,
+      customer_profile_id: item.customerProfileId || null,
+      tree_id: item.treeId || null,
+      group_id: item.groupId || null,
+      operation_request_id: item.operationRequestId || null,
+      task_type: item.sourceType || "TREE_OPERATION",
+      source_type: item.sourceType || "TREE_OPERATION",
+      evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
+      notes: `Gardener updated assignment to ${status.replace("_", " ")}.`,
+      status,
+      created_at: now,
+      updated_at: now,
+      started_at: status === "IN_PROGRESS" ? now : null,
+      submitted_at: status === "SUBMITTED" ? now : null,
+      completed_at: status === "COMPLETED" ? now : null,
+    };
+
+    const { data, error } = await supabase
+      .from("caretaker_task_logs")
+      .insert(payload)
+      .select("id")
+      .single();
+
+    if (error || !data) throw new Error(error?.message || "Failed to create task log.");
+    return data.id;
+  }
+
+  async function updateAssignmentStatus(item: AssignedTree, nextStatus: string) {
+    setMessage("");
+    setSavingKey(item.key);
+
+    const status = normalizeStatus(nextStatus);
+    const now = new Date().toISOString();
+
+    try {
+      const assignmentUpdate: Row = {
+        status,
+        updated_at: now,
+      };
+
+      if (status === "IN_PROGRESS") assignmentUpdate.started_at = item.assignment.started_at || now;
+      if (status === "SUBMITTED") assignmentUpdate.submitted_at = now;
+      if (status === "COMPLETED") assignmentUpdate.completed_at = now;
+
+      const { error: assignmentError } = await supabase
+        .from("caretaker_assignments")
+        .update(assignmentUpdate)
+        .eq("id", item.assignmentId);
+
+      if (assignmentError) throw assignmentError;
+
+      if (item.task?.id) {
+        const taskUpdate: Row = {
+          status,
+          evidence_status: status === "SUBMITTED" || status === "COMPLETED" ? "SUBMITTED" : "PENDING",
+          updated_at: now,
+        };
+
+        if (status === "IN_PROGRESS") taskUpdate.started_at = item.task.started_at || now;
+        if (status === "SUBMITTED") taskUpdate.submitted_at = now;
+        if (status === "COMPLETED") taskUpdate.completed_at = now;
+
+        const { error: taskError } = await supabase
+          .from("caretaker_task_logs")
+          .update(taskUpdate)
+          .eq("id", item.task.id);
+
+        if (taskError) throw taskError;
+      } else {
+        await ensureTaskLog(item, status);
+      }
+
+      if (item.operationRequestId && item.sourceType === "TREE_OPERATION") {
+        const requestUpdate: Row = {
+          status,
+          assignment_status: status,
+          updated_at: now,
+        };
+
+        if (status === "COMPLETED") requestUpdate.completed_at = now;
+
+        const { error: requestError } = await supabase
+          .from("tree_operation_requests")
+          .update(requestUpdate)
+          .eq("id", item.operationRequestId);
+
+        if (requestError) throw requestError;
+      }
+
+      setMessage(`Assignment synced as ${status.replace("_", " ")}.`);
+      await loadData();
+    } catch (error: any) {
+      setMessage(error?.message || "Assignment update failed.");
+    }
+
+    setSavingKey("");
+  }
 
   return (
     <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
@@ -564,14 +521,14 @@ export default function GardenerAssignedTreesPage() {
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
-                Gardener Scope View
+                Arganwood Gardener Portal
               </p>
               <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
                 Assigned Forest Portfolio
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-                View the forests and seedlings assigned to you. This page is for scope and portfolio
-                visibility. Use Tasks for work execution.
+                View assigned trees, verify QR identity, and submit field evidence only after tree
+                verification.
               </p>
             </div>
 
@@ -594,42 +551,57 @@ export default function GardenerAssignedTreesPage() {
             </div>
           )}
 
-          <div className="mt-8 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-            <HeroStat label="Forests" value={stats.forests} />
-            <HeroStat label="Seedlings" value={stats.seedlings} />
-            <HeroStat label="Protected" value={stats.protected} tone="green" />
-            <HeroStat label="Attention" value={stats.attention} tone="yellow" />
-            <HeroStat label="Critical" value={stats.critical} tone="red" />
-            <HeroStat label="Active Tasks" value={stats.activeTasks} tone="gold" />
+          <div className="mt-8 grid gap-4 md:grid-cols-5">
+            <StatCard label="Total" value={stats.total} />
+            <StatCard label="Assigned" value={stats.assigned} />
+            <StatCard label="In Progress" value={stats.inProgress} />
+            <StatCard label="Submitted" value={stats.submitted} />
+            <StatCard label="Completed" value={stats.completed} />
           </div>
         </section>
 
         <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl backdrop-blur-xl">
           <div className="flex flex-wrap gap-3">
-            {(["ALL", "PROTECTED", "ATTENTION", "CRITICAL"] as Filter[]).map((item) => (
-              <button
-                key={item}
-                onClick={() => setFilter(item)}
-                className={`rounded-full px-5 py-3 text-sm font-black transition ${
-                  filter === item
-                    ? "bg-[#d9b45f] text-[#071f16]"
-                    : "border border-white/10 bg-white/10 text-white/70 hover:bg-white/15"
-                }`}
-              >
-                {item}
-              </button>
-            ))}
+            {(["ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"] as Filter[]).map(
+              (item) => (
+                <button
+                  key={item}
+                  onClick={() => setFilter(item)}
+                  className={`rounded-full px-5 py-3 text-sm font-black transition ${
+                    filter === item
+                      ? "bg-[#d9b45f] text-[#071f16]"
+                      : "border border-white/10 bg-white/10 text-white/70 hover:bg-white/15"
+                  }`}
+                >
+                  {item.replaceAll("_", " ")}
+                </button>
+              )
+            )}
           </div>
         </section>
 
         {loading ? (
-          <EmptyCard text="Loading assigned forest portfolio..." />
-        ) : filteredForests.length === 0 ? (
-          <EmptyCard text="No assigned forests or seedlings found for this view." />
+          <EmptyCard text="Loading assigned trees..." />
+        ) : filteredTrees.length === 0 ? (
+          <EmptyCard text="No assigned trees found for this gardener." />
         ) : (
-          <section className="space-y-6">
-            {filteredForests.map((forest) => (
-              <ForestCard key={forest.key} forest={forest} />
+          <section className="space-y-5">
+            {filteredTrees.map((item) => (
+              <AssignedTreeCard
+                key={item.key}
+                item={item}
+                saving={savingKey === item.key}
+                isVerified={Boolean(verifiedMap[item.assignmentId])}
+                verifyValue={verifyInputMap[item.assignmentId] || ""}
+                setVerifyValue={(value) =>
+                  setVerifyInputMap((prev) => ({
+                    ...prev,
+                    [item.assignmentId]: value,
+                  }))
+                }
+                verifyTree={() => verifyTree(item)}
+                updateAssignmentStatus={(status) => updateAssignmentStatus(item, status)}
+              />
             ))}
           </section>
         )}
@@ -638,374 +610,252 @@ export default function GardenerAssignedTreesPage() {
   );
 }
 
-function ForestCard({ forest }: { forest: ForestPortfolio }) {
-  const firstTask = forest.trees[0];
+function AssignedTreeCard({
+  item,
+  saving,
+  isVerified,
+  verifyValue,
+  setVerifyValue,
+  verifyTree,
+  updateAssignmentStatus,
+}: {
+  item: AssignedTree;
+  saving: boolean;
+  isVerified: boolean;
+  verifyValue: string;
+  setVerifyValue: (value: string) => void;
+  verifyTree: () => void;
+  updateAssignmentStatus: (status: string) => void;
+}) {
+  const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
+
+  const treeCode =
+    item.tree?.tree_code ||
+    item.assignment?.tree_code ||
+    item.request?.tree_code ||
+    item.tree?.id ||
+    item.treeId ||
+    "—";
+
+  const treeName =
+    item.tree?.display_name ||
+    item.tree?.custom_name ||
+    item.tree?.name ||
+    item.assignment?.tree_name ||
+    item.request?.tree_name ||
+    "Assigned Tree";
 
   return (
     <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-        <div>
-          <p className="text-sm font-bold text-white/55">{forest.customerName}</p>
-          <h2 className="mt-2 text-3xl font-black text-[#ffe49a]">🌳 {forest.forestName}</h2>
-          <p className="mt-1 text-xs font-semibold text-white/45">
-            {forest.customerEmail}
-          </p>
+      <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusBadge status={item.status} />
+            <span className="rounded-full border border-[#d9b45f]/30 bg-[#d9b45f]/10 px-3 py-1 text-xs font-black text-[#ffe49a]">
+              {item.sourceType.replaceAll("_", " ")}
+            </span>
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-black ${
+                isVerified
+                  ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-200"
+                  : "border-red-400/30 bg-red-500/15 text-red-200"
+              }`}
+            >
+              {isVerified ? "TREE VERIFIED" : "QR REQUIRED"}
+            </span>
+          </div>
 
-          <p className="mt-4 text-sm text-white/60">
-            Last update: <span className="font-black text-white">{formatDate(forest.lastUpdate)}</span>
-          </p>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-white/40">
+              Tree Name
+            </p>
+            <h2 className="mt-2 text-3xl font-black text-[#ffe49a]">{treeName}</h2>
+
+            <p className="mt-3 text-sm text-white/65">
+              Tree Code: <b className="text-white">{treeCode}</b>
+            </p>
+
+            <p className="mt-1 text-sm text-white/65">
+              Customer:{" "}
+              <b className="text-white">
+                {item.customer?.full_name || item.customer?.email || "Unknown Customer"}
+              </b>
+            </p>
+
+            <p className="mt-1 text-sm text-white/65">
+              Customer Email: <b className="text-white">{item.customer?.email || "—"}</b>
+            </p>
+
+            <p className="mt-1 text-sm text-white/65">
+              Operation Type: <b className="text-white">{item.title}</b>
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <Info label="Assigned Date" value={formatDate(item.createdAt)} />
+            <Info label="Evidence Status" value={item.task?.evidence_status || "PENDING"} />
+            <Info
+              label="Forest"
+              value={
+                item.group?.forest_name ||
+                item.group?.group_name ||
+                item.tree?.tree_group_name ||
+                "Single Tree"
+              }
+            />
+          </div>
+
+          <div className="rounded-3xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#ffe49a]">
+              QR Verification Card
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-white/65">
+              Scan the physical tree QR or enter the exact Tree Code before uploading Photo, GPS, or
+              Health evidence.
+            </p>
+
+            <div className="mt-4 flex flex-col gap-3 md:flex-row">
+              <input
+                value={verifyValue}
+                onChange={(event) => setVerifyValue(event.target.value)}
+                placeholder="Enter scanned Tree Code"
+                className="min-h-[48px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30 focus:border-[#d9b45f]/60"
+              />
+              <button
+                onClick={verifyTree}
+                className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-sm font-black text-[#071f16] hover:bg-[#f7d774]"
+              >
+                Verify Tree
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 md:grid-cols-6 xl:min-w-[640px]">
-          <MiniStat label="Trees" value={forest.totalTrees} />
-          <MiniStat label="Protected" value={forest.protectedCount} tone="green" />
-          <MiniStat label="Attention" value={forest.attentionCount} tone="yellow" />
-          <MiniStat label="Critical" value={forest.criticalCount} tone="red" />
-          <MiniStat label="Working" value={forest.inProgressCount + forest.submittedCount} tone="gold" />
-          <MiniStat label="Done" value={forest.completedCount} tone="green" />
+        <div className="space-y-3">
+          {!closed && item.status === "ASSIGNED" && (
+            <button
+              onClick={() => updateAssignmentStatus("IN_PROGRESS")}
+              disabled={saving}
+              className="w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
+            >
+              Start Work
+            </button>
+          )}
+
+          {!closed && item.status === "IN_PROGRESS" && (
+            <button
+              onClick={() => updateAssignmentStatus("SUBMITTED")}
+              disabled={saving}
+              className="w-full rounded-2xl bg-blue-400 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-blue-300 disabled:opacity-50"
+            >
+              Submit Assignment
+            </button>
+          )}
+
+          {!closed && item.status === "SUBMITTED" && (
+            <button
+              onClick={() => updateAssignmentStatus("COMPLETED")}
+              disabled={saving}
+              className="w-full rounded-2xl bg-emerald-500 px-5 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:opacity-50"
+            >
+              Mark Complete
+            </button>
+          )}
+
+          <EvidenceLink
+            enabled={isVerified}
+            href={`/gardener/photo-updates?assignment_id=${item.assignment.id}`}
+            label="Upload Photo"
+          />
+
+          <EvidenceLink
+            enabled={isVerified}
+            href={`/gardener/gps-updates?assignment_id=${item.assignment.id}`}
+            label="Submit GPS"
+          />
+
+          <EvidenceLink
+            enabled={isVerified}
+            href={`/gardener/health-reports?assignment_id=${item.assignment.id}`}
+            label="Submit Health"
+          />
         </div>
-      </div>
-
-      <div className="mt-6 grid gap-4">
-        {forest.trees.map((item) => (
-          <SeedlingCard key={item.key} item={item} />
-        ))}
-      </div>
-
-      <div className="mt-6 flex flex-wrap gap-3">
-        <Link
-          href="/gardener/tasks"
-          className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-sm font-black text-[#071f16]"
-        >
-          View Tasks
-        </Link>
-
-        <Link
-          href={`/gardener/photo-updates${firstTask ? buildQuery(firstTask) : ""}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-5 py-3 text-sm font-black text-white hover:bg-white/15"
-        >
-          View / Upload Photos
-        </Link>
-
-        <Link
-          href={`/gardener/gps-updates${firstTask ? buildQuery(firstTask) : ""}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-5 py-3 text-sm font-black text-white hover:bg-white/15"
-        >
-          View / Upload GPS
-        </Link>
-
-        <Link
-          href={`/gardener/health-reports${firstTask ? buildQuery(firstTask) : ""}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-5 py-3 text-sm font-black text-white hover:bg-white/15"
-        >
-          View / Upload Health
-        </Link>
       </div>
     </article>
   );
 }
 
-function SeedlingCard({ item }: { item: PortfolioTree }) {
-  const warningColor =
-    item.warning.severity === "CRITICAL"
-      ? "border-red-400/25 bg-red-500/10 text-red-100"
-      : item.warning.severity === "ATTENTION"
-      ? "border-yellow-400/25 bg-yellow-500/10 text-yellow-100"
-      : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100";
+function EvidenceLink({
+  enabled,
+  href,
+  label,
+}: {
+  enabled: boolean;
+  href: string;
+  label: string;
+}) {
+  if (!enabled) {
+    return (
+      <button
+        disabled
+        className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-black text-white/30"
+      >
+        {label} — Verify Tree First
+      </button>
+    );
+  }
 
+  return (
+    <Link
+      href={href}
+      className="block w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
+    >
+      {label}
+    </Link>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h3 className="text-2xl font-black text-white">{treeName(item.tree)}</h3>
-            <span className={`rounded-full border px-3 py-1 text-xs font-black ${warningColor}`}>
-              {item.warning.severity}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-black text-white/55">
-              {item.taskStatus.replaceAll("_", " ")}
-            </span>
-          </div>
-
-          <p className="mt-2 text-sm font-semibold text-white/50">
-            {item.warning.reason} • Care: {item.careStatus}
-          </p>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3 lg:min-w-[520px]">
-          <Info label="Customer" value={customerName(item.customer)} />
-          <Info label="Task Status" value={item.taskStatus.replaceAll("_", " ")} />
-          <Info label="Last Update" value={formatDate(item.lastUpdate)} />
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-3">
-        <Link
-          href={`/gardener/tasks${buildQuery(item)}`}
-          className="rounded-2xl bg-[#d9b45f] px-4 py-2 text-sm font-black text-[#071f16]"
-        >
-          View Task
-        </Link>
-
-        <Link
-          href={`/gardener/photo-updates${buildQuery(item)}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-black text-white hover:bg-white/15"
-        >
-          Photos
-        </Link>
-
-        <Link
-          href={`/gardener/gps-updates${buildQuery(item)}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-black text-white hover:bg-white/15"
-        >
-          GPS
-        </Link>
-
-        <Link
-          href={`/gardener/health-reports${buildQuery(item)}`}
-          className="rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-black text-white hover:bg-white/15"
-        >
-          Health
-        </Link>
-      </div>
+      <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">{label}</p>
+      <p className="mt-3 text-3xl font-black text-[#ffe49a]">{value}</p>
     </div>
   );
 }
 
-function HeroStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "green" | "yellow" | "red" | "gold";
-}) {
-  const color =
-    tone === "green"
-      ? "text-emerald-200"
-      : tone === "yellow"
-      ? "text-yellow-200"
-      : tone === "red"
-      ? "text-red-200"
-      : "text-[#d9b45f]";
-
+function Info({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">{label}</p>
-      <p className={`mt-3 text-3xl font-black ${color}`}>{value}</p>
-    </div>
-  );
-}
-
-function MiniStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "green" | "yellow" | "red" | "gold";
-}) {
-  const color =
-    tone === "green"
-      ? "text-emerald-200"
-      : tone === "yellow"
-      ? "text-yellow-200"
-      : tone === "red"
-      ? "text-red-200"
-      : tone === "gold"
-      ? "text-[#ffe49a]"
-      : "text-white";
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
-      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/40">{label}</p>
-      <p className={`mt-2 text-xl font-black ${color}`}>{value}</p>
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-3">
-      <p className="text-xs font-black uppercase tracking-[0.14em] text-white/40">{label}</p>
-      <p className="mt-2 break-words text-sm font-black text-white">{value || "—"}</p>
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">{label}</p>
+      <p className="mt-2 text-sm font-bold text-white/80">{value || "—"}</p>
     </div>
   );
 }
 
 function EmptyCard({ text }: { text: string }) {
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-8 text-sm font-bold text-white/60 shadow-2xl backdrop-blur-xl">
+    <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-8 text-white/65 shadow-2xl backdrop-blur-xl">
       {text}
     </div>
   );
 }
 
-function makeMap(rows: Row[]) {
-  const map = new Map<string, Row>();
+function StatusBadge({ status }: { status: string }) {
+  const value = normalizeStatus(status);
+  let classes = "border-yellow-400/30 bg-yellow-500/15 text-yellow-200";
 
-  rows.forEach((row) => {
-    if (row.id) map.set(String(row.id), row);
-  });
+  if (value === "IN_PROGRESS") classes = "border-blue-400/30 bg-blue-500/15 text-blue-200";
+  if (value === "SUBMITTED") classes = "border-purple-400/30 bg-purple-500/15 text-purple-200";
+  if (value === "COMPLETED") classes = "border-emerald-400/30 bg-emerald-500/15 text-emerald-200";
 
-  return map;
-}
+  if (["REJECTED", "CANCELLED", "FAILED"].includes(value)) {
+    classes = "border-red-400/30 bg-red-500/15 text-red-200";
+  }
 
-function mergeById(rows: Row[]) {
-  const map = new Map<string, Row>();
-
-  rows.forEach((row) => {
-    if (row.id) map.set(String(row.id), row);
-  });
-
-  return Array.from(map.values());
-}
-
-function normalizeStatus(value: any) {
-  return String(value || "ASSIGNED").trim().toUpperCase();
-}
-
-function uniqueStrings(values: any[]) {
-  return Array.from(
-    new Set(
-      values
-        .map((value) => String(value || "").trim())
-        .filter((value) => value.length > 0)
-    )
+  return (
+    <span className={`rounded-full border px-3 py-1 text-xs font-black ${classes}`}>
+      {value.replaceAll("_", " ")}
+    </span>
   );
-}
-
-function customerName(customer: Row | null) {
-  if (!customer) return "Customer";
-  return customer.full_name || customer.email || "Customer";
-}
-
-function forestName(group: Row | null, tree: Row | null) {
-  if (group) {
-    return group.forest_name || group.group_name || group.block_name || group.farm_location || "Customer Forest";
-  }
-
-  return tree?.tree_group_name || "Ungrouped Forest";
-}
-
-function treeName(tree: Row | null) {
-  if (!tree) return "Forest Scope";
-  return tree.display_name || tree.custom_name || "Seedling";
-}
-
-function treeWarning(tree: Row | null): {
-  severity: "PROTECTED" | "ATTENTION" | "CRITICAL";
-  reason: string;
-} {
-  if (!tree) {
-    return { severity: "ATTENTION", reason: "Forest Scope" };
-  }
-
-  const alertStatus = String(tree.alert_status || "").toUpperCase();
-  const alertReason = String(tree.alert_reason || "").trim();
-
-  if (alertStatus === "CRITICAL") {
-    return { severity: "CRITICAL", reason: alertReason || "Critical Alert" };
-  }
-
-  if (alertStatus === "ATTENTION" || alertStatus === "WARNING") {
-    return { severity: "ATTENTION", reason: alertReason || "Needs Attention" };
-  }
-
-  const careStatus = String(tree.care_status || "").toUpperCase();
-
-  if (careStatus.includes("NOT_SUBSCRIBED") || careStatus.includes("NOT ENROLLED")) {
-    return { severity: "CRITICAL", reason: "Not Subscribed" };
-  }
-
-  if (careStatus.includes("EXPIRED")) {
-    return { severity: "CRITICAL", reason: "Care Expired" };
-  }
-
-  const expiresAt = tree.care_expires_at ? new Date(tree.care_expires_at) : null;
-
-  if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
-    const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-
-    if (daysLeft < 0) return { severity: "CRITICAL", reason: "Care Expired" };
-    if (daysLeft <= 7) return { severity: "ATTENTION", reason: "Care Expiring Soon" };
-  }
-
-  const health = String(tree.last_health_status || tree.health_status || "").toUpperCase();
-
-  if (
-    health.includes("CRITICAL") ||
-    health.includes("DISEASE") ||
-    health.includes("PEST") ||
-    health.includes("ISSUE")
-  ) {
-    return { severity: "CRITICAL", reason: "Health Issue" };
-  }
-
-  const latestUpdate = latestDate([
-    tree.last_photo_update_at,
-    tree.last_gps_update_at,
-    tree.last_health_report_at,
-  ]);
-
-  if (latestUpdate) {
-    const days = Math.floor((Date.now() - latestUpdate.getTime()) / (1000 * 60 * 60 * 24));
-    if (days > 30) return { severity: "ATTENTION", reason: "No Recent Update" };
-  }
-
-  const valuation = String(tree.valuation_status || "").toUpperCase();
-
-  if (valuation.includes("PENDING") || valuation.includes("NEEDS_REVIEW") || tree.valuation_requested_at) {
-    return { severity: "ATTENTION", reason: "Valuation Pending" };
-  }
-
-  return { severity: "PROTECTED", reason: "Protected" };
-}
-
-function latestDate(values: any[]) {
-  const dates = values
-    .map((value) => {
-      if (!value) return null;
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? null : date;
-    })
-    .filter(Boolean) as Date[];
-
-  if (dates.length === 0) return null;
-
-  return dates.sort((a, b) => b.getTime() - a.getTime())[0];
-}
-
-function latestValue(values: any[]) {
-  const date = latestDate(values);
-  return date ? date.toISOString() : null;
-}
-
-function buildQuery(item: PortfolioTree) {
-  const params = new URLSearchParams();
-
-  if (item.assignmentId) params.set("assignment_id", item.assignmentId);
-  if (item.operationRequestId) params.set("operation_request_id", item.operationRequestId);
-  if (item.treeId) params.set("tree_id", item.treeId);
-  if (item.groupId) params.set("group_id", item.groupId);
-
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
-function formatDate(value: any) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return date.toLocaleString("en-PH", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }

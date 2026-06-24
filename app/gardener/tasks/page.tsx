@@ -297,7 +297,8 @@ export default function GardenerTasksPage() {
       const treeId = task?.tree_id || assignment.tree_id || request?.tree_id || null;
       const tree = treeId ? treeMap.get(String(treeId)) || null : null;
 
-      const groupId = task?.group_id || assignment.group_id || request?.group_id || tree?.group_id || null;
+      const groupId =
+        task?.group_id || assignment.group_id || request?.group_id || tree?.group_id || null;
       const group = groupId ? groupMap.get(String(groupId)) || null : null;
 
       const customerProfileId =
@@ -329,7 +330,8 @@ export default function GardenerTasksPage() {
         treeId,
         groupId,
         customerProfileId,
-        operationRequestId: task?.operation_request_id || assignment.operation_request_id || request?.id || null,
+        operationRequestId:
+          task?.operation_request_id || assignment.operation_request_id || request?.id || null,
         assignmentId: assignment.id || task?.assignment_id || null,
         createdAt: task?.created_at || assignment.created_at || request?.created_at || null,
       });
@@ -634,6 +636,7 @@ function TaskCard({
   updateTaskStatus: (status: string) => void;
 }) {
   const closed = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"].includes(item.status);
+  const assignmentQuery = item.assignmentId ? `?assignment_id=${item.assignmentId}` : "";
 
   return (
     <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
@@ -720,21 +723,21 @@ function TaskCard({
 
           <div className="grid gap-2">
             <Link
-              href="/gardener/photo-updates"
+              href={`/gardener/photo-updates${assignmentQuery}`}
               className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
             >
               Upload Photo Evidence
             </Link>
 
             <Link
-              href="/gardener/gps-updates"
+              href={`/gardener/gps-updates${assignmentQuery}`}
               className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
             >
               Upload GPS Evidence
             </Link>
 
             <Link
-              href="/gardener/health-reports"
+              href={`/gardener/health-reports${assignmentQuery}`}
               className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-center text-sm font-black text-white/75 hover:bg-white/15"
             >
               Submit Health Report

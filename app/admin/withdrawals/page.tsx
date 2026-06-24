@@ -207,17 +207,8 @@ export default function AdminWithdrawalsPage() {
     if (!request.profile_id) throw new Error("Profile ID missing.");
 
     const existing = await getFreshTransaction(request.id);
-    const originalAmount = existing?.amount;
     const fallbackAmount = -Math.abs(Number(request.amount || 0));
-
-    const amount =
-      status === "COMPLETED"
-        ? Number(originalAmount || fallbackAmount)
-        : status === "REJECTED"
-        ? Number(originalAmount || fallbackAmount)
-        : Number(originalAmount || fallbackAmount);
-
-    const transactionType = "WITHDRAWAL";
+    const amount = Number(existing?.amount || fallbackAmount);
 
     const description =
       status === "COMPLETED"
@@ -232,7 +223,7 @@ export default function AdminWithdrawalsPage() {
       const { error } = await supabase
         .from("wallet_transactions")
         .update({
-          transaction_type: transactionType,
+          transaction_type: "WITHDRAWAL",
           amount,
           status,
           description,
@@ -245,7 +236,7 @@ export default function AdminWithdrawalsPage() {
 
     const { error } = await supabase.from("wallet_transactions").insert({
       profile_id: request.profile_id,
-      transaction_type: transactionType,
+      transaction_type: "WITHDRAWAL",
       amount,
       reference_no: request.id,
       description,
@@ -300,13 +291,19 @@ export default function AdminWithdrawalsPage() {
     setMessage("");
 
     try {
-      const { error } = await supabase
+      const { data: updatedRequest, error } = await supabase
         .from("withdrawal_requests")
         .update({ status: "PROCESSING" })
         .eq("id", request.id)
-        .eq("status", "PENDING");
+        .eq("status", "PENDING")
+        .select("id,status")
+        .maybeSingle();
 
       if (error) throw error;
+
+      if (!updatedRequest || normalize(updatedRequest.status) !== "PROCESSING") {
+        throw new Error("Withdrawal request status was not updated.");
+      }
 
       await updateWithdrawalTransaction(request, "PROCESSING");
 
@@ -318,6 +315,44 @@ export default function AdminWithdrawalsPage() {
     }
 
     setActionLoading("");
+  }
+
+  async function treasuryEntryExists(sourceType: string, sourceId: string) {
+    const { data, error } = await supabase
+      .from("platform_treasury")
+      .select("id")
+      .eq("source_type", sourceType)
+      .eq("source_id", sourceId)
+      .limit(1);
+
+    if (error) throw error;
+
+    return (data || []).length > 0;
+  }
+
+  async function insertWithdrawalTreasuryEntry(request: WithdrawalRequest) {
+    if (!request.id || !request.profile_id) throw new Error("Withdrawal request profile missing.");
+
+    const exists = await treasuryEntryExists("WITHDRAWAL", request.id);
+    if (exists) return;
+
+    const amount = -Math.abs(Number(request.amount || 0));
+
+    const { error } = await supabase.from("platform_treasury").insert({
+      source: "WITHDRAWAL",
+      source_type: "WITHDRAWAL",
+      source_id: request.id,
+      reference_id: request.id,
+      reference_no: request.id,
+      customer_profile_id: request.profile_id,
+      profile_id: request.profile_id,
+      amount,
+      description: "Withdrawal paid",
+      status: "POSTED",
+      created_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
   }
 
   async function markPaid(request: WithdrawalRequest) {
@@ -339,21 +374,35 @@ export default function AdminWithdrawalsPage() {
     setMessage("");
 
     try {
-      const { error } = await supabase
+      const { data: updatedRequest, error: withdrawalError } = await supabase
         .from("withdrawal_requests")
         .update({ status: "PAID" })
         .eq("id", request.id)
-        .in("status", ["PENDING", "PROCESSING"]);
+        .in("status", ["PENDING", "PROCESSING"])
+        .select("id,status")
+        .maybeSingle();
 
-      if (error) throw error;
+      if (withdrawalError) {
+        throw withdrawalError;
+      }
+
+      if (!updatedRequest || normalize(updatedRequest.status) !== "PAID") {
+        throw new Error("Withdrawal request status was not updated.");
+      }
 
       await updateWithdrawalTransaction(request, "COMPLETED");
 
-      setMessage("Withdrawal marked as PAID. Wallet was not deducted again.");
+      try {
+        await insertWithdrawalTreasuryEntry(request);
+        setMessage("Withdrawal marked as PAID. Wallet was not deducted again. Platform treasury synced.");
+      } catch (treasuryError) {
+        console.error("Withdrawal treasury sync failed:", treasuryError);
+        setMessage("Withdrawal marked as PAID and wallet transaction completed. Request was created, but treasury sync failed. Please check platform_treasury.");
+      }
       await loadData();
       setTab("PAID");
     } catch (error: any) {
-      setMessage(error?.message || "Failed to mark withdrawal as paid.");
+      setMessage(error?.message || "Withdrawal request status was not updated.");
     }
 
     setActionLoading("");
@@ -376,13 +425,19 @@ export default function AdminWithdrawalsPage() {
     try {
       await restoreWalletOnce(request);
 
-      const { error } = await supabase
+      const { data: updatedRequest, error } = await supabase
         .from("withdrawal_requests")
         .update({ status: "REJECTED" })
         .eq("id", request.id)
-        .in("status", ["PENDING", "PROCESSING"]);
+        .in("status", ["PENDING", "PROCESSING"])
+        .select("id,status")
+        .maybeSingle();
 
       if (error) throw error;
+
+      if (!updatedRequest || normalize(updatedRequest.status) !== "REJECTED") {
+        throw new Error("Withdrawal request status was not updated.");
+      }
 
       await updateWithdrawalTransaction(request, "REJECTED");
 

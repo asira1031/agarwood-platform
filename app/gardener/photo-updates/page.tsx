@@ -1,459 +1,482 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useSearchParams } from "next/navigation";
+import { createClient } from "@/utils/supabase/client";
 
-const ACTIVE_ASSIGNMENT_STATUSES = ["ASSIGNED", "IN_PROGRESS", "ACTIVE"];
-const ACTIVE_TASK_STATUSES = ["ASSIGNED", "IN_PROGRESS", "ACTIVE"];
+type AssignedTask = {
+  assignment_id: string;
+  operation_request_id: string;
+  task_log_id?: string | null;
+  caretaker_id: string;
+  tree_id: string;
+  tree_code?: string | null;
+  tree_name?: string | null;
+  customer_profile_id: string;
+  customer_name?: string | null;
+  customer_email?: string | null;
+  request_type?: string | null;
+  operation_type?: string | null;
+  service_name?: string | null;
+  assignment_status?: string | null;
+  task_status?: string | null;
+  evidence_status?: string | null;
+};
+
+const verifiedKey = (id: string) => `verified_tree_assignment_${id}`;
 
 export default function GardenerPhotoUpdatesPage() {
-  const [caretaker, setCaretaker] = useState<any>(null);
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [photoUpdates, setPhotoUpdates] = useState<any[]>([]);
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
-  const [photoUrl, setPhotoUrl] = useState("");
-  const [beforePhotoUrl, setBeforePhotoUrl] = useState("");
-  const [afterPhotoUrl, setAfterPhotoUrl] = useState("");
-  const [caption, setCaption] = useState("");
-  const [notes, setNotes] = useState("");
+  const supabase = createClient();
+  const searchParams = useSearchParams();
+
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const [tasks, setTasks] = useState<AssignedTask[]>([]);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
+  const [lockedTask, setLockedTask] = useState<AssignedTask | null>(null);
 
-  async function loadData() {
+  const [qrValue, setQrValue] = useState("");
+  const [qrError, setQrError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [beforeFile, setBeforeFile] = useState<File | null>(null);
+  const [afterFile, setAfterFile] = useState<File | null>(null);
+
+  const [fallbackPhotoUrl, setFallbackPhotoUrl] = useState("");
+  const [fallbackBeforeUrl, setFallbackBeforeUrl] = useState("");
+  const [fallbackAfterUrl, setFallbackAfterUrl] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const selectedTask = useMemo(
+    () => tasks.find((t) => t.assignment_id === selectedAssignmentId) || null,
+    [tasks, selectedAssignmentId]
+  );
+
+  function parseQr(raw: string) {
+    const value = raw.trim();
+    if (!value) return null;
+
+    try {
+      const url = new URL(value);
+      return {
+        tree_id: url.searchParams.get("tree_id"),
+        tree_code: url.searchParams.get("tree_code"),
+      };
+    } catch {
+      return {
+        tree_id: value.length > 20 && value.includes("-") ? value : null,
+        tree_code: value,
+      };
+    }
+  }
+
+  function matchesTask(task: AssignedTask, parsed: { tree_id: string | null; tree_code: string | null }) {
+    const byId = parsed.tree_id && parsed.tree_id === task.tree_id;
+    const byCode = parsed.tree_code && task.tree_code && parsed.tree_code.toLowerCase() === task.tree_code.toLowerCase();
+    return Boolean(byId || byCode);
+  }
+
+  async function loadTasks() {
     setLoading(true);
-    setMessage("");
+    setQrError("");
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+    const { data: auth } = await supabase.auth.getUser();
+    const user = auth?.user;
 
-    if (userError || !user) {
-      window.location.href = "/login";
+    if (!user) {
+      setLoading(false);
       return;
     }
 
-    const email = user.email?.trim().toLowerCase() || "";
-
-    const { data: profileById } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const { data: profileByEmail } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("email", email)
-      .maybeSingle();
-
+    const { data: profileById } = await supabase.from("profiles").select("id,email,full_name").eq("id", user.id).maybeSingle();
+    const { data: profileByEmail } = await supabase.from("profiles").select("id,email,full_name").ilike("email", user.email || "").maybeSingle();
     const profile = profileById || profileByEmail;
 
-    const { data: caretakerRow, error: caretakerError } = await supabase
-      .from("caretakers")
-      .select("*")
-      .or(`email.eq.${email},caretaker_profile_id.eq.${profile?.id || user.id}`)
-      .maybeSingle();
-
-    if (caretakerError) {
-      setMessage(caretakerError.message);
+    if (!profile) {
       setLoading(false);
       return;
     }
 
-    if (!caretakerRow) {
-      setMessage("Caretaker profile not found.");
+    const { data: caretaker } = await supabase.from("caretakers").select("id,caretaker_profile_id").eq("caretaker_profile_id", profile.id).maybeSingle();
+
+    if (!caretaker) {
       setLoading(false);
       return;
     }
 
-    if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
-      setMessage("Your gardener account is not ACTIVE.");
-      setLoading(false);
-      return;
-    }
-
-    setCaretaker(caretakerRow);
-
-    const { data: assignmentRows, error: assignmentError } = await supabase
+    const { data: assignments } = await supabase
       .from("caretaker_assignments")
-      .select("*")
-      .eq("caretaker_id", caretakerRow.id)
-      .in("status", ACTIVE_ASSIGNMENT_STATUSES);
+      .select(`
+        id,status,tree_id,customer_profile_id,operation_request_id,
+        trees:tree_id(id,tree_code,name),
+        profiles:customer_profile_id(id,full_name,email),
+        tree_operation_requests:operation_request_id(id,request_type,service_name,operation_type,status,assignment_status)
+      `)
+      .eq("caretaker_id", caretaker.id)
+      .in("status", ["ASSIGNED", "IN_PROGRESS", "SUBMITTED"])
+      .order("assigned_at", { ascending: false });
 
-    if (assignmentError) {
-      setMessage(assignmentError.message);
-      setLoading(false);
-      return;
-    }
+    const assignmentIds = (assignments || []).map((a: any) => a.id);
 
-    const assignmentIds = (assignmentRows || []).map((item) => item.id);
-
-    const { data: taskRows, error: taskError } = assignmentIds.length
+    const { data: logs } = assignmentIds.length
       ? await supabase
           .from("caretaker_task_logs")
-          .select("*")
+          .select("id,assignment_id,operation_request_id,status,evidence_status")
           .in("assignment_id", assignmentIds)
-          .in("status", ACTIVE_TASK_STATUSES)
-      : { data: [], error: null };
+      : { data: [] };
 
-    if (taskError) {
-      setMessage(taskError.message);
-      setLoading(false);
-      return;
+    const mapped: AssignedTask[] = (assignments || []).map((a: any) => {
+      const log = (logs || []).find((l: any) => l.assignment_id === a.id);
+
+      return {
+        assignment_id: a.id,
+        operation_request_id: a.operation_request_id,
+        task_log_id: log?.id || null,
+        caretaker_id: caretaker.id,
+        tree_id: a.tree_id,
+        tree_code: a.trees?.tree_code || null,
+        tree_name: a.trees?.name || null,
+        customer_profile_id: a.customer_profile_id,
+        customer_name: a.profiles?.full_name || "Customer",
+        customer_email: a.profiles?.email || "",
+        request_type: a.tree_operation_requests?.request_type || "",
+        operation_type: a.tree_operation_requests?.operation_type || "",
+        service_name: a.tree_operation_requests?.service_name || "",
+        assignment_status: a.status,
+        task_status: log?.status || "",
+        evidence_status: log?.evidence_status || "PENDING",
+      };
+    });
+
+    setTasks(mapped);
+
+    const assignmentFromUrl = searchParams.get("assignment_id");
+    if (assignmentFromUrl) {
+      setSelectedAssignmentId(assignmentFromUrl);
+
+      const found = mapped.find((t) => t.assignment_id === assignmentFromUrl);
+      if (found && localStorage.getItem(verifiedKey(found.assignment_id)) === "true") {
+        setLockedTask(found);
+        setSuccess("✓ Tree Verified");
+      }
     }
 
-    const taskMap = new Map(
-      (taskRows || []).map((task) => [task.assignment_id, task])
-    );
-
-    const activeAssignments = (assignmentRows || [])
-      .filter((assignment) => taskMap.has(assignment.id))
-      .map((assignment) => ({
-        ...assignment,
-        active_task: taskMap.get(assignment.id),
-      }));
-
-    const { data: photoRows, error: photoError } = await supabase
-      .from("tree_photo_updates")
-      .select("*")
-      .eq("caretaker_id", caretakerRow.id)
-      .order("created_at", { ascending: false });
-
-    if (photoError) {
-      setMessage(photoError.message);
-      setLoading(false);
-      return;
-    }
-
-    setAssignments(activeAssignments);
-    setPhotoUpdates(photoRows || []);
-    setSelectedAssignmentId((current) => current || activeAssignments[0]?.id || "");
     setLoading(false);
   }
 
-  const selectedAssignment = useMemo(() => {
-    return assignments.find((item) => item.id === selectedAssignmentId) || null;
-  }, [assignments, selectedAssignmentId]);
+  async function uploadWithFallback(file: File, folder: string) {
+    const ext = file.name.split(".").pop() || "jpg";
+    const path = `${folder}/${crypto.randomUUID()}.${ext}`;
 
-  async function savePhotoUpdate() {
-    setMessage("");
-
-    if (!caretaker) {
-      setMessage("Caretaker profile not found.");
-      return;
-    }
-
-    if (!selectedAssignment) {
-      setMessage("Please select an active assignment.");
-      return;
-    }
-
-    if (!photoUrl.trim() && !beforePhotoUrl.trim() && !afterPhotoUrl.trim()) {
-      setMessage("Please enter at least one photo URL.");
-      return;
-    }
-
-    setSaving(true);
-
-    const { data: freshAssignment, error: freshAssignmentError } = await supabase
-      .from("caretaker_assignments")
-      .select("*")
-      .eq("id", selectedAssignment.id)
-      .eq("caretaker_id", caretaker.id)
-      .in("status", ACTIVE_ASSIGNMENT_STATUSES)
-      .maybeSingle();
-
-    if (freshAssignmentError || !freshAssignment) {
-      setMessage("Active assignment not found or no longer available.");
-      setSaving(false);
-      return;
-    }
-
-    const { data: activeTask, error: taskError } = await supabase
-      .from("caretaker_task_logs")
-      .select("*")
-      .eq("assignment_id", freshAssignment.id)
-      .eq("caretaker_id", caretaker.id)
-      .in("status", ACTIVE_TASK_STATUSES)
-      .limit(1)
-      .maybeSingle();
-
-    if (taskError || !activeTask) {
-      setMessage("Active task not found for this assignment.");
-      setSaving(false);
-      return;
-    }
-
-    const operationRequestId =
-      freshAssignment.operation_request_id || activeTask.operation_request_id;
-
-    const treeId = freshAssignment.tree_id || activeTask.tree_id;
-    const customerProfileId =
-      freshAssignment.customer_profile_id || activeTask.customer_profile_id;
-
-    if (!operationRequestId || !treeId || !customerProfileId) {
-      setMessage("Assignment is missing required sync data.");
-      setSaving(false);
-      return;
-    }
-
-    if (
-      activeTask.operation_request_id &&
-      activeTask.operation_request_id !== operationRequestId
-    ) {
-      setMessage("Task operation request does not match assignment.");
-      setSaving(false);
-      return;
-    }
-
-    if (activeTask.tree_id && activeTask.tree_id !== treeId) {
-      setMessage("Task tree does not match assignment.");
-      setSaving(false);
-      return;
-    }
-
-    if (
-      activeTask.customer_profile_id &&
-      activeTask.customer_profile_id !== customerProfileId
-    ) {
-      setMessage("Task customer does not match assignment.");
-      setSaving(false);
-      return;
-    }
-
-    const finalPhotoUrl =
-      photoUrl.trim() || afterPhotoUrl.trim() || beforePhotoUrl.trim();
-
-    const payload = {
-      assignment_id: freshAssignment.id,
-      operation_request_id: operationRequestId,
-      tree_id: treeId,
-      customer_profile_id: customerProfileId,
-      caretaker_id: caretaker.id,
-      photo_url: finalPhotoUrl,
-      before_photo_url: beforePhotoUrl.trim() || null,
-      after_photo_url: afterPhotoUrl.trim() || null,
-      caption: caption.trim() || "Tree photo update",
-      notes: notes.trim() || null,
-      status: "SUBMITTED",
-    };
-
-    const { error: photoError } = await supabase
-      .from("tree_photo_updates")
-      .insert(payload);
-
-    if (photoError) {
-      setMessage(photoError.message);
-      setSaving(false);
-      return;
-    }
-
-    const { error: treeError } = await supabase
-      .from("trees")
-      .update({ last_photo_update_at: new Date().toISOString() })
-      .eq("id", treeId);
-
-    if (treeError) {
-      setMessage(treeError.message);
-      setSaving(false);
-      return;
-    }
-
-    setPhotoUrl("");
-    setBeforePhotoUrl("");
-    setAfterPhotoUrl("");
-    setCaption("");
-    setNotes("");
-    setSaving(false);
-    setMessage("Photo evidence submitted successfully.");
-    await loadData();
-  }
-
-  function formatDate(value: string | null | undefined) {
-    if (!value) return "—";
-
-    return new Date(value).toLocaleString("en-PH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
+    let bucket = "tree-evidence";
+    let upload = await supabase.storage.from(bucket).upload(path, file, {
+      cacheControl: "3600",
+      upsert: false,
     });
+
+    if (upload.error) {
+      bucket = "tree-photos";
+      upload = await supabase.storage.from(bucket).upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+    }
+
+    if (upload.error) throw upload.error;
+
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    return data.publicUrl;
   }
+
+  function scanQr() {
+    setQrError("");
+    setSuccess("");
+
+    if (!selectedTask) {
+      setQrError("Please select an assigned task first.");
+      return;
+    }
+
+    const parsed = parseQr(qrValue);
+    if (!parsed || !matchesTask(selectedTask, parsed)) {
+      setLockedTask(null);
+      localStorage.removeItem(verifiedKey(selectedTask.assignment_id));
+      setQrError("Scanned tree does not match this assigned task.");
+      return;
+    }
+
+    localStorage.setItem(verifiedKey(selectedTask.assignment_id), "true");
+    setLockedTask(selectedTask);
+    setSuccess("✓ Tree Verified");
+  }
+
+  async function submitPhotoEvidence() {
+    setSubmitting(true);
+    setQrError("");
+    setSuccess("");
+
+    try {
+      if (!lockedTask) throw new Error("Tree must be verified before submitting evidence.");
+      if (!lockedTask.assignment_id) throw new Error("Missing assignment_id.");
+      if (!lockedTask.operation_request_id) throw new Error("Missing operation_request_id.");
+      if (!lockedTask.tree_id) throw new Error("Missing tree_id.");
+      if (!lockedTask.customer_profile_id) throw new Error("Missing customer_profile_id.");
+      if (!lockedTask.caretaker_id) throw new Error("Missing caretaker_id.");
+
+      let photoUrl = fallbackPhotoUrl.trim();
+      let beforeUrl = fallbackBeforeUrl.trim();
+      let afterUrl = fallbackAfterUrl.trim();
+
+      if (photoFile) photoUrl = await uploadWithFallback(photoFile, `main/${lockedTask.tree_id}`);
+      if (beforeFile) beforeUrl = await uploadWithFallback(beforeFile, `before/${lockedTask.tree_id}`);
+      if (afterFile) afterUrl = await uploadWithFallback(afterFile, `after/${lockedTask.tree_id}`);
+
+      if (!photoUrl && !beforeUrl && !afterUrl) {
+        throw new Error("At least one photo is required.");
+      }
+
+      const now = new Date().toISOString();
+
+      const { error: insertError } = await supabase.from("tree_photo_updates").insert({
+        assignment_id: lockedTask.assignment_id,
+        operation_request_id: lockedTask.operation_request_id,
+        tree_id: lockedTask.tree_id,
+        customer_profile_id: lockedTask.customer_profile_id,
+        caretaker_id: lockedTask.caretaker_id,
+        photo_url: photoUrl || beforeUrl || afterUrl,
+        before_photo_url: beforeUrl || null,
+        after_photo_url: afterUrl || null,
+        notes: notes || null,
+        status: "SUBMITTED",
+        created_at: now,
+        updated_at: now,
+      });
+
+      if (insertError) throw insertError;
+
+      if (lockedTask.task_log_id) {
+        await supabase
+          .from("caretaker_task_logs")
+          .update({
+            status: "SUBMITTED",
+            evidence_status: "SUBMITTED",
+            submitted_at: now,
+            updated_at: now,
+          })
+          .eq("id", lockedTask.task_log_id);
+      } else {
+        await supabase
+          .from("caretaker_task_logs")
+          .update({
+            status: "SUBMITTED",
+            evidence_status: "SUBMITTED",
+            submitted_at: now,
+            updated_at: now,
+          })
+          .eq("assignment_id", lockedTask.assignment_id);
+      }
+
+      await supabase
+        .from("caretaker_assignments")
+        .update({
+          status: "SUBMITTED",
+          submitted_at: now,
+          updated_at: now,
+        })
+        .eq("id", lockedTask.assignment_id);
+
+      await supabase
+        .from("tree_operation_requests")
+        .update({
+          status: "SUBMITTED",
+          assignment_status: "SUBMITTED",
+          updated_at: now,
+        })
+        .eq("id", lockedTask.operation_request_id);
+
+      await supabase
+        .from("trees")
+        .update({
+          last_photo_update_at: now,
+          updated_at: now,
+        })
+        .eq("id", lockedTask.tree_id);
+
+      setSuccess("Photo evidence submitted for admin review.");
+      setPhotoFile(null);
+      setBeforeFile(null);
+      setAfterFile(null);
+      setFallbackPhotoUrl("");
+      setFallbackBeforeUrl("");
+      setFallbackAfterUrl("");
+      setNotes("");
+      await loadTasks();
+    } catch (err: any) {
+      setQrError(err.message || "Failed to submit photo evidence.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTasks();
+  }, []);
 
   return (
-    <main className="min-h-screen bg-[#04140f] p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
+    <main className="min-h-screen bg-[#06140f] p-6 text-white">
+      <div className="mx-auto max-w-6xl space-y-6">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-            Arganwood Gardener Portal
-          </p>
-
-          <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-            Photo Evidence
-          </h1>
-
-          <p className="mt-2 text-white/70">
-            Submit photo evidence only for active assigned tree tasks.
-          </p>
+          <p className="text-sm uppercase tracking-[0.35em] text-amber-300">Tree Field Verification</p>
+          <h1 className="text-3xl font-bold">Scan Tree QR & Photo Evidence</h1>
+          <p className="text-white/60">Verify the physical tree before submitting any evidence.</p>
         </div>
 
-        {message && (
-          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
-            {message}
+        {qrError && <div className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-red-200">{qrError}</div>}
+        {success && <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-200">{success}</div>}
+
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 shadow-2xl">
+          <h2 className="text-xl font-semibold">🌳 Scan Tree QR</h2>
+
+          <label className="mt-4 block text-sm text-white/70">Assigned Task</label>
+          <select
+            value={selectedAssignmentId}
+            disabled={!!lockedTask}
+            onChange={(e) => setSelectedAssignmentId(e.target.value)}
+            className="mt-2 w-full rounded-xl border border-white/10 bg-[#0b2118] p-3 text-white"
+          >
+            <option value="">Select assigned tree task</option>
+            {tasks.map((task) => (
+              <option key={task.assignment_id} value={task.assignment_id}>
+                {(task.tree_name || "Agarwood Tree")} • {task.tree_code || "No tree code"} • {task.customer_name} •{" "}
+                {task.service_name || task.request_type || task.operation_type}
+              </option>
+            ))}
+          </select>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
+            <input
+              value={qrValue}
+              onChange={(e) => setQrValue(e.target.value)}
+              placeholder="Scan or enter tree QR code"
+              className="rounded-xl border border-white/10 bg-black/30 p-3 text-white placeholder:text-white/40"
+            />
+            <button onClick={scanQr} className="rounded-xl bg-amber-400 px-5 py-3 font-semibold text-black hover:bg-amber-300">
+              Verify Tree
+            </button>
           </div>
-        )}
+        </section>
 
-        {loading ? (
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            Loading photo evidence...
-          </div>
-        ) : assignments.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            No active photo evidence tasks yet.
-          </div>
-        ) : (
-          <section className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-2xl font-bold text-[#ffe49a]">
-                Submit Photo Evidence
-              </h2>
-
-              <label className="mt-5 block text-sm font-bold text-white/70">
-                Active Assignment
-              </label>
-              <select
-                value={selectedAssignmentId}
-                onChange={(e) => setSelectedAssignmentId(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
-              >
-                {assignments.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.assignment_type || "Tree Assignment"} — Tree{" "}
-                    {item.tree_id || "linked"}
-                  </option>
-                ))}
-              </select>
-
-              <label className="mt-4 block text-sm font-bold text-white/70">
-                Main Photo URL
-              </label>
-              <input
-                value={photoUrl}
-                onChange={(e) => setPhotoUrl(e.target.value)}
-                placeholder="https://..."
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <label className="mt-4 block text-sm font-bold text-white/70">
-                Before Photo URL
-              </label>
-              <input
-                value={beforePhotoUrl}
-                onChange={(e) => setBeforePhotoUrl(e.target.value)}
-                placeholder="https://..."
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <label className="mt-4 block text-sm font-bold text-white/70">
-                After Photo URL
-              </label>
-              <input
-                value={afterPhotoUrl}
-                onChange={(e) => setAfterPhotoUrl(e.target.value)}
-                placeholder="https://..."
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <label className="mt-4 block text-sm font-bold text-white/70">
-                Caption
-              </label>
-              <input
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-                placeholder="Example: Weekly growth photo"
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <label className="mt-4 block text-sm font-bold text-white/70">
-                Notes
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Field notes..."
-                className="mt-2 min-h-[120px] w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-              />
-
-              <button
-                onClick={savePhotoUpdate}
-                disabled={saving}
-                className="mt-5 w-full rounded-xl bg-[#d9b45f] px-5 py-3 font-black text-[#071f16] disabled:opacity-50"
-              >
-                {saving ? "Submitting..." : "Submit Photo Evidence"}
-              </button>
-            </div>
-
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-2xl font-bold text-[#ffe49a]">
-                Recent Photo Evidence
-              </h2>
-
-              {photoUpdates.length === 0 ? (
-                <p className="mt-5 text-white/70">
-                  No photo evidence submitted yet.
-                </p>
-              ) : (
-                <div className="mt-5 space-y-4">
-                  {photoUpdates.slice(0, 10).map((item) => (
-                    <div
-                      key={item.id}
-                      className="rounded-2xl border border-white/10 bg-black/20 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-bold text-white">
-                            {item.caption || "Tree Photo Evidence"}
-                          </h3>
-                          <p className="mt-1 text-sm text-white/60">
-                            Status: {item.status || "SUBMITTED"}
-                          </p>
-                          <p className="mt-1 text-sm text-white/60">
-                            Date: {formatDate(item.created_at)}
-                          </p>
-                        </div>
-
-                        {item.photo_url && (
-                          <a
-                            href={item.photo_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-xl bg-[#d9b45f] px-4 py-2 text-sm font-black text-[#071f16]"
-                          >
-                            Open
-                          </a>
-                        )}
-                      </div>
-
-                      {item.notes && (
-                        <p className="mt-3 rounded-xl bg-white/10 p-3 text-sm text-white/70">
-                          {item.notes}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+        {lockedTask && (
+          <section className="rounded-3xl border border-emerald-400/30 bg-emerald-400/10 p-5">
+            <h2 className="text-xl font-semibold text-emerald-200">✓ Tree Verified</h2>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Info label="Tree Name" value={lockedTask.tree_name || "Agarwood Tree"} />
+              <Info label="Tree Code" value={lockedTask.tree_code || "—"} />
+              <Info label="Customer Name" value={lockedTask.customer_name || "Customer"} />
+              <Info label="Customer Email" value={lockedTask.customer_email || "—"} />
+              <Info label="Service Requested" value={lockedTask.service_name || lockedTask.request_type || lockedTask.operation_type || "—"} />
+              <Info label="Assignment ID" value={lockedTask.assignment_id} small />
             </div>
           </section>
         )}
+
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-5">
+          <h2 className="text-xl font-semibold">Upload Photo Evidence</h2>
+          <p className="mt-1 text-sm text-white/50">Enabled only after Tree Verified.</p>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <FileBox label="Main Photo" file={photoFile} setFile={setPhotoFile} disabled={!lockedTask} />
+            <FileBox label="Before Photo" file={beforeFile} setFile={setBeforeFile} disabled={!lockedTask} />
+            <FileBox label="After Photo" file={afterFile} setFile={setAfterFile} disabled={!lockedTask} />
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <input disabled={!lockedTask} value={fallbackPhotoUrl} onChange={(e) => setFallbackPhotoUrl(e.target.value)} placeholder="Fallback main photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
+            <input disabled={!lockedTask} value={fallbackBeforeUrl} onChange={(e) => setFallbackBeforeUrl(e.target.value)} placeholder="Fallback before photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
+            <input disabled={!lockedTask} value={fallbackAfterUrl} onChange={(e) => setFallbackAfterUrl(e.target.value)} placeholder="Fallback after photo URL" className="rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40" />
+          </div>
+
+          <textarea
+            disabled={!lockedTask}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Field notes"
+            className="mt-4 min-h-[110px] w-full rounded-xl border border-white/10 bg-black/30 p-3 text-white disabled:opacity-40"
+          />
+
+          <button
+            onClick={submitPhotoEvidence}
+            disabled={submitting || !lockedTask}
+            className="mt-5 rounded-xl bg-emerald-500 px-6 py-3 font-semibold text-black disabled:opacity-50"
+          >
+            {submitting ? "Submitting..." : "Submit Photo Evidence"}
+          </button>
+        </section>
+
+        <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+          <h2 className="mb-4 text-xl font-semibold">Assigned Tasks</h2>
+          {loading ? (
+            <p className="text-white/60">Loading...</p>
+          ) : tasks.length === 0 ? (
+            <p className="text-white/60">No assigned tasks.</p>
+          ) : (
+            <div className="grid gap-4">
+              {tasks.map((task) => (
+                <div key={task.assignment_id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">{task.tree_name || "Agarwood Tree"}</h3>
+                      <p className="text-sm text-amber-200">{task.tree_code || "No tree code"}</p>
+                      <p className="text-sm text-white/60">{task.customer_name} • {task.customer_email}</p>
+                    </div>
+                    <span className="rounded-full bg-white/10 px-3 py-1 text-sm">{task.assignment_status}</span>
+                  </div>
+                  <p className="mt-3 text-white/70">{task.service_name || task.request_type || task.operation_type || "Operation request"}</p>
+                  <p className="mt-2 text-xs text-white/40">Evidence: {task.evidence_status || "PENDING"}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </main>
+  );
+}
+
+function Info({ label, value, small = false }: { label: string; value: string; small?: boolean }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <p className="text-xs uppercase tracking-widest text-white/40">{label}</p>
+      <p className={small ? "break-all text-xs text-white/70" : "text-white"}>{value}</p>
+    </div>
+  );
+}
+
+function FileBox({
+  label,
+  file,
+  setFile,
+  disabled,
+}: {
+  label: string;
+  file: File | null;
+  setFile: (file: File | null) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="rounded-2xl border border-dashed border-white/20 bg-black/20 p-4">
+      <p className="font-medium">{label}</p>
+      <input
+        disabled={disabled}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => setFile(e.target.files?.[0] || null)}
+        className="mt-3 w-full text-sm text-white/70 disabled:opacity-40"
+      />
+      {file && <p className="mt-2 truncate text-xs text-emerald-300">{file.name}</p>}
+    </label>
   );
 }
