@@ -1,3 +1,13 @@
+// app/dashboard/profile/page.tsx
+// FULL FILE REPLACEMENT
+// Revised from current Profile page:
+// - Keeps existing profile UI / KYC UI
+// - Adds functional KYC submission
+// - Resolves profile safely via auth user id then email
+// - Uploads to Supabase Storage bucket fallback
+// - Inserts new PENDING kyc_records row for Admin queue
+// - Does not mark APPROVED from customer side
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -12,23 +22,17 @@ type Profile = {
   kyc_status: string | null;
 };
 
-type KycRecord = {
-  id: string;
-  profile_id: string | null;
-  id_type: string | null;
-  id_number: string | null;
-  id_front_url: string | null;
-  id_back_url: string | null;
-  selfie_url: string | null;
-  proof_of_address_url: string | null;
-  source_of_funds: string | null;
-  investment_experience: string | null;
-  risk_acknowledged: boolean | null;
-  status: string | null;
-  review_notes: string | null;
-  submitted_at: string | null;
-  reviewed_at: string | null;
-};
+type KycRecord = Record<string, any>;
+
+const ID_TYPES = [
+  "Government ID",
+  "Passport",
+  "Driver License",
+  "National ID",
+  "Other",
+];
+
+const STORAGE_BUCKETS = ["kyc-documents", "kyc", "documents"];
 
 function normalize(value: any) {
   return String(value || "").trim().toUpperCase();
@@ -36,29 +40,134 @@ function normalize(value: any) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "Not recorded";
-  return new Date(value).toLocaleDateString("en-PH", {
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+
+  return date.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
 }
 
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function statusLabel(value: string | null | undefined) {
   const status = normalize(value);
+
   if (status === "APPROVED") return "APPROVED";
   if (status === "ACTIVE") return "ACTIVE";
   if (status === "PENDING") return "PENDING";
   if (status === "REJECTED") return "REJECTED";
   if (status === "INACTIVE") return "INACTIVE";
+
   return "NOT SUBMITTED";
 }
 
 function statusClass(value: string | null | undefined) {
   const status = normalize(value);
+
   if (status === "APPROVED" || status === "ACTIVE") return "approved";
   if (status === "PENDING") return "pending";
   if (status === "REJECTED") return "rejected";
+
   return "notSubmitted";
+}
+
+function safeFileName(value: string) {
+  return String(value || "document")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .toLowerCase();
+}
+
+function maskIdNumber(value: string | null | undefined) {
+  if (!value) return "—";
+
+  const clean = String(value).trim();
+
+  if (clean.length <= 4) return "****";
+
+  return `${"*".repeat(Math.max(clean.length - 4, 4))}${clean.slice(-4)}`;
+}
+
+function getSubmittedValue(record: KycRecord | null | undefined) {
+  if (!record) return null;
+
+  return (
+    record.submitted_at ||
+    record.created_at ||
+    record.updated_at ||
+    record.createdAt ||
+    null
+  );
+}
+
+function getAdminNotes(record: KycRecord | null | undefined) {
+  if (!record) return "—";
+
+  return (
+    record.admin_notes ||
+    record.rejection_reason ||
+    record.review_notes ||
+    record.notes ||
+    "—"
+  );
+}
+
+function getDocumentUrl(record: KycRecord | null | undefined) {
+  if (!record) return null;
+
+  return (
+    record.document_url ||
+    record.id_document_url ||
+    record.id_front_url ||
+    record.id_back_url ||
+    record.selfie_url ||
+    record.proof_of_address_url ||
+    null
+  );
+}
+
+function removeBadColumnFromPayload(
+  payload: Record<string, any>,
+  errorMessage: string
+) {
+  const patterns = [
+    /Could not find the '([^']+)' column/i,
+    /column "([^"]+)" does not exist/i,
+    /schema cache.*'([^']+)'/i,
+    /record "new" has no field "([^"]+)"/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = errorMessage.match(pattern);
+
+    if (match?.[1] && Object.prototype.hasOwnProperty.call(payload, match[1])) {
+      const next = { ...payload };
+      delete next[match[1]];
+      return next;
+    }
+  }
+
+  return null;
 }
 
 export default function ProfilePage() {
@@ -77,12 +186,14 @@ export default function ProfilePage() {
   const [kycForm, setKycForm] = useState({
     id_type: "",
     id_number: "",
+    notes: "",
     source_of_funds: "",
     investment_experience: "",
     risk_acknowledged: false,
   });
 
   const [files, setFiles] = useState({
+    id_document: null as File | null,
     id_front: null as File | null,
     id_back: null as File | null,
     selfie: null as File | null,
@@ -90,7 +201,7 @@ export default function ProfilePage() {
   });
 
   async function findProfile(userId: string, email: string) {
-    const cleanEmail = email.trim();
+    const cleanEmail = String(email || "").trim();
     const lowerEmail = cleanEmail.toLowerCase();
 
     const { data: profileById, error: byIdError } = await supabase
@@ -101,6 +212,10 @@ export default function ProfilePage() {
 
     if (byIdError) throw byIdError;
 
+    if (profileById) return profileById as Profile;
+
+    if (!cleanEmail) return null;
+
     const { data: profileByEmail, error: byEmailError } = await supabase
       .from("profiles")
       .select("id, full_name, email, phone, membership_status, kyc_status")
@@ -108,6 +223,8 @@ export default function ProfilePage() {
       .maybeSingle();
 
     if (byEmailError) throw byEmailError;
+
+    if (profileByEmail) return profileByEmail as Profile;
 
     const { data: profileByEmailFallback, error: fallbackError } = await supabase
       .from("profiles")
@@ -117,31 +234,77 @@ export default function ProfilePage() {
 
     if (fallbackError) throw fallbackError;
 
-    return (profileById || profileByEmail || profileByEmailFallback) as Profile | null;
+    return profileByEmailFallback as Profile | null;
+  }
+
+  async function resolveCurrentProfile() {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) throw userError;
+    if (!user) throw new Error("No authenticated user found.");
+
+    const currentProfile = await findProfile(user.id, user.email || "");
+
+    if (!currentProfile) {
+      throw new Error("Profile not found for current user.");
+    }
+
+    return currentProfile;
+  }
+
+  async function loadKycRecords(profileId: string, email?: string | null) {
+    let loaded: KycRecord[] = [];
+
+    const { data: profileRows, error: profileError } = await supabase
+      .from("kyc_records")
+      .select("*")
+      .eq("profile_id", profileId);
+
+    if (!profileError && profileRows && profileRows.length > 0) {
+      loaded = profileRows as KycRecord[];
+    }
+
+    if (loaded.length === 0) {
+      const { data: customerRows, error: customerError } = await supabase
+        .from("kyc_records")
+        .select("*")
+        .eq("customer_id", profileId);
+
+      if (!customerError && customerRows && customerRows.length > 0) {
+        loaded = customerRows as KycRecord[];
+      }
+    }
+
+    if (loaded.length === 0 && email) {
+      const { data: emailRows, error: emailError } = await supabase
+        .from("kyc_records")
+        .select("*")
+        .eq("email", email);
+
+      if (!emailError && emailRows && emailRows.length > 0) {
+        loaded = emailRows as KycRecord[];
+      }
+    }
+
+    loaded.sort((a, b) => {
+      const aTime = new Date(getSubmittedValue(a) || 0).getTime();
+      const bTime = new Date(getSubmittedValue(b) || 0).getTime();
+
+      return bTime - aTime;
+    });
+
+    setKycRecords(loaded);
   }
 
   async function loadProfile() {
     setLoading(true);
     setMessage("");
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      window.location.href = "/login";
-      return;
-    }
-
     try {
-      const currentProfile = await findProfile(user.id, user.email || "");
-
-      if (!currentProfile) {
-        setMessage("Profile not found. Please login again.");
-        setLoading(false);
-        return;
-      }
+      const currentProfile = await resolveCurrentProfile();
 
       setProfile(currentProfile);
       setProfileForm({
@@ -149,22 +312,21 @@ export default function ProfilePage() {
         phone: currentProfile.phone || "",
       });
 
-      const { data: kycData, error: kycError } = await supabase
-        .from("kyc_records")
-        .select(
-          "id, profile_id, id_type, id_number, id_front_url, id_back_url, selfie_url, proof_of_address_url, source_of_funds, investment_experience, risk_acknowledged, status, review_notes, submitted_at, reviewed_at"
-        )
-        .eq("profile_id", currentProfile.id)
-        .order("submitted_at", { ascending: false });
-
-      if (kycError) throw kycError;
-
-      setKycRecords((kycData || []) as KycRecord[]);
+      await loadKycRecords(currentProfile.id, currentProfile.email);
     } catch (error: any) {
-      setMessage(error?.message || "Profile failed to load.");
-    }
+      if (
+        String(error?.message || "")
+          .toLowerCase()
+          .includes("authenticated")
+      ) {
+        window.location.href = "/login";
+        return;
+      }
 
-    setLoading(false);
+      setMessage(error?.message || "Profile failed to load.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -175,7 +337,7 @@ export default function ProfilePage() {
     return kycRecords.length > 0 ? kycRecords[0] : null;
   }, [kycRecords]);
 
-  const kycStatus = profile?.kyc_status || latestKyc?.status || "NOT_SUBMITTED";
+  const kycStatus = latestKyc?.status || profile?.kyc_status || "NOT_SUBMITTED";
   const membershipStatus = profile?.membership_status || "INACTIVE";
 
   const normalizedKyc = normalize(kycStatus);
@@ -188,7 +350,9 @@ export default function ProfilePage() {
     setMessage("");
 
     if (!profile) return setMessage("Profile not found.");
-    if (!profileForm.full_name.trim()) return setMessage("Full name is required.");
+    if (!profileForm.full_name.trim()) {
+      return setMessage("Full name is required.");
+    }
 
     setSavingProfile(true);
 
@@ -212,104 +376,183 @@ export default function ProfilePage() {
     await loadProfile();
   }
 
-  async function uploadFile(file: File | null, folder: string, profileId: string) {
+  async function uploadToAnyKycBucket(
+    file: File | null,
+    folder: string,
+    profileId: string
+  ) {
     if (!file) return null;
 
-    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-    const filePath = `${profileId}/${folder}/${Date.now()}-${cleanName}`;
+    const cleanName = safeFileName(file.name);
+    const timestamp = Date.now();
+    const filePath = `kyc/${profileId}/${folder}/${timestamp}-${cleanName}`;
 
-    const { error } = await supabase.storage
-      .from("kyc-documents")
-      .upload(filePath, file, { upsert: true });
+    let lastError = "";
 
-    if (error) throw error;
+    for (const bucket of STORAGE_BUCKETS) {
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(filePath, file, {
+          upsert: false,
+          cacheControl: "3600",
+          contentType: file.type || undefined,
+        });
 
-    const { data } = supabase.storage.from("kyc-documents").getPublicUrl(filePath);
+      if (uploadError) {
+        lastError = `${bucket}: ${uploadError.message}`;
+        continue;
+      }
 
-    return data.publicUrl;
+      const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
+
+      if (data?.publicUrl) {
+        return data.publicUrl;
+      }
+
+      return `${bucket}/${filePath}`;
+    }
+
+    throw new Error(lastError || "KYC document upload failed.");
+  }
+
+  async function insertKycRecordSafe(payload: Record<string, any>) {
+    let currentPayload = { ...payload };
+
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const { error } = await supabase.from("kyc_records").insert(currentPayload);
+
+      if (!error) return;
+
+      const nextPayload = removeBadColumnFromPayload(
+        currentPayload,
+        error.message
+      );
+
+      if (!nextPayload) {
+        throw new Error(error.message);
+      }
+
+      currentPayload = nextPayload;
+    }
+
+    throw new Error("Unable to insert KYC record after schema-safe retries.");
+  }
+
+  async function updateProfileKycPending(profileId: string) {
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        kyc_status: "PENDING",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", profileId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
   }
 
   async function submitKyc() {
     setMessage("");
-
-    if (!profile) return setMessage("Profile not found.");
 
     if (!canSubmitKyc) {
       setMessage("KYC cannot be submitted while pending or already approved.");
       return;
     }
 
-    if (!kycForm.id_type || !kycForm.id_number.trim()) {
-      setMessage("Please complete ID type and ID number.");
+    if (!kycForm.id_type) {
+      setMessage("Please select ID type.");
       return;
     }
 
-    if (!kycForm.source_of_funds || !kycForm.investment_experience) {
-      setMessage("Please complete source of funds and investment experience.");
+    if (!kycForm.id_number.trim()) {
+      setMessage("Please enter ID number.");
       return;
     }
 
-    if (!files.id_front || !files.id_back || !files.selfie || !files.proof) {
-      setMessage("Please upload all required KYC documents.");
-      return;
-    }
-
-    if (!kycForm.risk_acknowledged) {
-      setMessage("Please acknowledge the agarwood investment risk.");
+    if (!files.id_document && !files.id_front) {
+      setMessage("Please upload an ID document/image.");
       return;
     }
 
     try {
       setSubmittingKyc(true);
 
-      const idFrontUrl = await uploadFile(files.id_front, "id-front", profile.id);
-      const idBackUrl = await uploadFile(files.id_back, "id-back", profile.id);
-      const selfieUrl = await uploadFile(files.selfie, "selfie", profile.id);
-      const proofUrl = await uploadFile(files.proof, "proof-address", profile.id);
+      const currentProfile = await resolveCurrentProfile();
+      setProfile(currentProfile);
 
-      const { error: insertError } = await supabase.from("kyc_records").insert({
-        profile_id: profile.id,
+      const now = new Date().toISOString();
+
+      const idDocumentUrl = await uploadToAnyKycBucket(
+        files.id_document || files.id_front,
+        "id-document",
+        currentProfile.id
+      );
+
+      const idFrontUrl = files.id_front
+        ? await uploadToAnyKycBucket(files.id_front, "id-front", currentProfile.id)
+        : idDocumentUrl;
+
+      const idBackUrl = files.id_back
+        ? await uploadToAnyKycBucket(files.id_back, "id-back", currentProfile.id)
+        : null;
+
+      const selfieUrl = files.selfie
+        ? await uploadToAnyKycBucket(files.selfie, "selfie", currentProfile.id)
+        : null;
+
+      const proofUrl = files.proof
+        ? await uploadToAnyKycBucket(
+            files.proof,
+            "proof-address",
+            currentProfile.id
+          )
+        : null;
+
+      const payload = {
+        profile_id: currentProfile.id,
+        customer_id: currentProfile.id,
+        full_name: currentProfile.full_name,
+        email: currentProfile.email,
         id_type: kycForm.id_type,
         id_number: kycForm.id_number.trim(),
+        document_url: idDocumentUrl,
+        id_document_url: idDocumentUrl,
         id_front_url: idFrontUrl,
         id_back_url: idBackUrl,
         selfie_url: selfieUrl,
         proof_of_address_url: proofUrl,
-        source_of_funds: kycForm.source_of_funds,
-        investment_experience: kycForm.investment_experience,
-        risk_acknowledged: kycForm.risk_acknowledged,
+        notes: kycForm.notes.trim() || null,
+        source_of_funds: kycForm.source_of_funds || null,
+        investment_experience: kycForm.investment_experience || null,
+        risk_acknowledged: kycForm.risk_acknowledged || false,
         status: "PENDING",
-        submitted_at: new Date().toISOString(),
-      });
+        submitted_at: now,
+        created_at: now,
+        updated_at: now,
+      };
 
-      if (insertError) throw insertError;
-
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({
-          kyc_status: "PENDING",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", profile.id);
-
-      if (profileError) throw profileError;
+      await insertKycRecordSafe(payload);
+      await updateProfileKycPending(currentProfile.id);
 
       setKycForm({
         id_type: "",
         id_number: "",
+        notes: "",
         source_of_funds: "",
         investment_experience: "",
         risk_acknowledged: false,
       });
 
       setFiles({
+        id_document: null,
         id_front: null,
         id_back: null,
         selfie: null,
         proof: null,
       });
 
-      setMessage("KYC submitted successfully. Waiting for admin review.");
+      setMessage("KYC submitted for admin review.");
       await loadProfile();
     } catch (error: any) {
       setMessage(error?.message || "KYC submission failed.");
@@ -325,7 +568,8 @@ export default function ProfilePage() {
           <p className="eyebrow">Customer Account</p>
           <h1>Forest Identity Center</h1>
           <span>
-            Manage your customer identity, membership standing, and KYC verification for Arganwood services.
+            Manage your customer identity, membership standing, and KYC
+            verification for Arganwood services.
           </span>
         </div>
 
@@ -345,7 +589,10 @@ export default function ProfilePage() {
           <section className="stats">
             <SummaryCard label="Name" value={profile?.full_name || "Unnamed"} />
             <SummaryCard label="Email" value={profile?.email || "No email"} />
-            <SummaryCard label="Membership" value={statusLabel(membershipStatus)} />
+            <SummaryCard
+              label="Membership"
+              value={statusLabel(membershipStatus)}
+            />
             <SummaryCard label="KYC" value={statusLabel(kycStatus)} />
           </section>
 
@@ -355,7 +602,9 @@ export default function ProfilePage() {
                 <div>
                   <p className="eyebrow">Profile</p>
                   <h2>Identity Details</h2>
-                  <span>Friendly customer information from the profiles table.</span>
+                  <span>
+                    Friendly customer information from the profiles table.
+                  </span>
                 </div>
               </div>
 
@@ -365,7 +614,10 @@ export default function ProfilePage() {
                   <input
                     value={profileForm.full_name}
                     onChange={(e) =>
-                      setProfileForm({ ...profileForm, full_name: e.target.value })
+                      setProfileForm({
+                        ...profileForm,
+                        full_name: e.target.value,
+                      })
                     }
                     placeholder="Full name"
                   />
@@ -376,7 +628,10 @@ export default function ProfilePage() {
                   <input
                     value={profileForm.phone}
                     onChange={(e) =>
-                      setProfileForm({ ...profileForm, phone: e.target.value })
+                      setProfileForm({
+                        ...profileForm,
+                        phone: e.target.value,
+                      })
                     }
                     placeholder="Phone number"
                   />
@@ -397,7 +652,9 @@ export default function ProfilePage() {
               <div className="panelHead">
                 <div>
                   <p className="eyebrow">Trust Status</p>
-                  <h2>{isVerified ? "Verified Customer" : "Verification Needed"}</h2>
+                  <h2>
+                    {isVerified ? "Verified Customer" : "Verification Needed"}
+                  </h2>
                   <span>
                     KYC approval unlocks withdrawal and sell tree access.
                   </span>
@@ -407,8 +664,14 @@ export default function ProfilePage() {
               <div className="trustList">
                 <Info label="Membership" value={statusLabel(membershipStatus)} />
                 <Info label="KYC Status" value={statusLabel(kycStatus)} />
-                <Info label="Withdraw Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
-                <Info label="Sell Tree Access" value={isVerified ? "UNLOCKED" : "LOCKED"} />
+                <Info
+                  label="Withdraw Access"
+                  value={isVerified ? "UNLOCKED" : "LOCKED"}
+                />
+                <Info
+                  label="Sell Tree Access"
+                  value={isVerified ? "UNLOCKED" : "LOCKED"}
+                />
               </div>
             </aside>
           </section>
@@ -419,7 +682,9 @@ export default function ProfilePage() {
                 <div>
                   <p className="eyebrow">Verification</p>
                   <h2>KYC Documents</h2>
-                  <span>Upload identity documents for admin verification.</span>
+                  <span>
+                    Upload identity documents for admin verification.
+                  </span>
                 </div>
                 <b className={`pill ${statusClass(kycStatus)}`}>
                   {statusLabel(kycStatus)}
@@ -443,7 +708,7 @@ export default function ProfilePage() {
                     <div className="rejectedBox">
                       <strong>Previous KYC was rejected.</strong>
                       <p>
-                        {latestKyc?.review_notes ||
+                        {getAdminNotes(latestKyc) ||
                           "Please review your documents and submit again."}
                       </p>
                     </div>
@@ -455,15 +720,18 @@ export default function ProfilePage() {
                       <select
                         value={kycForm.id_type}
                         onChange={(e) =>
-                          setKycForm({ ...kycForm, id_type: e.target.value })
+                          setKycForm({
+                            ...kycForm,
+                            id_type: e.target.value,
+                          })
                         }
                       >
                         <option value="">Select ID Type</option>
-                        <option value="Passport">Passport</option>
-                        <option value="National ID">National ID</option>
-                        <option value="Driver License">Driver License</option>
-                        <option value="UMID">UMID</option>
-                        <option value="PRC">PRC</option>
+                        {ID_TYPES.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
                       </select>
                     </label>
 
@@ -472,18 +740,24 @@ export default function ProfilePage() {
                       <input
                         value={kycForm.id_number}
                         onChange={(e) =>
-                          setKycForm({ ...kycForm, id_number: e.target.value })
+                          setKycForm({
+                            ...kycForm,
+                            id_number: e.target.value,
+                          })
                         }
                         placeholder="Enter ID number"
                       />
                     </label>
 
                     <label>
-                      Source of Funds
+                      Source of Funds Optional
                       <select
                         value={kycForm.source_of_funds}
                         onChange={(e) =>
-                          setKycForm({ ...kycForm, source_of_funds: e.target.value })
+                          setKycForm({
+                            ...kycForm,
+                            source_of_funds: e.target.value,
+                          })
                         }
                       >
                         <option value="">Select Source of Funds</option>
@@ -497,7 +771,7 @@ export default function ProfilePage() {
                     </label>
 
                     <label>
-                      Investment Experience
+                      Investment Experience Optional
                       <select
                         value={kycForm.investment_experience}
                         onChange={(e) =>
@@ -516,24 +790,45 @@ export default function ProfilePage() {
                     </label>
                   </div>
 
+                  <label className="notesLabel">
+                    Notes Optional
+                    <textarea
+                      value={kycForm.notes}
+                      onChange={(e) =>
+                        setKycForm({
+                          ...kycForm,
+                          notes: e.target.value,
+                        })
+                      }
+                      placeholder="Add notes for admin review"
+                    />
+                  </label>
+
                   <div className="uploadGrid">
                     <UploadBox
-                      label="Front of ID"
+                      label="ID Document / Image Required"
+                      file={files.id_document}
+                      onChange={(file) =>
+                        setFiles({ ...files, id_document: file })
+                      }
+                    />
+                    <UploadBox
+                      label="Front of ID Optional"
                       file={files.id_front}
                       onChange={(file) => setFiles({ ...files, id_front: file })}
                     />
                     <UploadBox
-                      label="Back of ID"
+                      label="Back of ID Optional"
                       file={files.id_back}
                       onChange={(file) => setFiles({ ...files, id_back: file })}
                     />
                     <UploadBox
-                      label="Selfie Holding ID"
+                      label="Selfie Holding ID Optional"
                       file={files.selfie}
                       onChange={(file) => setFiles({ ...files, selfie: file })}
                     />
                     <UploadBox
-                      label="Proof of Address"
+                      label="Proof of Address Optional"
                       file={files.proof}
                       onChange={(file) => setFiles({ ...files, proof: file })}
                     />
@@ -567,7 +862,7 @@ export default function ProfilePage() {
               <div className="panelHead">
                 <div>
                   <p className="eyebrow">Latest Record</p>
-                  <h2>KYC History</h2>
+                  <h2>KYC History / Latest Submission</h2>
                   <span>Latest real record from kyc_records.</span>
                 </div>
               </div>
@@ -578,17 +873,56 @@ export default function ProfilePage() {
                 <div className="trustList">
                   <Info label="Status" value={statusLabel(latestKyc.status)} />
                   <Info label="ID Type" value={latestKyc.id_type || "—"} />
-                  <Info label="ID Number" value={latestKyc.id_number || "—"} />
-                  <Info label="Submitted" value={formatDate(latestKyc.submitted_at)} />
-                  <Info label="Reviewed" value={formatDate(latestKyc.reviewed_at)} />
-                  <Info label="Review Notes" value={latestKyc.review_notes || "—"} />
+                  <Info
+                    label="ID Number"
+                    value={maskIdNumber(latestKyc.id_number)}
+                  />
+                  <Info
+                    label="Submitted"
+                    value={formatDateTime(getSubmittedValue(latestKyc))}
+                  />
+                  <Info
+                    label="Reviewed"
+                    value={formatDateTime(latestKyc.reviewed_at)}
+                  />
+                  <Info
+                    label="Admin Notes / Rejection Reason"
+                    value={getAdminNotes(latestKyc)}
+                  />
 
                   <div className="docLinks">
-                    <DocumentLink title="Front ID" url={latestKyc.id_front_url} />
-                    <DocumentLink title="Back ID" url={latestKyc.id_back_url} />
+                    <DocumentLink
+                      title="Main Document"
+                      url={getDocumentUrl(latestKyc)}
+                    />
+                    <DocumentLink
+                      title="Front ID"
+                      url={latestKyc.id_front_url}
+                    />
+                    <DocumentLink
+                      title="Back ID"
+                      url={latestKyc.id_back_url}
+                    />
                     <DocumentLink title="Selfie" url={latestKyc.selfie_url} />
-                    <DocumentLink title="Proof" url={latestKyc.proof_of_address_url} />
+                    <DocumentLink
+                      title="Proof"
+                      url={latestKyc.proof_of_address_url}
+                    />
                   </div>
+                </div>
+              )}
+
+              {kycRecords.length > 1 && (
+                <div className="historyList">
+                  <h3>Previous Submissions</h3>
+
+                  {kycRecords.slice(1).map((record, index) => (
+                    <div key={record.id || index} className="historyItem">
+                      <strong>{statusLabel(record.status)}</strong>
+                      <span>{record.id_type || "Unknown ID"}</span>
+                      <small>{formatDateTime(getSubmittedValue(record))}</small>
+                    </div>
+                  ))}
                 </div>
               )}
             </aside>
@@ -597,7 +931,9 @@ export default function ProfilePage() {
       )}
 
       <style>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         .page {
           min-height: 100vh;
@@ -748,8 +1084,13 @@ export default function ProfilePage() {
           letter-spacing: .12em;
         }
 
+        .notesLabel {
+          margin-bottom: 16px;
+        }
+
         input,
-        select {
+        select,
+        textarea {
           width: 100%;
           border: 1px solid rgba(214,178,94,.22);
           border-radius: 16px;
@@ -757,6 +1098,12 @@ export default function ProfilePage() {
           background: rgba(0,0,0,.25);
           color: #fff8dc;
           outline: none;
+        }
+
+        textarea {
+          min-height: 100px;
+          resize: vertical;
+          font-family: inherit;
         }
 
         input:disabled {
@@ -934,6 +1281,40 @@ export default function ProfilePage() {
           color: rgba(248,241,216,.45);
         }
 
+        .historyList {
+          margin-top: 18px;
+          display: grid;
+          gap: 10px;
+        }
+
+        .historyList h3 {
+          margin: 0 0 4px;
+          color: #fff8dc;
+          font-size: 18px;
+        }
+
+        .historyItem {
+          display: grid;
+          gap: 5px;
+          border: 1px solid rgba(214,178,94,.12);
+          border-radius: 16px;
+          background: rgba(0,0,0,.22);
+          padding: 12px;
+        }
+
+        .historyItem strong {
+          color: #d6b25e;
+        }
+
+        .historyItem span {
+          color: #fff8dc;
+          font-weight: 900;
+        }
+
+        .historyItem small {
+          color: rgba(248,241,216,.58);
+        }
+
         @media (max-width: 980px) {
           .hero,
           .grid {
@@ -949,6 +1330,10 @@ export default function ProfilePage() {
 
           .identityCard {
             min-width: 0;
+          }
+
+          h1 {
+            font-size: 36px;
           }
         }
       `}</style>
@@ -996,7 +1381,13 @@ function UploadBox({
   );
 }
 
-function DocumentLink({ title, url }: { title: string; url: string | null | undefined }) {
+function DocumentLink({
+  title,
+  url,
+}: {
+  title: string;
+  url: string | null | undefined;
+}) {
   if (!url) return <span>{title}: Missing</span>;
 
   return (
