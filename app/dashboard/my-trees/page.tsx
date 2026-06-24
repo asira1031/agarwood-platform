@@ -408,6 +408,8 @@ export default function MyTreesPage() {
   const [qrTree, setQrTree] = useState<TreeDetail | null>(null);
   const [renameTree, setRenameTree] = useState<TreeDetail | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameForest, setRenameForest] = useState<ForestSummary | null>(null);
+  const [renameForestValue, setRenameForestValue] = useState("");
   const [moveTree, setMoveTree] = useState<TreeDetail | null>(null);
   const [moveTargetForestId, setMoveTargetForestId] = useState("");
   const [evidenceTree, setEvidenceTree] = useState<TreeDetail | null>(null);
@@ -668,13 +670,61 @@ export default function MyTreesPage() {
     setActionLoading(false);
   }
 
+  function startRenameForest(forest: ForestSummary) {
+    setRenameForest(forest);
+    setRenameForestValue(
+      forest.forest_name || forest.display_forest_name || "Unnamed Forest",
+    );
+    setMessage("");
+  }
+
+  async function saveRenameForest() {
+    if (!profile || !renameForest || actionLoading) return;
+
+    const cleanName = renameForestValue.trim();
+
+    if (!cleanName) {
+      setMessage("Rename Forest blocker: Please enter a forest name.");
+      return;
+    }
+
+    setActionLoading(true);
+    setMessage("");
+
+    const { error } = await supabase
+      .from("tree_groups")
+      .update({
+        forest_name: cleanName,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", renameForest.group_id)
+      .eq("customer_profile_id", profile.id);
+
+    if (error) {
+      setMessage(`Rename Forest failed: ${error.message}`);
+      setActionLoading(false);
+      return;
+    }
+
+    const renamedForestId = renameForest.group_id;
+    setRenameForest(null);
+    setRenameForestValue("");
+    await loadMyTrees(renamedForestId);
+    setMessage(
+      "Forest renamed successfully. Cards and tree grouping were refreshed.",
+    );
+    setActionLoading(false);
+  }
+
   function addTreesToForest(groupId: string) {
     window.location.href = `/dashboard/marketplace?group_id=${encodeURIComponent(groupId)}&mode=add_to_forest`;
   }
 
   function startMoveTree(tree: TreeDetail) {
     setMoveTree(tree);
-    setMoveTargetForestId(tree.group_id || selectedForestId || forests[0]?.group_id || "");
+    setMoveTargetForestId(
+      tree.group_id || selectedForestId || forests[0]?.group_id || "",
+    );
     setMessage("");
   }
 
@@ -682,7 +732,9 @@ export default function MyTreesPage() {
     if (!profile || !moveTree || actionLoading) return;
 
     if (!moveTargetForestId) {
-      setMessage("Move Tree blocker: Please choose the forest where this seedling should belong.");
+      setMessage(
+        "Move Tree blocker: Please choose the forest where this seedling should belong.",
+      );
       return;
     }
 
@@ -693,10 +745,14 @@ export default function MyTreesPage() {
       return;
     }
 
-    const targetForest = forests.find((forest) => forest.group_id === moveTargetForestId);
+    const targetForest = forests.find(
+      (forest) => forest.group_id === moveTargetForestId,
+    );
 
     if (!targetForest) {
-      setMessage("Move Tree blocker: Selected forest was not found. Reload My Trees and try again.");
+      setMessage(
+        "Move Tree blocker: Selected forest was not found. Reload My Trees and try again.",
+      );
       return;
     }
 
@@ -725,7 +781,9 @@ export default function MyTreesPage() {
     setMoveTargetForestId("");
     setSelectedTree(null);
     await loadMyTrees(moveTargetForestId);
-    setMessage(`${movedTreeName} moved to ${movedForestName}. Forest counts were recalculated.`);
+    setMessage(
+      `${movedTreeName} moved to ${movedForestName}. Forest counts were recalculated.`,
+    );
     setActionLoading(false);
   }
 
@@ -810,32 +868,68 @@ export default function MyTreesPage() {
   }
 
   function renderTreePremiumCard(tree: TreeDetail) {
+    const bucket = getTreeProtectionBucket(tree);
+    const latestUpdate =
+      tree.latest_health_at || tree.latest_photo_at || tree.latest_gps_at;
+
     return (
-      <button
-        className={`treeCard ${alertClass(tree.alert_status)}`}
+      <article
+        className={`treeCard ${alertClass(bucket)}`}
         key={tree.tree_id}
+        role="button"
+        tabIndex={0}
         onClick={() => setSelectedTree(tree)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setSelectedTree(tree);
+          }
+        }}
       >
         <div className="treeCardTop">
-          <span>{alertIcon(tree.alert_status)}</span>
-          <small>{alertLabel(tree.alert_status)}</small>
+          <span>{alertIcon(bucket)}</span>
+          <small>{alertLabel(bucket)}</small>
         </div>
 
         <b>{customerTreeName(tree)}</b>
         <code>{tree.tree_code || "No tree code yet"}</code>
-        <p>{tree.alert_reason || alertLabel(tree.alert_status)}</p>
+        <p>{tree.alert_reason || alertLabel(bucket)}</p>
 
         <div className="treeCardMeta">
           <span>{careLabel(tree.care_status)}</span>
-          <span>
-            {formatShortDate(
-              tree.latest_health_at ||
-                tree.latest_photo_at ||
-                tree.latest_gps_at,
-            )}
-          </span>
+          <span>{formatShortDate(latestUpdate)}</span>
         </div>
-      </button>
+
+        <div className="treeCardActionsInline">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setSelectedTree(tree);
+            }}
+          >
+            Open Details
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              requestCare(tree);
+            }}
+          >
+            Request Care
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              startMoveTree(tree);
+            }}
+          >
+            Move Tree
+          </button>
+        </div>
+      </article>
     );
   }
 
@@ -918,6 +1012,15 @@ export default function MyTreesPage() {
                 <article
                   key={forest.group_id}
                   className={isActive ? "forestCard active" : "forestCard"}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedForestId(forest.group_id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedForestId(forest.group_id);
+                    }
+                  }}
                 >
                   <div className="forestTop">
                     <div>
@@ -950,18 +1053,34 @@ export default function MyTreesPage() {
                   <div className="forestCardActions">
                     <button
                       type="button"
-                      onClick={() => setSelectedForestId(forest.group_id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedForestId(forest.group_id);
+                      }}
                     >
                       Open Forest
                     </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        startRenameForest(forest);
+                      }}
+                    >
+                      Rename
+                    </button>
                     <Link
                       href={`/dashboard/tree-operations?group_id=${forest.group_id}`}
+                      onClick={(event) => event.stopPropagation()}
                     >
                       Request Care
                     </Link>
                     <button
                       type="button"
-                      onClick={() => addTreesToForest(forest.group_id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        addTreesToForest(forest.group_id);
+                      }}
                     >
                       Add Trees
                     </button>
@@ -983,9 +1102,19 @@ export default function MyTreesPage() {
                     {Number(selectedForest.attention_count || 0)} attention •{" "}
                     {Number(selectedForest.critical_count || 0)} critical
                   </span>
+                  <small className="forestDetailHint">
+                    Showing trees for this forest only. Open another forest card
+                    above to view its trees.
+                  </small>
                 </div>
 
                 <div className="forestHeadActions">
+                  <button
+                    type="button"
+                    onClick={() => startRenameForest(selectedForest)}
+                  >
+                    Rename Forest
+                  </button>
                   <Link
                     href={`/dashboard/tree-operations?group_id=${selectedForest.group_id}`}
                   >
@@ -1061,10 +1190,10 @@ export default function MyTreesPage() {
             </button>
 
             <div
-              className={`detailStatus ${alertClass(selectedTree.alert_status)}`}
+              className={`detailStatus ${alertClass(getTreeProtectionBucket(selectedTree))}`}
             >
-              <span>{alertIcon(selectedTree.alert_status)}</span>
-              <b>{alertLabel(selectedTree.alert_status)}</b>
+              <span>{alertIcon(getTreeProtectionBucket(selectedTree))}</span>
+              <b>{alertLabel(getTreeProtectionBucket(selectedTree))}</b>
             </div>
 
             <p className="eyebrow">Tree Detail</p>
@@ -1137,7 +1266,9 @@ export default function MyTreesPage() {
               </button>
               <button onClick={() => setQrTree(selectedTree)}>View QR</button>
               <button onClick={() => startRename(selectedTree)}>Rename</button>
-              <button onClick={() => startMoveTree(selectedTree)}>Move Tree</button>
+              <button onClick={() => startMoveTree(selectedTree)}>
+                Move Tree
+              </button>
             </div>
           </div>
         </div>
@@ -1227,6 +1358,44 @@ export default function MyTreesPage() {
         </div>
       )}
 
+      {renameForest && (
+        <div className="modalOverlay" onClick={() => setRenameForest(null)}>
+          <div
+            className="modal renameModal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button className="closeBtn" onClick={() => setRenameForest(null)}>
+              ×
+            </button>
+
+            <p className="eyebrow">Forest Management</p>
+            <h2>Rename Forest</h2>
+            <p className="detailSubtitle">
+              Rename this forest so buyers can clearly separate family forests,
+              plantation batches, or seedling groups. Tree QR identity and
+              group_id stay the same.
+            </p>
+
+            <label className="fieldLabel">
+              Forest Name
+              <input
+                value={renameForestValue}
+                onChange={(event) => setRenameForestValue(event.target.value)}
+                placeholder="Robert Family Plantation"
+              />
+            </label>
+
+            <button
+              className="primaryBtn"
+              disabled={actionLoading}
+              onClick={saveRenameForest}
+            >
+              {actionLoading ? "Saving..." : "Save Forest Name"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {moveTree && (
         <div className="modalOverlay" onClick={() => setMoveTree(null)}>
           <div
@@ -1240,7 +1409,9 @@ export default function MyTreesPage() {
             <p className="eyebrow">Forest Grouping</p>
             <h2>Move Tree to Another Forest</h2>
             <p className="detailSubtitle">
-              Move {customerTreeName(moveTree)} into the correct forest. This updates trees.group_id and recalculates Critical, Attention, and Protected counts from actual tree rows.
+              Move {customerTreeName(moveTree)} into the correct forest. This
+              updates trees.group_id and recalculates Critical, Attention, and
+              Protected counts from actual tree rows.
             </p>
 
             <label className="fieldLabel">
@@ -1252,7 +1423,8 @@ export default function MyTreesPage() {
                 <option value="">Select destination forest</option>
                 {forests.map((forest) => (
                   <option key={forest.group_id} value={forest.group_id}>
-                    {forestName(forest)} • {Number(forest.total_trees || 0)} tree(s)
+                    {forestName(forest)} • {Number(forest.total_trees || 0)}{" "}
+                    tree(s)
                   </option>
                 ))}
               </select>
@@ -1516,6 +1688,7 @@ export default function MyTreesPage() {
 
         .heroActions a,
         .forestHeadActions a,
+        .forestHeadActions button,
         .emptyState a {
           display: inline-flex;
           align-items: center;
@@ -1530,7 +1703,8 @@ export default function MyTreesPage() {
         }
 
         .heroActions a:last-child,
-        .forestHeadActions a:first-child {
+        .forestHeadActions a:first-child,
+        .forestHeadActions button:first-child {
           color: #fff7df;
           background: rgba(255,255,255,.10);
           border: 1px solid rgba(232, 190, 103, .22);
@@ -1648,7 +1822,7 @@ export default function MyTreesPage() {
 
         .forestGrid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 16px;
           margin-bottom: 18px;
         }
@@ -1816,7 +1990,7 @@ export default function MyTreesPage() {
 
         .treeSections {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 14px;
           align-items: start;
         }
@@ -1946,6 +2120,35 @@ export default function MyTreesPage() {
           color: rgba(255,247,223,.62);
           font-size: 11px;
           font-weight: 900;
+        }
+
+        .treeCardActionsInline {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .treeCardActionsInline button {
+          border: 1px solid rgba(232,190,103,.18);
+          border-radius: 14px;
+          padding: 10px 8px;
+          color: #f4d58b;
+          background: rgba(232,190,103,.10);
+          font-size: 11px;
+          font-weight: 1000;
+          cursor: pointer;
+        }
+
+        .treeCardActionsInline button:hover {
+          background: rgba(232,190,103,.18);
+        }
+
+        .forestDetailHint {
+          display: block;
+          margin-top: 8px;
+          color: rgba(255,247,223,.58);
+          font-weight: 800;
         }
 
         .treeCard.critical {

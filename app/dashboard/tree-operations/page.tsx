@@ -397,7 +397,7 @@ export default function TreeOperationsPage() {
       if (inventoryError)
         console.warn("Inventory load error:", inventoryError.message);
 
-      const { data: requestRows } = await supabase
+      const { data: requestRows, error: requestLoadError } = await supabase
         .from("tree_operation_requests")
         .select(
           "id, profile_id, customer_profile_id, tree_id, group_id, operation_type, service_name, request_type, amount, operation_fee, platform_fee, total_amount, notes, status, created_at, care_program_name, care_program_price, care_program_duration, care_program_status, next_renewal_date, auto_renew_enabled",
@@ -406,6 +406,10 @@ export default function TreeOperationsPage() {
           `profile_id.eq.${currentProfile.id},customer_profile_id.eq.${currentProfile.id}`,
         )
         .order("created_at", { ascending: false });
+
+      if (requestLoadError) {
+        throw new Error(`Recent care activity load failed: ${requestLoadError.message}`);
+      }
 
       const { data: programRows, error: programError } = await supabase
         .from("marketplace_products")
@@ -785,6 +789,7 @@ export default function TreeOperationsPage() {
           selectedForest,
         )}.`,
       status: "PENDING",
+      assignment_status: "PENDING",
       requested_at: new Date().toISOString(),
       care_program_name: isCareProgram ? operation.name : null,
       care_program_price: isCareProgram ? operation.price : null,
@@ -854,6 +859,23 @@ export default function TreeOperationsPage() {
     }
   }
 
+  async function markTreesPendingCare(treeIds: string[]) {
+    if (!profile || treeIds.length === 0) return;
+
+    const { error } = await supabase
+      .from("trees")
+      .update({
+        care_status: "PENDING_CARE",
+        updated_at: new Date().toISOString(),
+      })
+      .in("id", treeIds)
+      .eq("customer_profile_id", profile.id);
+
+    if (error) {
+      throw new Error(`My Trees sync failed: ${error.message}`);
+    }
+  }
+
   async function treasuryEntryExists(sourceType: string, sourceId: string) {
     const { data, error } = await supabase
       .from("platform_treasury")
@@ -910,30 +932,34 @@ export default function TreeOperationsPage() {
       "PROCESSING",
     ];
 
-    let query = supabase
+    const { data, error } = await supabase
       .from("tree_operation_requests")
-      .select("id")
+      .select("id, profile_id, customer_profile_id, tree_id, group_id, operation_type, service_name, care_program_name, status")
       .or(`profile_id.eq.${profile.id},customer_profile_id.eq.${profile.id}`)
-      .eq("group_id", args.groupId)
-      .in("status", activeStatuses)
-      .limit(1);
+      .in("status", activeStatuses);
 
-    if (args.treeId) {
-      query = query.eq("tree_id", args.treeId);
-    } else {
-      query = query.is("tree_id", null);
-    }
+    if (error) throw new Error(`duplicate request detected: ${error.message}`);
 
-    const exactName = args.careProgramName || args.operationName;
-    query = query.or(
-      `operation_type.eq.${exactName},service_name.eq.${exactName},care_program_name.eq.${exactName}`,
-    );
+    const exactName = String(args.careProgramName || args.operationName || "")
+      .trim()
+      .toUpperCase();
 
-    const { data, error } = await query;
+    return (data || []).some((request: any) => {
+      const requestName = String(
+        request.service_name || request.care_program_name || request.operation_type || "",
+      )
+        .trim()
+        .toUpperCase();
 
-    if (error) throw error;
+      if (requestName !== exactName) return false;
+      if (String(request.group_id || "") !== String(args.groupId || "")) return false;
 
-    return (data || []).length > 0;
+      if (args.treeId) {
+        return String(request.tree_id || "") === String(args.treeId || "");
+      }
+
+      return !request.tree_id;
+    });
   }
 
   async function ensureNoDuplicateCareRequests(args: {
@@ -1052,7 +1078,7 @@ export default function TreeOperationsPage() {
             platformFee,
           }),
         )
-        .select("id")
+        .select("*")
         .single();
 
       if (requestError || !createdRequest) {
@@ -1062,6 +1088,16 @@ export default function TreeOperationsPage() {
       }
 
       createdRequestId = createdRequest.id;
+      setRequests((previous) => [createdRequest as OperationRequest, ...previous.filter((item) => item.id !== createdRequest.id)]);
+
+      const serviceTreeIdsToSync =
+        scope === "FOREST"
+          ? selectedForestTrees.map((tree) => tree.tree_id)
+          : selectedTree
+            ? [selectedTree.tree_id]
+            : [];
+
+      await markTreesPendingCare(serviceTreeIdsToSync);
 
       await createWalletTransactionLog({
         amount: -Math.abs(totalAmount),
@@ -1087,7 +1123,7 @@ export default function TreeOperationsPage() {
 
       setNote("");
       setMessage(
-        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`,
+        `${operation.name} requested for ${targetLabel}. Synced to Recent Care Activity, Admin Operations Queue, and My Trees pending care status. Wallet and treasury records were posted.`,
       );
 
       await loadData(selectedForestId, selectedTreeId);
@@ -1167,7 +1203,7 @@ export default function TreeOperationsPage() {
             nextRenewalDate,
           }),
         )
-        .select("id")
+        .select("*")
         .single();
 
       if (requestError || !createdRequest) {
@@ -1177,6 +1213,7 @@ export default function TreeOperationsPage() {
       }
 
       createdRequestId = createdRequest.id;
+      setRequests((previous) => [createdRequest as OperationRequest, ...previous.filter((item) => item.id !== createdRequest.id)]);
 
       if (autoRenewEnabled && scope === "TREE" && selectedTree) {
         const subscriptionPayload = {
@@ -1260,7 +1297,7 @@ export default function TreeOperationsPage() {
       await loadData(selectedForestId, selectedTreeId);
 
       setMessage(
-        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`,
+        `${operation.name} paid and submitted for ${targetLabel}. Synced to Recent Care Activity, Admin Operations Queue, and My Trees pending care status. Gardener will see it after Admin assignment.`,
       );
     } catch (error: any) {
       if (createdSubscriptionId)
