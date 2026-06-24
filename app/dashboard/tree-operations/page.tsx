@@ -1011,6 +1011,13 @@ export default function TreeOperationsPage() {
       return;
     }
 
+    if (walletBalance < totalPreview) {
+      setMessage(
+        `wallet insufficient: Wallet balance ${peso(walletBalance)} is lower than required total ${peso(totalPreview)}.`,
+      );
+      return;
+    }
+
     try {
       await ensureNoDuplicateCareRequests({
         operationName: operation.name,
@@ -1812,7 +1819,7 @@ export default function TreeOperationsPage() {
 
                 <button
                   className="submitButton"
-                  disabled={processing || hasActiveSameRequest}
+                  disabled={processing}
                   onClick={submitServiceRequest}
                 >
                   {processing
@@ -1863,7 +1870,8 @@ export default function TreeOperationsPage() {
                     <div className="requestRow" key={request.id}>
                       <div>
                         <strong>
-                          {request.care_program_name ||
+                          {request.service_name ||
+                            request.care_program_name ||
                             request.operation_type ||
                             "Forest Care"}
                         </strong>

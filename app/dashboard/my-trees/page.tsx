@@ -408,6 +408,8 @@ export default function MyTreesPage() {
   const [qrTree, setQrTree] = useState<TreeDetail | null>(null);
   const [renameTree, setRenameTree] = useState<TreeDetail | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [moveTree, setMoveTree] = useState<TreeDetail | null>(null);
+  const [moveTargetForestId, setMoveTargetForestId] = useState("");
   const [evidenceTree, setEvidenceTree] = useState<TreeDetail | null>(null);
   const [evidenceMode, setEvidenceMode] = useState<EvidenceMode>("PHOTOS");
   const [photoEvidence, setPhotoEvidence] = useState<PhotoEvidence[]>([]);
@@ -668,6 +670,63 @@ export default function MyTreesPage() {
 
   function addTreesToForest(groupId: string) {
     window.location.href = `/dashboard/marketplace?group_id=${encodeURIComponent(groupId)}&mode=add_to_forest`;
+  }
+
+  function startMoveTree(tree: TreeDetail) {
+    setMoveTree(tree);
+    setMoveTargetForestId(tree.group_id || selectedForestId || forests[0]?.group_id || "");
+    setMessage("");
+  }
+
+  async function saveMoveTree() {
+    if (!profile || !moveTree || actionLoading) return;
+
+    if (!moveTargetForestId) {
+      setMessage("Move Tree blocker: Please choose the forest where this seedling should belong.");
+      return;
+    }
+
+    if (moveTargetForestId === moveTree.group_id) {
+      setMoveTree(null);
+      setMoveTargetForestId("");
+      setMessage("Tree is already inside that forest.");
+      return;
+    }
+
+    const targetForest = forests.find((forest) => forest.group_id === moveTargetForestId);
+
+    if (!targetForest) {
+      setMessage("Move Tree blocker: Selected forest was not found. Reload My Trees and try again.");
+      return;
+    }
+
+    setActionLoading(true);
+    setMessage("");
+
+    const { error } = await supabase
+      .from("trees")
+      .update({
+        group_id: moveTargetForestId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", moveTree.tree_id)
+      .eq("customer_profile_id", profile.id);
+
+    if (error) {
+      setMessage(`Move Tree failed: ${error.message}`);
+      setActionLoading(false);
+      return;
+    }
+
+    const movedTreeName = customerTreeName(moveTree);
+    const movedForestName = forestName(targetForest);
+
+    setMoveTree(null);
+    setMoveTargetForestId("");
+    setSelectedTree(null);
+    await loadMyTrees(moveTargetForestId);
+    setMessage(`${movedTreeName} moved to ${movedForestName}. Forest counts were recalculated.`);
+    setActionLoading(false);
   }
 
   function requestCare(tree: TreeDetail) {
@@ -1078,6 +1137,7 @@ export default function MyTreesPage() {
               </button>
               <button onClick={() => setQrTree(selectedTree)}>View QR</button>
               <button onClick={() => startRename(selectedTree)}>Rename</button>
+              <button onClick={() => startMoveTree(selectedTree)}>Move Tree</button>
             </div>
           </div>
         </div>
@@ -1162,6 +1222,48 @@ export default function MyTreesPage() {
               onClick={saveRename}
             >
               {actionLoading ? "Saving..." : "Save Name"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {moveTree && (
+        <div className="modalOverlay" onClick={() => setMoveTree(null)}>
+          <div
+            className="modal renameModal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button className="closeBtn" onClick={() => setMoveTree(null)}>
+              ×
+            </button>
+
+            <p className="eyebrow">Forest Grouping</p>
+            <h2>Move Tree to Another Forest</h2>
+            <p className="detailSubtitle">
+              Move {customerTreeName(moveTree)} into the correct forest. This updates trees.group_id and recalculates Critical, Attention, and Protected counts from actual tree rows.
+            </p>
+
+            <label className="fieldLabel">
+              Destination Forest
+              <select
+                value={moveTargetForestId}
+                onChange={(event) => setMoveTargetForestId(event.target.value)}
+              >
+                <option value="">Select destination forest</option>
+                {forests.map((forest) => (
+                  <option key={forest.group_id} value={forest.group_id}>
+                    {forestName(forest)} • {Number(forest.total_trees || 0)} tree(s)
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              className="primaryBtn"
+              disabled={actionLoading || !moveTargetForestId}
+              onClick={saveMoveTree}
+            >
+              {actionLoading ? "Moving..." : "Move Tree"}
             </button>
           </div>
         </div>
