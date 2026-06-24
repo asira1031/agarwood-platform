@@ -940,24 +940,25 @@ export default function TreeOperationsPage() {
         referenceId: createdRequest.id,
       });
 
-      let treasurySynced = true;
-
       try {
         await insertPlatformTreasury({
           amount: platformFee,
           sourceId: createdRequest.id,
           description: "Platform fee for care request",
         });
-      } catch (treasuryError) {
+      } catch (treasuryError: any) {
         console.error("Care service treasury sync failed:", treasuryError);
-        treasurySynced = false;
+
+        throw new Error(
+          `Treasury sync failed: ${
+            treasuryError?.message || "Unknown treasury error"
+          }`
+        );
       }
 
       setNote("");
       setMessage(
-        treasurySynced
-          ? `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
-          : "Request was created, but treasury sync failed. Please check platform_treasury."
+        `${operation.name} requested for ${targetLabel}. Wallet deducted, transaction recorded, platform fee received, and request is waiting for admin assignment.`
       );
 
       await loadData(selectedForestId, selectedTreeId);
@@ -1086,26 +1087,27 @@ export default function TreeOperationsPage() {
         referenceId: createdRequest.id,
       });
 
-      let treasurySynced = true;
-
       try {
         await insertPlatformTreasury({
           amount: programPrice,
           sourceId: createdRequest.id,
           description: "Care service payment",
         });
-      } catch (treasuryError) {
+      } catch (treasuryError: any) {
         console.error("Care program treasury sync failed:", treasuryError);
-        treasurySynced = false;
+
+        throw new Error(
+          `Treasury sync failed: ${
+            treasuryError?.message || "Unknown treasury error"
+          }`
+        );
       }
 
       setNote("");
       await loadData(selectedForestId, selectedTreeId);
 
       setMessage(
-        treasurySynced
-          ? `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
-          : "Request was created, but treasury sync failed. Please check platform_treasury."
+        `${operation.name} paid and submitted for ${targetLabel}. Status is pending activation until Admin reviews gardener evidence and approves care activation.`
       );
     } catch (error: any) {
       if (createdSubscriptionId) await rollbackCreatedSubscriptions([createdSubscriptionId]);
