@@ -1,3 +1,6 @@
+// app/admin/cashin/page.tsx
+// FULL FILE REPLACEMENT ONLY
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -63,7 +66,6 @@ function formatDate(value: string | null | undefined) {
 
 function statusClass(value: string | null | undefined) {
   const status = normalize(value);
-
   if (status === "APPROVED" || status === "COMPLETED") return "approved";
   if (status === "REJECTED") return "rejected";
   return "pending";
@@ -102,7 +104,10 @@ export default function AdminCashInPage() {
     const rows = (requestRows || []) as CashInRequest[];
     setRequests(rows);
 
-    const profileIds = Array.from(new Set(rows.map((item) => item.profile_id).filter(Boolean))) as string[];
+    const profileIds = Array.from(
+      new Set(rows.map((item) => item.profile_id).filter(Boolean))
+    ) as string[];
+
     const requestIds = rows.map((item) => item.id).filter(Boolean);
 
     if (profileIds.length > 0) {
@@ -152,7 +157,9 @@ export default function AdminCashInPage() {
 
   const grouped = useMemo(() => {
     const pending = requests.filter((item) => normalize(item.status) === "PENDING");
-    const approved = requests.filter((item) => ["APPROVED", "COMPLETED"].includes(normalize(item.status)));
+    const approved = requests.filter((item) =>
+      ["APPROVED", "COMPLETED"].includes(normalize(item.status))
+    );
     const rejected = requests.filter((item) => normalize(item.status) === "REJECTED");
 
     return { pending, approved, rejected };
@@ -165,8 +172,15 @@ export default function AdminCashInPage() {
     return requests;
   }, [tab, grouped, requests]);
 
-  const pendingAmount = grouped.pending.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const approvedAmount = grouped.approved.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const pendingAmount = grouped.pending.reduce(
+    (sum, item) => sum + Number(item.amount || 0),
+    0
+  );
+
+  const approvedAmount = grouped.approved.reduce(
+    (sum, item) => sum + Number(item.amount || 0),
+    0
+  );
 
   async function getFreshWallet(profileId: string) {
     const { data, error } = await supabase
@@ -179,46 +193,42 @@ export default function AdminCashInPage() {
     return data as WalletRow | null;
   }
 
-  async function getFreshWalletTransaction(referenceNo: string) {
-    const { data, error } = await supabase
-      .from("wallet_transactions")
-      .select("id, profile_id, transaction_type, amount, reference_no, description, status, created_at")
-      .eq("reference_no", referenceNo)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+  async function rollbackCashIn(params: {
+    requestId: string;
+    walletId: string;
+    oldBalance: number;
+  }) {
+    const { requestId, walletId, oldBalance } = params;
 
-    if (error) throw error;
-    return data as WalletTransaction | null;
+    await supabase.from("wallets").update({ balance: oldBalance }).eq("id", walletId);
+
+    await supabase
+      .from("cashin_requests")
+      .update({ status: "PENDING" })
+      .eq("id", requestId);
+
+    await supabase
+      .from("wallet_transactions")
+      .delete()
+      .eq("reference_no", requestId)
+      .eq("transaction_type", "CASH_IN");
   }
 
-  async function syncWalletTransaction(request: CashInRequest) {
+  async function createWalletTransaction(request: CashInRequest, amount: number) {
     if (!request.profile_id) throw new Error("Profile ID missing.");
 
-    const existing = await getFreshWalletTransaction(request.id);
-    const amount = Math.abs(Number(request.amount || 0));
-
-    if (existing) {
-      const { error } = await supabase
-        .from("wallet_transactions")
-        .update({
-          transaction_type: "CASH_IN",
-          amount,
-          status: "COMPLETED",
-          description: `Cash-in approved by admin. Amount: ${peso(amount)}.`,
-        })
-        .eq("id", existing.id);
-
-      if (error) throw error;
-      return;
-    }
+    await supabase
+      .from("wallet_transactions")
+      .delete()
+      .eq("reference_no", request.id)
+      .eq("transaction_type", "CASH_IN");
 
     const { error } = await supabase.from("wallet_transactions").insert({
       profile_id: request.profile_id,
       transaction_type: "CASH_IN",
       amount,
       reference_no: request.id,
-      description: `Cash-in approved by admin. Amount: ${peso(amount)}.`,
+      description: `Cash-in approved. Amount: ${peso(amount)}.`,
       status: "COMPLETED",
       created_at: new Date().toISOString(),
     });
@@ -226,26 +236,20 @@ export default function AdminCashInPage() {
     if (error) throw error;
   }
 
-  async function treasuryEntryExists(sourceType: string, sourceId: string) {
-    const { data, error } = await supabase
+  async function insertTreasuryEntry(request: CashInRequest, amount: number) {
+    if (!request.id || !request.profile_id) {
+      throw new Error("Cash-in request profile missing.");
+    }
+
+    const { data: existing, error: existingError } = await supabase
       .from("platform_treasury")
       .select("id")
-      .eq("source_type", sourceType)
-      .eq("source_id", sourceId)
+      .eq("source_type", "CASH_IN")
+      .eq("source_id", request.id)
       .limit(1);
 
-    if (error) throw error;
-
-    return (data || []).length > 0;
-  }
-
-  async function insertTreasuryEntry(request: CashInRequest) {
-    if (!request.id || !request.profile_id) throw new Error("Cash-in request profile missing.");
-
-    const exists = await treasuryEntryExists("CASH_IN", request.id);
-    if (exists) return;
-
-    const amount = Math.abs(Number(request.amount || 0));
+    if (existingError) throw existingError;
+    if ((existing || []).length > 0) return;
 
     const { error } = await supabase.from("platform_treasury").insert({
       source: "CASH_IN",
@@ -278,22 +282,24 @@ export default function AdminCashInPage() {
     setActionLoading(request.id);
     setMessage("");
 
+    let walletForRollback: WalletRow | null = null;
+
     try {
       const amount = Math.abs(Number(request.amount || 0));
+
+      if (amount <= 0) {
+        throw new Error("Invalid cash-in amount.");
+      }
+
       const wallet = await getFreshWallet(request.profile_id);
 
       if (!wallet?.id) {
         throw new Error("Customer wallet not found.");
       }
 
-      const newBalance = Number(wallet.balance || 0) + amount;
-
-      const { error: walletError } = await supabase
-        .from("wallets")
-        .update({ balance: newBalance })
-        .eq("id", wallet.id);
-
-      if (walletError) throw walletError;
+      walletForRollback = wallet;
+      const oldBalance = Number(wallet.balance || 0);
+      const newBalance = oldBalance + amount;
 
       const { data: updatedRequest, error: requestError } = await supabase
         .from("cashin_requests")
@@ -306,23 +312,52 @@ export default function AdminCashInPage() {
       if (requestError) throw requestError;
 
       if (!updatedRequest || normalize(updatedRequest.status) !== "APPROVED") {
-        await supabase.from("wallets").update({ balance: wallet.balance || 0 }).eq("id", wallet.id);
         throw new Error("Cash-in request status was not updated.");
       }
 
-      await syncWalletTransaction(request);
+      const { error: walletError } = await supabase
+        .from("wallets")
+        .update({ balance: newBalance })
+        .eq("id", wallet.id);
+
+      if (walletError) {
+        await rollbackCashIn({
+          requestId: request.id,
+          walletId: wallet.id,
+          oldBalance,
+        });
+        throw walletError;
+      }
 
       try {
-        await insertTreasuryEntry(request);
-        setMessage("Cash-in approved. Customer wallet, wallet transaction, and platform treasury synced.");
-      } catch (treasuryError) {
-        console.error("Cash-in treasury sync failed:", treasuryError);
-        setMessage("Cash-in approved and wallet transaction completed. Request was created, but treasury sync failed. Please check platform_treasury.");
+        await createWalletTransaction(request, amount);
+        await insertTreasuryEntry(request, amount);
+      } catch (syncError: any) {
+        console.error("Cash-in approval sync failed:", syncError);
+
+        await rollbackCashIn({
+          requestId: request.id,
+          walletId: wallet.id,
+          oldBalance,
+        });
+
+        throw new Error(
+          `Cash-in approval failed and was rolled back: ${
+            syncError?.message || "Treasury or wallet transaction sync failed."
+          }`
+        );
       }
+
+      setMessage("Cash-in approved. Wallet, wallet transaction, and platform treasury are synced.");
       await loadData();
       setTab("APPROVED");
     } catch (error: any) {
+      if (walletForRollback?.id && request.id) {
+        console.error("Cash-in approve failed:", error);
+      }
+
       setMessage(error?.message || "Failed to approve cash-in.");
+      await loadData();
     }
 
     setActionLoading("");
@@ -374,8 +409,9 @@ export default function AdminCashInPage() {
           <p className="eyebrow">Admin Finance Center</p>
           <h1>Cash-In Queue</h1>
           <span>
-            Approve verified customer cash-ins. Approval credits customer wallet,
-            creates a completed wallet transaction, and syncs platform treasury.
+            Approve verified customer cash-ins. Approval must credit wallet,
+            create wallet transaction, and post platform treasury. If treasury
+            fails, approval is rolled back.
           </span>
         </div>
 
@@ -470,7 +506,7 @@ export default function AdminCashInPage() {
                             disabled={processing || status !== "PENDING"}
                             onClick={() => approveCashIn(request)}
                           >
-                            Approve
+                            {processing ? "Processing..." : "Approve"}
                           </button>
 
                           <button
