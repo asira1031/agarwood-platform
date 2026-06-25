@@ -22,8 +22,6 @@ const ID_TYPES = [
   "Other",
 ];
 
-const STORAGE_BUCKETS = ["kyc-documents", "kyc", "documents"];
-
 function normalize(value: any) {
   return String(value || "").trim().toUpperCase();
 }
@@ -58,14 +56,6 @@ function formatDateTime(value: string | null | undefined) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function safeFileName(value: string) {
-  return String(value || "document")
-    .trim()
-    .replace(/[^a-zA-Z0-9._-]/g, "-")
-    .replace(/-+/g, "-")
-    .toLowerCase();
 }
 
 function maskIdNumber(value: string | null | undefined) {
@@ -253,39 +243,6 @@ export default function ProfilePage() {
     await loadProfile();
   }
 
-  async function uploadToAnyKycBucket(
-    file: File | null,
-    folder: string,
-    profileId: string
-  ) {
-    if (!file) return null;
-
-    const cleanName = safeFileName(file.name);
-    const timestamp = Date.now();
-    const filePath = `kyc/${profileId}/${folder}/${timestamp}-${cleanName}`;
-    let lastError = "";
-
-    for (const bucket of STORAGE_BUCKETS) {
-      const { error: uploadError } = await supabase.storage
-        .from(bucket)
-        .upload(filePath, file, {
-          upsert: false,
-          cacheControl: "3600",
-          contentType: file.type || undefined,
-        });
-
-      if (uploadError) {
-        lastError = `${bucket}: ${uploadError.message}`;
-        continue;
-      }
-
-      const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
-      return data?.publicUrl || `${bucket}/${filePath}`;
-    }
-
-    throw new Error(lastError || "KYC document upload failed.");
-  }
-
   async function submitKyc() {
     setMessage("");
 
@@ -297,46 +254,23 @@ export default function ProfilePage() {
     if (!kycForm.id_type) return setMessage("Please select ID type.");
     if (!kycForm.id_number.trim()) return setMessage("Please enter ID number.");
 
-    if (!files.id_document && !files.id_front) {
-      return setMessage("Please upload an ID document/image.");
-    }
-
     try {
       setSubmittingKyc(true);
 
       const currentProfile = await resolveCurrentProfile();
       const now = new Date().toISOString();
 
-      const idDocumentUrl = await uploadToAnyKycBucket(
-        files.id_document || files.id_front,
-        "id-document",
-        currentProfile.id
-      );
-
-      const idFrontUrl = files.id_front
-        ? await uploadToAnyKycBucket(files.id_front, "id-front", currentProfile.id)
-        : idDocumentUrl;
-
-      const idBackUrl = files.id_back
-        ? await uploadToAnyKycBucket(files.id_back, "id-back", currentProfile.id)
-        : null;
-
-      const selfieUrl = files.selfie
-        ? await uploadToAnyKycBucket(files.selfie, "selfie", currentProfile.id)
-        : null;
-
-      const proofUrl = files.proof
-        ? await uploadToAnyKycBucket(files.proof, "proof-address", currentProfile.id)
-        : null;
-
+      // TEMP UAT:
+      // Supabase Storage upload is currently blocked by storage.objects ownership/policy.
+      // Submit KYC record first with null document URLs so Admin queue can be tested.
       const { error: insertError } = await supabase.from("kyc_records").insert({
         profile_id: currentProfile.id,
         id_type: kycForm.id_type,
         id_number: kycForm.id_number.trim(),
-        id_front_url: idFrontUrl,
-        id_back_url: idBackUrl,
-        selfie_url: selfieUrl,
-        proof_of_address_url: proofUrl,
+        id_front_url: null,
+        id_back_url: null,
+        selfie_url: null,
+        proof_of_address_url: null,
         source_of_funds: kycForm.source_of_funds || null,
         investment_experience: kycForm.investment_experience || null,
         risk_acknowledged: kycForm.risk_acknowledged || false,
@@ -374,7 +308,10 @@ export default function ProfilePage() {
         proof: null,
       });
 
-      setMessage("KYC submitted for admin review.");
+      setMessage(
+        "KYC submitted for admin review. TEMP UAT: photo upload is disabled until Storage policy is fixed."
+      );
+
       await loadProfile();
     } catch (error: any) {
       setMessage(error?.message || "KYC submission failed.");
@@ -390,7 +327,8 @@ export default function ProfilePage() {
           <p className="eyebrow">Customer Account</p>
           <h1>Forest Identity Center</h1>
           <span>
-            Manage your customer identity, membership standing, and KYC verification for Arganwood services.
+            Manage your customer identity, membership standing, and KYC
+            verification for Arganwood services.
           </span>
         </div>
 
@@ -482,14 +420,21 @@ export default function ProfilePage() {
                 <div>
                   <p className="eyebrow">Verification</p>
                   <h2>KYC Documents</h2>
-                  <span>Upload identity documents for admin verification.</span>
+                  <span>
+                    Upload identity documents for admin verification. TEMP UAT:
+                    files are displayed here but upload is temporarily bypassed.
+                  </span>
                 </div>
-                <b className={`pill ${statusClass(kycStatus)}`}>{statusLabel(kycStatus)}</b>
+                <b className={`pill ${statusClass(kycStatus)}`}>
+                  {statusLabel(kycStatus)}
+                </b>
               </div>
 
               {!canSubmitKyc ? (
                 <div className="lockedBox">
-                  <strong>{isVerified ? "KYC already approved." : "KYC is pending review."}</strong>
+                  <strong>
+                    {isVerified ? "KYC already approved." : "KYC is pending review."}
+                  </strong>
                   <p>
                     {isVerified
                       ? "Your account is verified. You may use payout and sell tree features."
@@ -501,7 +446,10 @@ export default function ProfilePage() {
                   {isRejected && (
                     <div className="rejectedBox">
                       <strong>Previous KYC was rejected.</strong>
-                      <p>{getAdminNotes(latestKyc) || "Please review your documents and submit again."}</p>
+                      <p>
+                        {getAdminNotes(latestKyc) ||
+                          "Please review your documents and submit again."}
+                      </p>
                     </div>
                   )}
 
@@ -510,7 +458,9 @@ export default function ProfilePage() {
                       ID Type
                       <select
                         value={kycForm.id_type}
-                        onChange={(e) => setKycForm({ ...kycForm, id_type: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({ ...kycForm, id_type: e.target.value })
+                        }
                       >
                         <option value="">Select ID Type</option>
                         {ID_TYPES.map((type) => (
@@ -525,7 +475,9 @@ export default function ProfilePage() {
                       ID Number
                       <input
                         value={kycForm.id_number}
-                        onChange={(e) => setKycForm({ ...kycForm, id_number: e.target.value })}
+                        onChange={(e) =>
+                          setKycForm({ ...kycForm, id_number: e.target.value })
+                        }
                         placeholder="Enter ID number"
                       />
                     </label>
@@ -535,7 +487,10 @@ export default function ProfilePage() {
                       <select
                         value={kycForm.source_of_funds}
                         onChange={(e) =>
-                          setKycForm({ ...kycForm, source_of_funds: e.target.value })
+                          setKycForm({
+                            ...kycForm,
+                            source_of_funds: e.target.value,
+                          })
                         }
                       >
                         <option value="">Select Source of Funds</option>
@@ -553,7 +508,10 @@ export default function ProfilePage() {
                       <select
                         value={kycForm.investment_experience}
                         onChange={(e) =>
-                          setKycForm({ ...kycForm, investment_experience: e.target.value })
+                          setKycForm({
+                            ...kycForm,
+                            investment_experience: e.target.value,
+                          })
                         }
                       >
                         <option value="">Select Experience</option>
@@ -569,16 +527,20 @@ export default function ProfilePage() {
                     Notes Optional
                     <textarea
                       value={kycForm.notes}
-                      onChange={(e) => setKycForm({ ...kycForm, notes: e.target.value })}
+                      onChange={(e) =>
+                        setKycForm({ ...kycForm, notes: e.target.value })
+                      }
                       placeholder="Add notes for admin review"
                     />
                   </label>
 
                   <div className="uploadGrid">
                     <UploadBox
-                      label="ID Document / Image Required"
+                      label="ID Document / Image Optional During UAT"
                       file={files.id_document}
-                      onChange={(file) => setFiles({ ...files, id_document: file })}
+                      onChange={(file) =>
+                        setFiles({ ...files, id_document: file })
+                      }
                     />
                     <UploadBox
                       label="Front of ID Optional"
@@ -607,11 +569,15 @@ export default function ProfilePage() {
                       type="checkbox"
                       checked={kycForm.risk_acknowledged}
                       onChange={(e) =>
-                        setKycForm({ ...kycForm, risk_acknowledged: e.target.checked })
+                        setKycForm({
+                          ...kycForm,
+                          risk_acknowledged: e.target.checked,
+                        })
                       }
                     />
                     <span>
-                      I understand that agarwood ownership involves long-term agricultural, market, and verification risk.
+                      I understand that agarwood ownership involves long-term
+                      agricultural, market, and verification risk.
                     </span>
                   </label>
 
@@ -637,16 +603,31 @@ export default function ProfilePage() {
                 <div className="trustList">
                   <Info label="Status" value={statusLabel(latestKyc.status)} />
                   <Info label="ID Type" value={latestKyc.id_type || "—"} />
-                  <Info label="ID Number" value={maskIdNumber(latestKyc.id_number)} />
-                  <Info label="Submitted" value={formatDateTime(getSubmittedValue(latestKyc))} />
-                  <Info label="Reviewed" value={formatDateTime(latestKyc.reviewed_at)} />
-                  <Info label="Admin Notes / Rejection Reason" value={getAdminNotes(latestKyc)} />
+                  <Info
+                    label="ID Number"
+                    value={maskIdNumber(latestKyc.id_number)}
+                  />
+                  <Info
+                    label="Submitted"
+                    value={formatDateTime(getSubmittedValue(latestKyc))}
+                  />
+                  <Info
+                    label="Reviewed"
+                    value={formatDateTime(latestKyc.reviewed_at)}
+                  />
+                  <Info
+                    label="Admin Notes / Rejection Reason"
+                    value={getAdminNotes(latestKyc)}
+                  />
 
                   <div className="docLinks">
                     <DocumentLink title="Front ID" url={latestKyc.id_front_url} />
                     <DocumentLink title="Back ID" url={latestKyc.id_back_url} />
                     <DocumentLink title="Selfie" url={latestKyc.selfie_url} />
-                    <DocumentLink title="Proof" url={latestKyc.proof_of_address_url} />
+                    <DocumentLink
+                      title="Proof"
+                      url={latestKyc.proof_of_address_url}
+                    />
                   </div>
                 </div>
               )}
@@ -669,7 +650,12 @@ export default function ProfilePage() {
             linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
         }
 
-        .hero { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+        .hero {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          margin-bottom: 22px;
+        }
 
         .eyebrow {
           margin: 0 0 8px;
@@ -680,39 +666,115 @@ export default function ProfilePage() {
           font-size: 12px;
         }
 
-        h1 { margin: 0; color: #fff8dc; font-size: 46px; letter-spacing: -1.6px; }
+        h1 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: 46px;
+          letter-spacing: -1.6px;
+        }
 
-        .hero span, .panelHead span {
+        .hero span,
+        .panelHead span {
           display: block;
           margin-top: 8px;
           color: rgba(248,241,216,.68);
           line-height: 1.6;
         }
 
-        .identityCard, .summaryCard, .panel, .message, .empty {
+        .identityCard,
+        .summaryCard,
+        .panel,
+        .message,
+        .empty {
           border: 1px solid rgba(214,178,94,.22);
           background: rgba(255,255,255,.07);
           backdrop-filter: blur(18px);
           box-shadow: 0 24px 60px rgba(0,0,0,.28);
         }
 
-        .identityCard { min-width: 320px; border-radius: 28px; padding: 24px; }
-        .identityCard p, .identityCard small { margin: 0; color: rgba(248,241,216,.68); font-weight: 900; }
-        .identityCard strong { display: block; margin: 10px 0; color: #d6b25e; font-size: 28px; word-break: break-word; }
+        .identityCard {
+          min-width: 320px;
+          border-radius: 28px;
+          padding: 24px;
+        }
 
-        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }
-        .summaryCard { border-radius: 24px; padding: 20px; }
-        .summaryCard p { margin: 0; color: rgba(248,241,216,.6); font-weight: 900; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
-        .summaryCard h3 { margin: 10px 0 0; color: #fff8dc; font-size: 23px; word-break: break-word; }
+        .identityCard p,
+        .identityCard small {
+          margin: 0;
+          color: rgba(248,241,216,.68);
+          font-weight: 900;
+        }
 
-        .grid { display: grid; grid-template-columns: 1.25fr .85fr; gap: 18px; margin-bottom: 18px; }
+        .identityCard strong {
+          display: block;
+          margin: 10px 0;
+          color: #d6b25e;
+          font-size: 28px;
+          word-break: break-word;
+        }
+
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 18px;
+        }
+
+        .summaryCard {
+          border-radius: 24px;
+          padding: 20px;
+        }
+
+        .summaryCard p {
+          margin: 0;
+          color: rgba(248,241,216,.6);
+          font-weight: 900;
+          font-size: 12px;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .summaryCard h3 {
+          margin: 10px 0 0;
+          color: #fff8dc;
+          font-size: 23px;
+          word-break: break-word;
+        }
+
+        .grid {
+          display: grid;
+          grid-template-columns: 1.25fr .85fr;
+          gap: 18px;
+          margin-bottom: 18px;
+        }
+
         .kycGrid { align-items: start; }
-        .panel { border-radius: 28px; padding: 22px; }
 
-        .panelHead { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 18px; }
-        .panelHead h2 { margin: 0; color: #fff8dc; font-size: 26px; }
+        .panel {
+          border-radius: 28px;
+          padding: 22px;
+        }
 
-        .formGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
+        .panelHead {
+          display: flex;
+          justify-content: space-between;
+          align-items: start;
+          gap: 14px;
+          margin-bottom: 18px;
+        }
+
+        .panelHead h2 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: 26px;
+        }
+
+        .formGrid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 14px;
+          margin-bottom: 16px;
+        }
 
         label {
           display: grid;
@@ -726,7 +788,9 @@ export default function ProfilePage() {
 
         .notesLabel { margin-bottom: 16px; }
 
-        input, select, textarea {
+        input,
+        select,
+        textarea {
           width: 100%;
           border: 1px solid rgba(214,178,94,.22);
           border-radius: 16px;
@@ -736,7 +800,12 @@ export default function ProfilePage() {
           outline: none;
         }
 
-        textarea { min-height: 100px; resize: vertical; font-family: inherit; }
+        textarea {
+          min-height: 100px;
+          resize: vertical;
+          font-family: inherit;
+        }
+
         input:disabled { opacity: .65; }
         option { color: #07140f; }
 
@@ -750,9 +819,13 @@ export default function ProfilePage() {
           cursor: pointer;
         }
 
-        button:disabled { cursor: not-allowed; opacity: .55; }
+        button:disabled {
+          cursor: not-allowed;
+          opacity: .55;
+        }
 
-        .message, .empty {
+        .message,
+        .empty {
           padding: 18px;
           border-radius: 22px;
           margin-bottom: 18px;
@@ -760,7 +833,12 @@ export default function ProfilePage() {
           font-weight: 900;
         }
 
-        .small { box-shadow: none; margin: 0; background: rgba(0,0,0,.22); }
+        .small {
+          box-shadow: none;
+          margin: 0;
+          background: rgba(0,0,0,.22);
+        }
+
         .trustList { display: grid; gap: 12px; }
 
         .info {
@@ -773,17 +851,37 @@ export default function ProfilePage() {
           border: 1px solid rgba(214,178,94,.12);
         }
 
-        .info p { margin: 0; color: rgba(248,241,216,.58); font-weight: 900; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; }
-        .info strong { color: #fff8dc; text-align: right; word-break: break-word; }
+        .info p {
+          margin: 0;
+          color: rgba(248,241,216,.58);
+          font-weight: 900;
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+        }
 
-        .pill { border-radius: 999px; padding: 9px 12px; font-size: 12px; white-space: nowrap; }
+        .info strong {
+          color: #fff8dc;
+          text-align: right;
+          word-break: break-word;
+        }
+
+        .pill {
+          border-radius: 999px;
+          padding: 9px 12px;
+          font-size: 12px;
+          white-space: nowrap;
+        }
 
         .approved { border-color: rgba(95,220,140,.35); }
         .pending { border-color: rgba(214,178,94,.45); }
         .rejected { border-color: rgba(255,105,105,.4); }
         .notSubmitted { border-color: rgba(255,255,255,.16); }
 
-        .lockedBox, .rejectedBox, .riskBox, .uploadBox {
+        .lockedBox,
+        .rejectedBox,
+        .riskBox,
+        .uploadBox {
           border-radius: 18px;
           padding: 16px;
           background: rgba(0,0,0,.22);
@@ -791,18 +889,37 @@ export default function ProfilePage() {
           margin-bottom: 16px;
         }
 
-        .lockedBox strong, .rejectedBox strong { color: #fff8dc; }
+        .lockedBox strong,
+        .rejectedBox strong { color: #fff8dc; }
 
-        .lockedBox p, .rejectedBox p {
+        .lockedBox p,
+        .rejectedBox p {
           color: rgba(248,241,216,.68);
           margin: 8px 0 0;
           line-height: 1.6;
         }
 
-        .uploadGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
+        .uploadGrid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 14px;
+          margin-bottom: 16px;
+        }
+
         .uploadBox { margin-bottom: 0; }
-        .uploadBox p { margin: 0 0 10px; color: #d6b25e; font-weight: 900; }
-        .uploadBox small { display: block; margin-top: 8px; color: rgba(248,241,216,.62); word-break: break-word; }
+
+        .uploadBox p {
+          margin: 0 0 10px;
+          color: #d6b25e;
+          font-weight: 900;
+        }
+
+        .uploadBox small {
+          display: block;
+          margin-top: 8px;
+          color: rgba(248,241,216,.62);
+          word-break: break-word;
+        }
 
         .riskBox {
           display: flex;
@@ -813,11 +930,20 @@ export default function ProfilePage() {
           line-height: 1.5;
         }
 
-        .riskBox input { width: auto; margin-top: 3px; }
+        .riskBox input {
+          width: auto;
+          margin-top: 3px;
+        }
 
-        .docLinks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 4px; }
+        .docLinks {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+          margin-top: 4px;
+        }
 
-        .docLinks a, .docLinks span {
+        .docLinks a,
+        .docLinks span {
           border-radius: 14px;
           padding: 12px;
           text-align: center;
@@ -831,8 +957,18 @@ export default function ProfilePage() {
         .docLinks span { color: rgba(248,241,216,.45); }
 
         @media (max-width: 980px) {
-          .hero, .grid { display: grid; grid-template-columns: 1fr; }
-          .stats, .formGrid, .uploadGrid { grid-template-columns: 1fr; }
+          .hero,
+          .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .stats,
+          .formGrid,
+          .uploadGrid {
+            grid-template-columns: 1fr;
+          }
+
           .identityCard { min-width: 0; }
           h1 { font-size: 36px; }
         }
