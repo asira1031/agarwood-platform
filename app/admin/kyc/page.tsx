@@ -6,13 +6,8 @@ import { supabase } from "@/lib/supabase";
 type KYCRecord = {
   id: string;
   profile_id: string | null;
-  customer_id?: string | null;
-  full_name?: string | null;
-  email?: string | null;
   id_type: string | null;
   id_number: string | null;
-  document_url?: string | null;
-  id_document_url?: string | null;
   id_front_url: string | null;
   id_back_url: string | null;
   selfie_url: string | null;
@@ -21,46 +16,58 @@ type KYCRecord = {
   investment_experience: string | null;
   risk_acknowledged: boolean | null;
   status: string | null;
-  notes?: string | null;
   review_notes: string | null;
-  admin_notes?: string | null;
-  rejection_reason?: string | null;
   submitted_at: string | null;
-  reviewed_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
+  reviewed_at: string | null;
 };
 
 type ProfileRow = {
   id: string;
   full_name: string | null;
   email: string | null;
+  kyc_status: string | null;
 };
 
 type TabKey = "PENDING" | "HISTORY";
 
-function removeBadColumnFromPayload(
-  payload: Record<string, any>,
-  errorMessage: string
-) {
-  const patterns = [
-    /Could not find the '([^']+)' column/i,
-    /column "([^"]+)" does not exist/i,
-    /schema cache.*'([^']+)'/i,
-    /record "new" has no field "([^"]+)"/i,
-  ];
+function normalize(value: any) {
+  return String(value || "").trim().toUpperCase();
+}
 
-  for (const pattern of patterns) {
-    const match = errorMessage.match(pattern);
+function badgeClass(value: string | null | undefined) {
+  const status = normalize(value);
 
-    if (match?.[1] && Object.prototype.hasOwnProperty.call(payload, match[1])) {
-      const next = { ...payload };
-      delete next[match[1]];
-      return next;
-    }
+  if (status === "APPROVED") {
+    return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
   }
 
-  return null;
+  if (status === "REJECTED") {
+    return "border-red-400/30 bg-red-500/20 text-red-200";
+  }
+
+  return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function maskId(value: string | null | undefined) {
+  if (!value) return "N/A";
+  const clean = String(value).trim();
+  if (clean.length <= 4) return "****";
+  return `${"*".repeat(Math.max(clean.length - 4, 4))}${clean.slice(-4)}`;
 }
 
 export default function AdminKYCPage() {
@@ -82,7 +89,9 @@ export default function AdminKYCPage() {
 
     const { data: kycRows, error: kycError } = await supabase
       .from("kyc_records")
-      .select("*")
+      .select(
+        "id, profile_id, id_type, id_number, id_front_url, id_back_url, selfie_url, proof_of_address_url, source_of_funds, investment_experience, risk_acknowledged, status, review_notes, submitted_at, reviewed_at"
+      )
       .order("submitted_at", { ascending: false });
 
     if (kycError) {
@@ -93,12 +102,10 @@ export default function AdminKYCPage() {
       return;
     }
 
+    const rows = (kycRows || []) as KYCRecord[];
+
     const profileIds = Array.from(
-      new Set(
-        (kycRows || [])
-          .flatMap((item) => [item.profile_id, item.customer_id])
-          .filter(Boolean)
-      )
+      new Set(rows.map((item) => item.profile_id).filter(Boolean))
     ) as string[];
 
     let profileRows: ProfileRow[] = [];
@@ -106,7 +113,7 @@ export default function AdminKYCPage() {
     if (profileIds.length > 0) {
       const { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("id, full_name, email")
+        .select("id, full_name, email, kyc_status")
         .in("id", profileIds);
 
       if (profileError) {
@@ -117,156 +124,35 @@ export default function AdminKYCPage() {
     }
 
     const nextNotes: Record<string, string> = {};
-    (kycRows || []).forEach((record) => {
-      nextNotes[record.id] =
-        record.review_notes ||
-        record.admin_notes ||
-        record.rejection_reason ||
-        "";
+    rows.forEach((record) => {
+      nextNotes[record.id] = record.review_notes || "";
     });
 
-    setRecords((kycRows || []) as KYCRecord[]);
+    setRecords(rows);
     setProfiles(profileRows);
     setNotes(nextNotes);
     setLoading(false);
   }
 
   const pendingRecords = useMemo(() => {
-    return records.filter(
-      (record) => String(record.status || "PENDING").toUpperCase() === "PENDING"
-    );
+    return records.filter((record) => normalize(record.status || "PENDING") === "PENDING");
   }, [records]);
 
   const historyRecords = useMemo(() => {
     return records.filter((record) =>
-      ["APPROVED", "REJECTED"].includes(
-        String(record.status || "").toUpperCase()
-      )
+      ["APPROVED", "REJECTED"].includes(normalize(record.status))
     );
   }, [records]);
 
-  const approvedCount = records.filter(
-    (record) => String(record.status || "").toUpperCase() === "APPROVED"
-  ).length;
+  const approvedCount = records.filter((record) => normalize(record.status) === "APPROVED").length;
+  const rejectedCount = records.filter((record) => normalize(record.status) === "REJECTED").length;
 
-  const rejectedCount = records.filter(
-    (record) => String(record.status || "").toUpperCase() === "REJECTED"
-  ).length;
-
-  function getProfile(record: KYCRecord) {
-    return (
-      profiles.find((profile) => profile.id === record.profile_id) ||
-      profiles.find((profile) => profile.id === record.customer_id) ||
-      null
-    );
+  function getProfile(profileId: string | null | undefined) {
+    return profiles.find((profile) => profile.id === profileId) || null;
   }
 
-  function getTargetProfileId(record: KYCRecord) {
-    return record.profile_id || record.customer_id || "";
-  }
-
-  function getCustomerName(record: KYCRecord) {
-    const profile = getProfile(record);
-    return record.full_name || profile?.full_name || "Unknown Customer";
-  }
-
-  function getCustomerEmail(record: KYCRecord) {
-    const profile = getProfile(record);
-    return record.email || profile?.email || "No email";
-  }
-
-  function formatDate(value: string | null | undefined) {
-    if (!value) return "—";
-
-    return new Date(value).toLocaleString("en-PH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
-
-  function badgeClass(value: string | null | undefined) {
-    const status = String(value || "PENDING").toUpperCase();
-
-    if (status === "APPROVED") {
-      return "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
-    }
-
-    if (status === "REJECTED") {
-      return "border-red-400/30 bg-red-500/20 text-red-200";
-    }
-
-    return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
-  }
-
-  async function updateKYCRecordSafe(
-    recordId: string,
-    payload: Record<string, any>
-  ) {
-    let currentPayload = { ...payload };
-
-    for (let attempt = 0; attempt < 25; attempt++) {
-      const { error } = await supabase
-        .from("kyc_records")
-        .update(currentPayload)
-        .eq("id", recordId);
-
-      if (!error) return;
-
-      const nextPayload = removeBadColumnFromPayload(
-        currentPayload,
-        error.message
-      );
-
-      if (!nextPayload) {
-        throw new Error(error.message);
-      }
-
-      currentPayload = nextPayload;
-    }
-
-    throw new Error("Unable to update KYC record after schema-safe retries.");
-  }
-
-  async function updateProfileStatusSafe(
-    profileId: string,
-    nextStatus: "APPROVED" | "REJECTED",
-    reviewedAt: string
-  ) {
-    let payload: Record<string, any> = {
-      kyc_status: nextStatus,
-      updated_at: reviewedAt,
-    };
-
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const { error } = await supabase
-        .from("profiles")
-        .update(payload)
-        .eq("id", profileId);
-
-      if (!error) return;
-
-      const nextPayload = removeBadColumnFromPayload(payload, error.message);
-
-      if (!nextPayload) {
-        throw new Error(error.message);
-      }
-
-      payload = nextPayload;
-    }
-
-    throw new Error("Unable to update profile KYC status.");
-  }
-
-  async function reviewKYC(
-    record: KYCRecord,
-    nextStatus: "APPROVED" | "REJECTED"
-  ) {
-    const profileId = getTargetProfileId(record);
-
-    if (!record.id || !profileId) {
+  async function reviewKYC(record: KYCRecord, nextStatus: "APPROVED" | "REJECTED") {
+    if (!record.id || !record.profile_id) {
       setMessage("Missing KYC record ID or profile ID.");
       return;
     }
@@ -296,36 +182,38 @@ export default function AdminKYCPage() {
         ? "KYC approved by admin."
         : "KYC rejected by admin.");
 
-    try {
-      if (nextStatus === "APPROVED") {
-        await updateKYCRecordSafe(record.id, {
-          status: "APPROVED",
-          review_notes: finalNote,
-          admin_notes: finalNote,
-          reviewed_at: reviewedAt,
-          updated_at: reviewedAt,
-        });
-      } else {
-        await updateKYCRecordSafe(record.id, {
-          status: "REJECTED",
-          review_notes: finalNote,
-          admin_notes: finalNote,
-          rejection_reason: finalNote,
-          reviewed_at: reviewedAt,
-          updated_at: reviewedAt,
-        });
-      }
+    const { error: kycError } = await supabase
+      .from("kyc_records")
+      .update({
+        status: nextStatus,
+        review_notes: finalNote,
+        reviewed_at: reviewedAt,
+      })
+      .eq("id", record.id);
 
-      await updateProfileStatusSafe(profileId, nextStatus, reviewedAt);
-
-      setMessage(`KYC ${nextStatus}. Moved to KYC History.`);
+    if (kycError) {
+      setMessage(kycError.message);
       setWorkingId("");
-      await loadKYC();
-      setTab("PENDING");
-    } catch (error: any) {
-      setMessage(error?.message || `Failed to ${nextStatus.toLowerCase()} KYC.`);
-      setWorkingId("");
+      return;
     }
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({
+        kyc_status: nextStatus,
+      })
+      .eq("id", record.profile_id);
+
+    if (profileError) {
+      setMessage(profileError.message);
+      setWorkingId("");
+      return;
+    }
+
+    setMessage(`KYC ${nextStatus}. Record moved to KYC History.`);
+    setWorkingId("");
+    await loadKYC();
+    setTab("PENDING");
   }
 
   const activeRecords = tab === "PENDING" ? pendingRecords : historyRecords;
@@ -344,8 +232,8 @@ export default function AdminKYCPage() {
             </h1>
 
             <p className="mt-2 text-white/70">
-              Review pending investor verification. Approved and rejected
-              records are moved to KYC History.
+              Review customer KYC submissions from kyc_records. Approved and rejected
+              records are retained in KYC History.
             </p>
           </div>
 
@@ -410,9 +298,9 @@ export default function AdminKYCPage() {
         ) : (
           <section className="space-y-5">
             {activeRecords.map((record) => {
-              const status = String(record.status || "PENDING").toUpperCase();
+              const profile = getProfile(record.profile_id);
+              const status = normalize(record.status || "PENDING");
               const isPending = status === "PENDING";
-              const targetProfileId = getTargetProfileId(record);
 
               return (
                 <div
@@ -423,7 +311,7 @@ export default function AdminKYCPage() {
                     <div className="space-y-3">
                       <div className="flex flex-wrap items-center gap-3">
                         <h2 className="text-2xl font-bold text-[#ffe49a]">
-                          {getCustomerName(record)}
+                          {profile?.full_name || "Unknown Customer"}
                         </h2>
 
                         <span
@@ -438,90 +326,77 @@ export default function AdminKYCPage() {
                       <div className="text-sm text-white/65">
                         <p>
                           Email:{" "}
-                          <b className="text-white">{getCustomerEmail(record)}</b>
+                          <b className="text-white">
+                            {profile?.email || "No email"}
+                          </b>
                         </p>
+
                         <p>
                           Profile ID:{" "}
                           <b className="text-white">
-                            {targetProfileId || "Missing profile/customer id"}
+                            {record.profile_id || "Missing profile id"}
                           </b>
                         </p>
+
                         <p>
                           ID Type:{" "}
-                          <b className="text-white">
-                            {record.id_type || "N/A"}
-                          </b>
+                          <b className="text-white">{record.id_type || "N/A"}</b>
                         </p>
+
                         <p>
                           ID Number:{" "}
-                          <b className="text-white">
-                            {record.id_number || "N/A"}
-                          </b>
+                          <b className="text-white">{maskId(record.id_number)}</b>
                         </p>
+
                         <p>
                           Source of Funds:{" "}
                           <b className="text-white">
                             {record.source_of_funds || "N/A"}
                           </b>
                         </p>
+
                         <p>
                           Investment Experience:{" "}
                           <b className="text-white">
                             {record.investment_experience || "N/A"}
                           </b>
                         </p>
+
                         <p>
                           Risk Acknowledged:{" "}
                           <b className="text-white">
                             {record.risk_acknowledged ? "Yes" : "No"}
                           </b>
                         </p>
+
                         <p>
                           Submitted:{" "}
                           <b className="text-white">
-                            {formatDate(
-                              record.submitted_at ||
-                                record.created_at ||
-                                record.updated_at
-                            )}
+                            {formatDate(record.submitted_at)}
                           </b>
                         </p>
 
                         {!isPending && (
-                          <p>
-                            Reviewed:{" "}
-                            <b className="text-white">
-                              {formatDate(record.reviewed_at)}
-                            </b>
-                          </p>
-                        )}
+                          <>
+                            <p>
+                              Reviewed:{" "}
+                              <b className="text-white">
+                                {formatDate(record.reviewed_at)}
+                              </b>
+                            </p>
 
-                        {!isPending && (
-                          <p>
-                            Admin Notes:{" "}
-                            <b className="text-white">
-                              {record.admin_notes ||
-                                record.rejection_reason ||
-                                record.review_notes ||
-                                "N/A"}
-                            </b>
-                          </p>
-                        )}
-
-                        {record.notes && (
-                          <p>
-                            Customer Notes:{" "}
-                            <b className="text-white">{record.notes}</b>
-                          </p>
+                            <p>
+                              Admin Notes:{" "}
+                              <b className="text-white">
+                                {record.review_notes || "N/A"}
+                              </b>
+                            </p>
+                          </>
                         )}
                       </div>
                     </div>
 
                     <div className="grid gap-2 text-sm md:grid-cols-2 lg:w-[520px]">
-                      <DocLink
-                        label="Main ID Document"
-                        url={record.document_url || record.id_document_url || null}
-                      />
                       <DocLink label="ID Front" url={record.id_front_url} />
                       <DocLink label="ID Back" url={record.id_back_url} />
                       <DocLink label="Selfie" url={record.selfie_url} />
