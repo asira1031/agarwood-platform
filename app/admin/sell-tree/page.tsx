@@ -416,219 +416,30 @@ export default function AdminSellTreePage() {
   async function queuePayout(item: any) {
     setMessage("");
 
-    const request = item.request;
-    const requestId = String(request.id);
-    const profileId = request.profile_id;
-    const netReceive = Number(request.net_receive || 0);
-    const platformFee = Number(request.platform_fee || 0);
-    const payoutMethod = String(request.payout_method || "").trim();
-    const payoutAccountName = String(request.payout_account_name || "").trim();
-    const payoutAccountNumber = String(request.payout_account_number || "").trim();
-
-    if (normalizeStatus(request.status) !== "CUSTOMER_ACCEPTED") {
+    if (normalizeStatus(item.request.status) !== "CUSTOMER_ACCEPTED") {
       setMessage("Customer must accept offer before payout queue.");
       return;
     }
 
-    if (!profileId) {
-      setMessage("Missing customer profile.");
-      return;
-    }
-
-    if (!netReceive || netReceive <= 0) {
-      setMessage("Net receive amount missing.");
-      return;
-    }
-
-    if (!platformFee || platformFee <= 0) {
-      setMessage("Platform fee missing. Cannot queue payout without SELL_TREE_FEE treasury entry.");
-      return;
-    }
-
-    if (request.withdrawal_request_id) {
-      setMessage("Payout already queued.");
-      return;
-    }
-
-    if (request.platform_treasury_id) {
-      setMessage("Platform fee already posted for this sell request.");
-      return;
-    }
-
-    if (!payoutMethod || !payoutAccountName || !payoutAccountNumber) {
-      setMessage("Customer payout details are missing. Customer must accept offer with payout details first.");
-      return;
-    }
-
-    setProcessingId(requestId);
-
-    const { data: freshRequest, error: freshError } = await supabase
-      .from("sell_tree_requests")
-      .select(
-        "id, profile_id, net_receive, platform_fee, payout_method, payout_account_name, payout_account_number, withdrawal_request_id, platform_treasury_id, status"
-      )
-      .eq("id", requestId)
-      .maybeSingle();
-
-    if (freshError || !freshRequest) {
-      setMessage(freshError?.message || "Sell tree request not found.");
-      setProcessingId("");
-      return;
-    }
-
-    if (freshRequest.withdrawal_request_id) {
-      setMessage("Payout already queued.");
-      setProcessingId("");
-      return;
-    }
-
-    if (freshRequest.platform_treasury_id) {
-      setMessage("Platform fee already posted for this sell request.");
-      setProcessingId("");
-      return;
-    }
-
-    if (normalizeStatus(freshRequest.status) !== "CUSTOMER_ACCEPTED") {
-      setMessage("Request status changed. Refresh and try again.");
-      setProcessingId("");
-      return;
-    }
-
-    const { data: existingWithdrawal, error: duplicateError } = await supabase
-      .from("withdrawal_requests")
-      .select("id, status, net_receive, amount")
-      .eq("profile_id", profileId)
-      .eq("net_receive", netReceive)
-      .in("status", ["PENDING", "PROCESSING", "PAID"])
-      .maybeSingle();
-
-    if (duplicateError) {
-      setMessage(duplicateError.message);
-      setProcessingId("");
-      return;
-    }
-
-    if (existingWithdrawal) {
-      setMessage("Duplicate payout prevented. Existing withdrawal found for same customer and net receive.");
-      setProcessingId("");
-      return;
-    }
-
     const confirmed = window.confirm(
-      `Queue payout of ${peso(netReceive)} and post platform fee ${peso(platformFee)}?`
+      `Queue payout of ${peso(item.request.net_receive)}?`
     );
 
-    if (!confirmed) {
+    if (!confirmed) return;
+
+    setProcessingId(item.request.id);
+
+    const { error } = await supabase.rpc("queue_sell_tree_payout", {
+      p_sell_tree_request_id: item.request.id,
+    });
+
+    if (error) {
+      setMessage(error.message);
       setProcessingId("");
       return;
     }
 
-    const now = new Date().toISOString();
-    let createdWithdrawalId = "";
-    let createdTreasuryId = "";
-
-    const restorePayload = {
-      withdrawal_request_id: null,
-      platform_treasury_id: null,
-      payout_status: "NOT_QUEUED",
-      payout_queued_at: null,
-      status: "CUSTOMER_ACCEPTED",
-      updated_at: now,
-    };
-
-    const { data: createdWithdrawal, error: withdrawalError } = await supabase
-      .from("withdrawal_requests")
-      .insert({
-        profile_id: profileId,
-        amount: netReceive,
-        processing_fee: 0,
-        net_receive: netReceive,
-        status: "PENDING",
-        payout_method: payoutMethod,
-        payout_account_name: payoutAccountName,
-        payout_account_number: payoutAccountNumber,
-        created_at: now,
-      })
-      .select("id")
-      .single();
-
-    if (withdrawalError || !createdWithdrawal) {
-      setMessage(withdrawalError?.message || "Withdrawal request creation failed.");
-      setProcessingId("");
-      return;
-    }
-
-    createdWithdrawalId = createdWithdrawal.id;
-
-    const { data: createdTreasury, error: treasuryError } = await supabase
-      .from("platform_treasury")
-      .insert({
-        source_type: "SELL_TREE_FEE",
-        source_id: requestId,
-        customer_profile_id: profileId,
-        profile_id: profileId,
-        amount: platformFee,
-        reference_no: requestId,
-        description: "Platform fee from Sell Tree",
-        status: "POSTED",
-        created_at: now,
-      })
-      .select("id")
-      .single();
-
-    if (treasuryError || !createdTreasury) {
-      await supabase.from("withdrawal_requests").delete().eq("id", createdWithdrawalId);
-
-      await supabase
-        .from("sell_tree_requests")
-        .update(restorePayload)
-        .eq("id", requestId);
-
-      setMessage(
-        `Treasury posting failed. Withdrawal rollback applied: ${
-          treasuryError?.message || "No treasury id returned."
-        }`
-      );
-      setProcessingId("");
-      return;
-    }
-
-    createdTreasuryId = createdTreasury.id;
-
-    const { error: updateError } = await supabase
-      .from("sell_tree_requests")
-      .update({
-        withdrawal_request_id: createdWithdrawalId,
-        platform_treasury_id: createdTreasuryId,
-        payout_status: "QUEUED",
-        payout_queued_at: now,
-        status: "PAYOUT_QUEUED",
-        admin_notes:
-          adminNotes[requestId] ||
-          request.admin_notes ||
-          "Customer accepted. Payout queued by Admin.",
-        updated_at: now,
-      })
-      .eq("id", requestId)
-      .is("withdrawal_request_id", null)
-      .is("platform_treasury_id", null)
-      .eq("status", "CUSTOMER_ACCEPTED");
-
-    if (updateError) {
-      await supabase.from("platform_treasury").delete().eq("id", createdTreasuryId);
-      await supabase.from("withdrawal_requests").delete().eq("id", createdWithdrawalId);
-
-      await supabase
-        .from("sell_tree_requests")
-        .update(restorePayload)
-        .eq("id", requestId);
-
-      setMessage(`Sell Tree link update failed. Full rollback applied: ${updateError.message}`);
-      setProcessingId("");
-      return;
-    }
-
-    setMessage("Payout queued. Withdrawal and SELL_TREE_FEE treasury entry created.");
+    setMessage("Payout queued successfully.");
     setProcessingId("");
     await loadData();
     setTab("PAYOUT_QUEUED");
