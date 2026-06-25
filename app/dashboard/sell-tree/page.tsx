@@ -7,6 +7,8 @@ type Profile = {
   id: string;
   full_name: string | null;
   email: string | null;
+  membership_status: string | null;
+  kyc_status: string | null;
 };
 
 type TreeRow = Record<string, any>;
@@ -95,6 +97,9 @@ export default function CustomerSellTreePageV6() {
     return Math.max(previewValue - previewFee, 0);
   }, [previewValue, previewFee]);
 
+  const membershipActive = String(profile?.membership_status || "").toUpperCase() === "ACTIVE";
+  const kycApproved = String(profile?.kyc_status || "").toUpperCase() === "APPROVED";
+
   async function resolveProfile() {
     const { data: authData, error: authError } = await supabase.auth.getUser();
 
@@ -107,13 +112,13 @@ export default function CustomerSellTreePageV6() {
 
     const { data: profileById } = await supabase
       .from("profiles")
-      .select("id, full_name, email")
+      .select("id, full_name, email, membership_status, kyc_status")
       .eq("id", user.id)
       .maybeSingle();
 
     const { data: profileByEmail } = await supabase
       .from("profiles")
-      .select("id, full_name, email")
+      .select("id, full_name, email, membership_status, kyc_status")
       .eq("email", email)
       .maybeSingle();
 
@@ -192,6 +197,7 @@ export default function CustomerSellTreePageV6() {
 
   async function createSellRequest() {
     if (!profile) return alert("Profile not found.");
+    if (!membershipActive) return alert("Annual Membership Required. Please activate membership first.");
     if (!selectedTree) return alert("Please select a seedling to sell.");
 
     const existingActive = requests.find(
@@ -236,6 +242,10 @@ export default function CustomerSellTreePageV6() {
 
   async function acceptOffer(request: SellTreeRequest) {
     if (!profile) return alert("Profile not found.");
+
+    if (!kycApproved) {
+      return alert("KYC Verification Required. Cashout and sell tree payouts require approved KYC.");
+    }
 
     if (request.status !== "OFFER_SENT") {
       return alert("This offer is not available for acceptance.");
@@ -406,6 +416,18 @@ export default function CustomerSellTreePageV6() {
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
               <StepHeader step="1" title="CREATE SELL REQUEST" subtitle="Select your owned seedling." />
 
+              {!membershipActive && (
+                <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
+                  <p className="text-amber-300 font-bold">Annual Membership Required</p>
+                  <p className="mt-2 text-sm text-white/75">
+                    Only active members can request Sell Tree review. Membership keeps tree ownership, care history, and payout processing protected.
+                  </p>
+                  <a href="/dashboard/membership" className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black">
+                    Go to Membership
+                  </a>
+                </div>
+              )
+
               <div className="mt-6 space-y-4">
                 <label className="block">
                   <span className="text-sm font-semibold">Choose Seedling</span>
@@ -439,7 +461,7 @@ export default function CustomerSellTreePageV6() {
 
                 <button
                   onClick={createSellRequest}
-                  disabled={saving || !selectedTree}
+                  disabled={saving || !selectedTree || !membershipActive}
                   className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Create Sell Request"}
@@ -449,6 +471,16 @@ export default function CustomerSellTreePageV6() {
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
               <StepHeader step="2" title="PAYOUT DETAILS" subtitle="Required when accepting offer." />
+
+              {!kycApproved && (
+                <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
+                  <p className="text-amber-300 font-bold">KYC Verification Required</p>
+                  <p className="mt-2 text-sm text-white/75">Cashout and sell tree payouts require approved KYC.</p>
+                  <a href="/dashboard/kyc" className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black">
+                    Go to KYC
+                  </a>
+                </div>
+              )
 
               <div className="mt-6 space-y-4">
                 <label className="block">
@@ -570,7 +602,7 @@ export default function CustomerSellTreePageV6() {
 
                           <button
                             onClick={() => acceptOffer(request)}
-                            disabled={saving}
+                            disabled={saving || !kycApproved}
                             className="rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-6 py-3 text-black font-bold hover:opacity-90 disabled:opacity-50"
                           >
                             Accept Offer

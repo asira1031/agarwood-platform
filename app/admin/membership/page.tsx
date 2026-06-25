@@ -83,6 +83,7 @@ function addOneYear(date: Date) {
 }
 
 export default function AdminMembershipPage() {
+  const [adminProfileId, setAdminProfileId] = useState("");
   const [orders, setOrders] = useState<MembershipOrder[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,9 +95,57 @@ export default function AdminMembershipPage() {
     loadData();
   }, []);
 
+
+  async function resolveAdminProfileId() {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user) {
+      window.location.href = "/login";
+      return "";
+    }
+
+    const email = user.email?.trim().toLowerCase() || "";
+
+    const { data: profileById } = await supabase
+      .from("profiles")
+      .select("id,email")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id,email")
+      .eq("email", email)
+      .maybeSingle();
+
+    const profileId = profileById?.id || profileByEmail?.id || user.id;
+
+    const { data: adminRow, error: adminError } = await supabase
+      .from("admins")
+      .select("id, admin_profile_id, email, status")
+      .or(`admin_profile_id.eq.${profileId},email.ilike.${email}`)
+      .eq("status", "ACTIVE")
+      .maybeSingle();
+
+    if (adminError) throw adminError;
+    if (!adminRow?.admin_profile_id) throw new Error("Active admin profile not found.");
+
+    return adminRow.admin_profile_id as string;
+  }
+
   async function loadData() {
     setLoading(true);
     setErrorText("");
+
+    try {
+      const resolvedAdminProfileId = await resolveAdminProfileId();
+      setAdminProfileId(resolvedAdminProfileId);
+    } catch (error: any) {
+      setErrorText(error?.message || "Admin validation failed.");
+    }
 
     const { data: orderRows, error: orderError } = await supabase
       .from("membership_orders")
@@ -226,28 +275,24 @@ export default function AdminMembershipPage() {
       return;
     }
 
-    const confirmed = window.confirm("Approve this membership order and activate customer membership?");
+    if (!adminProfileId) {
+      setErrorText("Active admin profile not loaded.");
+      return;
+    }
+
+    const confirmed = window.confirm("Approve this membership order through the audited RPC?");
     if (!confirmed) return;
 
     setActionLoading(order.id);
     setErrorText("");
 
     try {
-      const approvedAt = new Date().toISOString();
-
-      await updateSafe("membership_orders", order.id, {
-        status: "APPROVED",
-        payment_status: "PAID",
-        approved_at: approvedAt,
-        updated_at: approvedAt,
+      const { error } = await supabase.rpc("approve_membership_order", {
+        p_order_id: order.id,
+        p_admin_profile_id: adminProfileId,
       });
 
-      await updateSafe("profiles", order.profile_id, {
-        membership_status: "ACTIVE",
-        updated_at: approvedAt,
-      });
-
-      await createMembershipAndTreasury(order);
+      if (error) throw error;
 
       await loadData();
     } catch (error: any) {
@@ -293,7 +338,7 @@ export default function AdminMembershipPage() {
               Membership Approval
             </h1>
             <p className="mt-2 text-white/70">
-              Review membership orders, activate memberships, and sync platform treasury.
+              Review membership orders. Approval uses the audited approve_membership_order RPC only.
             </p>
           </div>
 
@@ -315,7 +360,7 @@ export default function AdminMembershipPage() {
           <StatCard label="Pending Orders" value={String(pendingCount)} />
           <StatCard label="Approved Orders" value={String(approvedCount)} />
           <StatCard label="Rejected Orders" value={String(rejectedCount)} />
-          <StatCard label="Total Order Value" value={formatMoney(totalAmount)} />
+          <StatCard label="Revenue" value={formatMoney(totalAmount)} />
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">

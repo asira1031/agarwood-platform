@@ -246,7 +246,7 @@ export default function WalletPage() {
   const walletBalance = Number(wallet?.balance || 0);
   const membershipActive = profile?.membership_status === "ACTIVE";
   const kycApproved = profile?.kyc_status === "APPROVED";
-  const canWithdraw = membershipActive && kycApproved;
+  const canWithdraw = kycApproved;
 
   const withdrawNumber = Number(withdrawAmount || 0);
   const withdrawFee = withdrawNumber * 0.02;
@@ -376,7 +376,7 @@ export default function WalletPage() {
       if (!wallet) return setMessage("Wallet not found.");
 
       if (!canWithdraw) {
-        return setMessage("Withdrawal locked. Membership must be ACTIVE and KYC must be APPROVED.");
+        return setMessage("Withdrawal locked. KYC must be APPROVED.");
       }
 
       if (!withdrawNumber || withdrawNumber < 100) {
@@ -430,7 +430,7 @@ export default function WalletPage() {
           <p className="eyebrow">Agarwood Wallet Command Center</p>
           <h1>Wallet</h1>
           <span>
-            Manage cash-ins, withdrawals, wallet history, membership payments, and settlement approvals in one premium finance center.
+            Manage cash-ins, withdrawals, wallet history, membership payments, and settlement approvals in one premium finance center. Cash-in is always available; KYC is required only for withdrawals.
           </span>
         </div>
       </section>
@@ -687,7 +687,7 @@ export default function WalletPage() {
 
                       {!canWithdraw && (
                         <small className="lockText">
-                          Withdrawal locked. Complete KYC and keep membership ACTIVE.
+                          Withdrawal locked. Complete KYC verification first.
                         </small>
                       )}
                     </>

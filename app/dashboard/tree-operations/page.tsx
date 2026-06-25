@@ -11,6 +11,7 @@ type Profile = {
   full_name: string | null;
   display_name?: string | null;
   email: string | null;
+  membership_status: string | null;
 };
 
 type Wallet = {
@@ -333,7 +334,7 @@ export default function TreeOperationsPage() {
 
     const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
-      .select("id, full_name, display_name, email")
+      .select("id, full_name, display_name, email, membership_status")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -341,7 +342,7 @@ export default function TreeOperationsPage() {
 
     const { data: profileByEmail, error: profileByEmailError } = await supabase
       .from("profiles")
-      .select("id, full_name, display_name, email")
+      .select("id, full_name, display_name, email, membership_status")
       .eq("email", normalizedEmail)
       .maybeSingle();
 
@@ -551,6 +552,7 @@ export default function TreeOperationsPage() {
         Number(operation.requiredQty || 1));
 
   const walletBalance = Number(wallet?.balance || 0);
+  const membershipActive = normalize(profile?.membership_status) === "ACTIVE";
   const baseOperationFee = Number(operation?.price || 0);
   const platformFeePreview =
     operation?.category === "Care Program" ? 0 : baseOperationFee * 0.02;
@@ -1221,6 +1223,35 @@ export default function TreeOperationsPage() {
             </section>
           </section>
 
+          {!membershipActive ? (
+            <section className="checkout panel">
+              <div className="checkoutHead">
+                <div>
+                  <p className="eyebrow">Membership Locked</p>
+                  <h2>Annual Membership Required</h2>
+                  <span>
+                    Tree Operations are available only to active Arganwood members. Activate your annual membership to request maintenance, photo, GPS, and health services for your trees.
+                  </span>
+                </div>
+
+                <div className="checkoutTarget">
+                  <small>Status</small>
+                  <b>{profile?.membership_status || "INACTIVE"}</b>
+                </div>
+              </div>
+
+              <div className="careSyncBox">
+                <strong>Unlock Operational Services</strong>
+                <p>
+                  Membership unlocks Tree Operations, forestry maintenance, photo updates, GPS verification, health reports, valuation support, and Sell Tree access.
+                </p>
+              </div>
+
+              <Link className="buyMissing" href="/dashboard/membership">
+                Go to Membership
+              </Link>
+            </section>
+          ) : (
           <section className="checkout panel">
             <div className="checkoutHead">
               <div>
@@ -1379,6 +1410,8 @@ export default function TreeOperationsPage() {
                 : "Run Auto Renew Check"}
             </button>
           </section>
+
+          )}
 
           <section className="history panel">
             <PanelHead

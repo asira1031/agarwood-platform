@@ -90,49 +90,23 @@ function makeReference(prefix: string) {
 
 const PLAN_BENEFITS: Record<string, string[]> = {
   BASIC: [
-    "Buy Trees",
-    "Marketplace Access",
-    "Wallet Access",
-    "Tree Ownership Certificate",
-    "Photo Updates",
-    "GPS Verification Request",
-    "Standard Support",
+    "Unlock Tree Operations",
+    "Unlock Sell Tree Requests",
+    "Access forestry maintenance services",
+    "Request photo, GPS, and health updates",
+    "Request valuation support",
+    "Keep trees eligible for sale review",
   ],
-  PREMIUM: [
-    "Everything in Basic",
-    "Priority Tree Operations",
-    "Priority Photo/GPS Updates",
-    "Portfolio Analytics",
-    "Forest Performance Reports",
-    "Sell Tree Priority Review",
-    "Priority Support",
-  ],
-  LEGACY: [
-    "Everything in Premium",
-    "VIP Investor Status",
-    "Dedicated Account Support",
-    "Fast-Track Withdrawals",
-    "Fast-Track Sell Tree Requests",
-    "Fast-Track Valuation Requests",
-    "Highest Priority Queue",
-    "Early Access Features",
-    "VIP Badge",
-  ],
+  PREMIUM: [],
+  LEGACY: [],
 };
 
 function getPlanTier(plan: MembershipPlan) {
-  const name = normalize(plan.name);
-  const fee = Number(plan.annual_fee || 0);
-
-  if (name.includes("LEGACY") || fee >= 9999) return "LEGACY";
-  if (name.includes("PREMIUM") || fee >= 4999) return "PREMIUM";
   return "BASIC";
 }
 
 function getPlanPosition(tier: string) {
-  if (tier === "LEGACY") return "Highest Priority";
-  if (tier === "PREMIUM") return "Best for active growers";
-  return "Starter ownership access";
+  return "Annual operations access";
 }
 
 export default function MembershipPage() {
@@ -277,94 +251,33 @@ export default function MembershipPage() {
     return orders.find((order) => normalize(order.status) === "PENDING");
   }, [orders]);
 
-  async function insertMembershipWalletTransaction(orderId: string, plan: MembershipPlan, amount: number) {
-    if (!profile) throw new Error("Profile not loaded.");
-
-    const referenceNo = makeReference("MEMBERSHIP");
-
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: profile.id,
-      transaction_type: "MEMBERSHIP_PAYMENT",
-      amount: -Math.abs(amount),
-      reference_no: referenceNo,
-      description: `Forest Membership payment: ${plan.name || "Membership Plan"} / Order ${orderId}`,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
   async function payMembership(plan: MembershipPlan) {
     setMessage("");
 
     if (!profile) return setMessage("Profile not loaded.");
     if (!wallet) return setMessage("Wallet not found. Please cash in first.");
-    if (activeMembership) return setMessage("Your Forest Membership is already active.");
+    if (activeMembership) return setMessage("Your Arganwood Annual Membership is already active.");
     if (pendingOrder) return setMessage("You already have a pending membership order waiting for admin approval.");
 
-    const annualFee = Number(plan.annual_fee || 0);
-
-    if (annualFee <= 0) return setMessage("Invalid membership annual fee.");
-    if (walletBalance < annualFee) return setMessage("Insufficient wallet balance. Please add funds first.");
+    const annualFee = Number(plan.annual_fee || 999);
+    if (walletBalance < annualFee) return setMessage("Insufficient wallet balance. Please cash in first.");
 
     setProcessing(true);
 
-    const previousBalance = walletBalance;
-    const newBalance = previousBalance - annualFee;
-
     try {
-      const { error: walletError } = await supabase
-        .from("wallets")
-        .update({
-          balance: newBalance,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", wallet.id)
-        .eq("profile_id", profile.id);
+      const { error } = await supabase.rpc("submit_membership_order", {
+        p_profile_id: profile.id,
+      });
 
-      if (walletError) throw walletError;
+      if (error) throw error;
 
-      const { data: orderData, error: orderError } = await supabase
-        .from("membership_orders")
-        .insert({
-          profile_id: profile.id,
-          plan_id: plan.id,
-          plan_name: plan.name || "Forest Membership",
-          annual_fee: annualFee,
-          amount: annualFee,
-          status: "PENDING",
-          payment_status: "PAID",
-          submitted_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-        })
-        .select("id")
-        .single();
-
-      if (orderError) {
-        await supabase.from("wallets").update({ balance: previousBalance }).eq("id", wallet.id);
-        throw orderError;
-      }
-
-      try {
-        await insertMembershipWalletTransaction(orderData.id, plan, annualFee);
-      } catch (txError) {
-        await supabase.from("wallets").update({ balance: previousBalance }).eq("id", wallet.id);
-        await supabase
-          .from("membership_orders")
-          .delete()
-          .eq("id", orderData.id)
-          .eq("profile_id", profile.id);
-        throw txError;
-      }
-
-      setMessage("Forest Membership payment submitted. Wallet deducted and order is waiting for admin approval.");
+      setMessage("Arganwood Annual Membership payment submitted. Admin approval will activate your membership.");
       await loadData();
     } catch (error: any) {
       setMessage(error?.message || "Membership payment failed.");
+    } finally {
+      setProcessing(false);
     }
-
-    setProcessing(false);
   }
 
   return (
@@ -372,10 +285,10 @@ export default function MembershipPage() {
       <div className="membershipContainer">
         <section className="hero">
           <div>
-            <p className="eyebrow">Customer Account</p>
-            <h1>Forest Membership</h1>
+            <p className="eyebrow">Customer Membership</p>
+            <h1>Arganwood Annual Membership</h1>
             <span>
-              Choose the access tier that matches your forestry ownership goals. Wallet payment creates a pending order for admin approval.
+              Arganwood Annual Membership unlocks Tree Operations and Sell Tree only. Wallet payment is processed by audited PostgreSQL RPC.
             </span>
           </div>
 
@@ -389,7 +302,7 @@ export default function MembershipPage() {
         {message && <div className="message">{message}</div>}
 
         {loading ? (
-          <div className="empty">Loading Forest Membership...</div>
+          <div className="empty">Loading Arganwood Annual Membership...</div>
         ) : (
           <>
             <section className="stats">
@@ -401,7 +314,7 @@ export default function MembershipPage() {
             {membership && (
               <section className="currentBox">
                 <p className="eyebrow">Current Membership</p>
-                <h2>{membership.plan_name || "Forest Membership"}</h2>
+                <h2>{membership.plan_name || "Arganwood Annual Membership"}</h2>
                 <span>
                   Status: {membership.status || "UNKNOWN"} • Start: {formatDate(membership.start_date)} • Expiry:{" "}
                   {formatDate(membership.expiry_date)}
@@ -435,10 +348,10 @@ export default function MembershipPage() {
                         <p className="eyebrow">Forest Plan</p>
                         <em>{getPlanPosition(tier)}</em>
                       </div>
-                      <h2>{plan.name || "Forest Membership"}</h2>
+                      <h2>{plan.name || "Arganwood Annual Membership"}</h2>
                       <strong>{peso(annualFee)}</strong>
-                      <small>Annual membership fee</small>
-                      <span>{plan.description || "Premium access to Arganwood customer services."}</span>
+                      <small>₱999 / Year</small>
+                      <span>{plan.description || "Annual access for Tree Operations and Sell Tree services."}</span>
 
                       <ul className="benefitList">
                         {benefits.map((benefit) => (
@@ -456,7 +369,7 @@ export default function MembershipPage() {
                           ? "Waiting Approval"
                           : processing
                           ? "Processing..."
-                          : "Pay From Wallet"}
+                          : "Activate Membership"}
                       </button>
                     </article>
                   );
@@ -478,7 +391,7 @@ export default function MembershipPage() {
                     {orders.map((order) => (
                       <div className="row" key={order.id}>
                         <div>
-                          <strong>{order.plan_name || "Forest Membership"}</strong>
+                          <strong>{order.plan_name || "Arganwood Annual Membership"}</strong>
                           <p>
                             {peso(Number(order.amount || order.annual_fee || 0))} • Submitted{" "}
                             {formatDate(order.submitted_at || order.created_at)}
