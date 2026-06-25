@@ -823,64 +823,6 @@ export default function MarketplacePage() {
     return getForestName(group);
   }
 
-  async function deductWallet(amount: number) {
-    if (!wallet) throw new Error("Wallet not found.");
-
-    const currentBalance = Number(wallet.balance || 0);
-    const newBalance = currentBalance - amount;
-
-    if (newBalance < 0) {
-      throw new Error("Insufficient wallet balance.");
-    }
-
-    const { error } = await supabase
-      .from("wallets")
-      .update({ balance: newBalance })
-      .eq("id", wallet.id)
-      .eq("profile_id", wallet.profile_id);
-
-    if (error) throw error;
-
-    setWallet({ ...wallet, balance: newBalance });
-
-    return currentBalance;
-  }
-
-  async function restoreWallet(previousBalance: number) {
-    if (!wallet) return;
-
-    await supabase
-      .from("wallets")
-      .update({ balance: previousBalance })
-      .eq("id", wallet.id)
-      .eq("profile_id", wallet.profile_id);
-
-    setWallet({ ...wallet, balance: previousBalance });
-  }
-
-  async function createMarketplaceWalletTransaction(product: MarketplaceProduct, amount: number, productType: ProductType) {
-    if (!profile) throw new Error("Profile not found.");
-
-    const referenceNo = `MKT-${productType}-${Date.now()}`;
-    const description = `Marketplace purchase: ${product.name || "Product"}`;
-
-    const payload = {
-      profile_id: profile.id,
-      transaction_type: `MARKETPLACE_${productType}`,
-      amount: -Math.abs(amount),
-      reference_no: referenceNo,
-      description,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from("wallet_transactions").insert(payload);
-
-    if (error) {
-      throw new Error(`Marketplace wallet transaction failed: ${error.message}`);
-    }
-  }
-
   async function addInventoryStock(product: MarketplaceProduct, quantity: number) {
     if (!profile) throw new Error("Profile not found.");
 
@@ -1023,7 +965,9 @@ export default function MarketplacePage() {
     const currentBalance = Number(wallet.balance || 0);
 
     if (category === "Tree Care Programs") {
-      return setMessage("Care Program activation belongs to Tree Operations so Admin and Gardener sync stay complete.");
+      return setMessage(
+        "Care Program activation belongs to Tree Operations so Admin and Gardener sync stay complete."
+      );
     }
 
     if (price <= 0) return setMessage("Invalid product price.");
@@ -1032,32 +976,36 @@ export default function MarketplacePage() {
 
     setPurchaseProcessing(true);
 
-    let previousBalance: number | null = null;
-
     try {
       if (isTreePurchase) {
         await buyTreesWithForest(product);
+
         setMessage(
-          `${product.name || "Tree"} purchased. ${getSelectedTreeQuantity(product)} tree(s) added to ${getSelectedForestLabel()}, wallet deducted, wallet transaction recorded, and platform fee ${peso(getSelectedPlatformFeeAmount(product))} posted.`
+          `${product.name || "Tree"} purchased. ${getSelectedTreeQuantity(
+            product
+          )} tree(s) added to ${getSelectedForestLabel()}, wallet deducted, wallet transaction recorded, and platform fee ${peso(
+            getSelectedPlatformFeeAmount(product)
+          )} posted.`
         );
       }
 
       if (isSupplyPurchase) {
-        previousBalance = await deductWallet(totalPrice);
-        await addInventoryStock(product, 1);
-        await createMarketplaceWalletTransaction(product, totalPrice, "SUPPLY");
+        const { error } = await supabase.rpc("purchase_marketplace_item", {
+          p_profile_id: profile.id,
+          p_product_id: product.id,
+          p_quantity: 1,
+        });
+
+        if (error) throw error;
+
         setMessage(
-          `${product.name || "Supply"} purchased. Wallet deducted, transaction recorded, and inventory stock added.`
+          `${product.name || "Supply"} purchased successfully. Wallet deducted, inventory added, wallet transaction recorded, and treasury posted.`
         );
       }
 
       closeModal();
       await loadMarketplace();
     } catch (error: any) {
-      if (previousBalance !== null) {
-        await restoreWallet(previousBalance);
-      }
-
       setMessage(error?.message || "Purchase failed. No stable purchase was completed.");
     } finally {
       setPurchaseProcessing(false);
