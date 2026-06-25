@@ -395,59 +395,16 @@ export default function WalletPage() {
         return setMessage("Payout account name and number are required.");
       }
 
-      const newBalance = walletBalance - withdrawNumber;
-
-      const { error: walletError } = await supabase
-        .from("wallets")
-        .update({ balance: newBalance })
-        .eq("id", wallet.id);
-
-      if (walletError) throw walletError;
-
-      const { data: withdrawalData, error: withdrawError } = await supabase
-        .from("withdrawal_requests")
-        .insert({
-          profile_id: profile.id,
-          amount: withdrawNumber,
-          processing_fee: withdrawFee,
-          net_receive: withdrawNet,
-          payout_method: payoutMethod,
-          payout_account_name: payoutName.trim(),
-          payout_account_number: payoutNumber.trim(),
-          status: "PENDING",
-        })
-        .select("id")
-        .single();
-
-      if (withdrawError) {
-        await supabase.from("wallets").update({ balance: walletBalance }).eq("id", wallet.id);
-        throw withdrawError;
-      }
-
-      const { error: txError } = await supabase.from("wallet_transactions").insert({
-        profile_id: profile.id,
-        transaction_type: "WITHDRAWAL",
-        amount: withdrawNumber,
-        status: "PENDING",
-        reference_no: withdrawalData?.id || null,
-        description: `Withdrawal request via ${payoutMethod}. Net receive ${peso(withdrawNet)}.`,
+      const { error } = await supabase.rpc("submit_customer_withdrawal", {
+        p_profile_id: profile.id,
+        p_amount: withdrawNumber,
+        p_payout_method: payoutMethod,
+        p_payout_account_name: payoutName.trim(),
+        p_payout_account_number: payoutNumber.trim(),
       });
 
-      if (txError) {
-        await supabase
-          .from("wallets")
-          .update({ balance: walletBalance })
-          .eq("id", wallet.id);
-
-        if (withdrawalData?.id) {
-          await supabase
-            .from("withdrawal_requests")
-            .delete()
-            .eq("id", withdrawalData.id)
-            .eq("profile_id", profile.id);
-        }
-
-        throw txError;
+      if (error) {
+        throw error;
       }
 
       setWithdrawAmount("");
@@ -455,8 +412,8 @@ export default function WalletPage() {
       setPayoutName("");
       setPayoutNumber("");
       setActiveAction("NONE");
-      setWallet((prev) => (prev ? { ...prev, balance: newBalance } : prev));
-      setMessage(`Withdrawal request submitted. Wallet balance decreased by ${peso(withdrawNumber)}.`);
+      setMessage("Withdrawal request submitted. Wallet balance deducted successfully.");
+
       await loadWallet();
     } catch (error: any) {
       console.error("Withdrawal error:", error);
