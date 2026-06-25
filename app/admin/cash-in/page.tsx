@@ -182,94 +182,8 @@ export default function AdminCashInPage() {
     0
   );
 
-  async function getFreshWallet(profileId: string) {
-    const { data, error } = await supabase
-      .from("wallets")
-      .select("id, profile_id, balance")
-      .eq("profile_id", profileId)
-      .maybeSingle();
-
-    if (error) throw error;
-    return data as WalletRow | null;
-  }
-
-  async function rollbackCashIn(params: {
-    requestId: string;
-    walletId: string;
-    oldBalance: number;
-  }) {
-    const { requestId, walletId, oldBalance } = params;
-
-    await supabase.from("wallets").update({ balance: oldBalance }).eq("id", walletId);
-
-    await supabase
-      .from("cashin_requests")
-      .update({ status: "PENDING" })
-      .eq("id", requestId);
-
-    await supabase
-      .from("wallet_transactions")
-      .delete()
-      .eq("reference_no", requestId)
-      .eq("transaction_type", "CASH_IN");
-  }
-
-  async function createWalletTransaction(request: CashInRequest, amount: number) {
-    if (!request.profile_id) throw new Error("Profile ID missing.");
-
-    await supabase
-      .from("wallet_transactions")
-      .delete()
-      .eq("reference_no", request.id)
-      .eq("transaction_type", "CASH_IN");
-
-    const { error } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "CASH_IN",
-      amount,
-      reference_no: request.id,
-      description: `Cash-in approved. Amount: ${peso(amount)}.`,
-      status: "COMPLETED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
-  async function insertTreasuryEntry(request: CashInRequest, amount: number) {
-    if (!request.id || !request.profile_id) {
-      throw new Error("Cash-in request profile missing.");
-    }
-
-    const { data: existing, error: existingError } = await supabase
-      .from("platform_treasury")
-      .select("id")
-      .eq("source_type", "CASH_IN")
-      .eq("source_id", request.id)
-      .limit(1);
-
-    if (existingError) throw existingError;
-    if ((existing || []).length > 0) return;
-
-    const { error } = await supabase.from("platform_treasury").insert({
-      source: "CASH_IN",
-      source_type: "CASH_IN",
-      source_id: request.id,
-      reference_id: request.id,
-      reference_no: request.reference_no || request.id,
-      customer_profile_id: request.profile_id,
-      profile_id: request.profile_id,
-      amount,
-      description: "Cash-in approved",
-      status: "POSTED",
-      created_at: new Date().toISOString(),
-    });
-
-    if (error) throw error;
-  }
-
   async function approveCashIn(request: CashInRequest) {
-    if (!request.id || !request.profile_id) return;
+    if (!request.id) return;
 
     if (normalize(request.status) !== "PENDING") {
       setMessage("Only PENDING cash-in requests can be approved.");
@@ -282,82 +196,19 @@ export default function AdminCashInPage() {
     setActionLoading(request.id);
     setMessage("");
 
-    let walletForRollback: WalletRow | null = null;
-
     try {
-      const amount = Math.abs(Number(request.amount || 0));
+      const { error } = await supabase.rpc("approve_cashin_request", {
+        p_cashin_request_id: request.id,
+        p_admin_notes: "Approved by Admin",
+      });
 
-      if (amount <= 0) {
-        throw new Error("Invalid cash-in amount.");
-      }
+      if (error) throw error;
 
-      const wallet = await getFreshWallet(request.profile_id);
-
-      if (!wallet?.id) {
-        throw new Error("Customer wallet not found.");
-      }
-
-      walletForRollback = wallet;
-      const oldBalance = Number(wallet.balance || 0);
-      const newBalance = oldBalance + amount;
-
-      const { data: updatedRequest, error: requestError } = await supabase
-        .from("cashin_requests")
-        .update({ status: "APPROVED" })
-        .eq("id", request.id)
-        .eq("status", "PENDING")
-        .select("id,status")
-        .maybeSingle();
-
-      if (requestError) throw requestError;
-
-      if (!updatedRequest || normalize(updatedRequest.status) !== "APPROVED") {
-        throw new Error("Cash-in request status was not updated.");
-      }
-
-      const { error: walletError } = await supabase
-        .from("wallets")
-        .update({ balance: newBalance })
-        .eq("id", wallet.id);
-
-      if (walletError) {
-        await rollbackCashIn({
-          requestId: request.id,
-          walletId: wallet.id,
-          oldBalance,
-        });
-        throw walletError;
-      }
-
-      try {
-        await createWalletTransaction(request, amount);
-        await insertTreasuryEntry(request, amount);
-      } catch (syncError: any) {
-        console.error("Cash-in approval sync failed:", syncError);
-
-        await rollbackCashIn({
-          requestId: request.id,
-          walletId: wallet.id,
-          oldBalance,
-        });
-
-        throw new Error(
-          `Cash-in approval failed and was rolled back: ${
-            syncError?.message || "Treasury or wallet transaction sync failed."
-          }`
-        );
-      }
-
-      setMessage("Cash-in approved. Wallet, wallet transaction, and platform treasury are synced.");
+      setMessage("Cash-in approved successfully via atomic RPC.");
       await loadData();
       setTab("APPROVED");
     } catch (error: any) {
-      if (walletForRollback?.id && request.id) {
-        console.error("Cash-in approve failed:", error);
-      }
-
       setMessage(error?.message || "Failed to approve cash-in.");
-      await loadData();
     }
 
     setActionLoading("");
@@ -409,9 +260,9 @@ export default function AdminCashInPage() {
           <p className="eyebrow">Admin Finance Center</p>
           <h1>Cash-In Queue</h1>
           <span>
-            Approve verified customer cash-ins. Approval must credit wallet,
-            create wallet transaction, and post platform treasury. If treasury
-            fails, approval is rolled back.
+            Approve verified customer cash-ins using the production atomic RPC.
+            Wallet credit, wallet transaction, and platform treasury posting are
+            handled server-side.
           </span>
         </div>
 
