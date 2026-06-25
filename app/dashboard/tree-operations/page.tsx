@@ -1223,48 +1223,49 @@ export default function TreeOperationsPage() {
             </section>
           </section>
 
-          {!membershipActive ? (
-            <section className="checkout panel">
-              <div className="checkoutHead">
-                <div>
-                  <p className="eyebrow">Membership Locked</p>
-                  <h2>Annual Membership Required</h2>
-                  <span>
-                    Tree Operations are available only to active Arganwood members. Activate your annual membership to request maintenance, photo, GPS, and health services for your trees.
-                  </span>
-                </div>
-
-                <div className="checkoutTarget">
-                  <small>Status</small>
-                  <b>{profile?.membership_status || "INACTIVE"}</b>
-                </div>
-              </div>
-
-              <div className="careSyncBox">
-                <strong>Unlock Operational Services</strong>
-                <p>
-                  Membership unlocks Tree Operations, forestry maintenance, photo updates, GPS verification, health reports, valuation support, and Sell Tree access.
-                </p>
-              </div>
-
-              <Link className="buyMissing" href="/dashboard/membership">
-                Go to Membership
-              </Link>
-            </section>
-          ) : (
           <section className="checkout panel">
-            <div className="checkoutHead">
-              <div>
-                <p className="eyebrow">Confirm Care Request</p>
-                <h2>{operation?.name || "Forest Care"}</h2>
-                <span>{operation?.description || "Operation preview."}</span>
-              </div>
+            {!membershipActive ? (
+              <>
+                <div className="checkoutHead">
+                  <div>
+                    <p className="eyebrow">Membership Locked</p>
+                    <h2>Annual Membership Required</h2>
+                    <span>
+                      Tree Operations are available only to active Arganwood members. Activate your annual membership to request maintenance, photo, GPS, and health services for your trees.
+                    </span>
+                  </div>
 
-              <div className="checkoutTarget">
-                <small>Target</small>
-                <b>{targetLabel}</b>
-              </div>
-            </div>
+                  <div className="checkoutTarget">
+                    <small>Status</small>
+                    <b>{profile?.membership_status || "INACTIVE"}</b>
+                  </div>
+                </div>
+
+                <div className="careSyncBox">
+                  <strong>Unlock Operational Services</strong>
+                  <p>
+                    Membership unlocks Tree Operations, forestry maintenance, photo updates, GPS verification, health reports, valuation support, and Sell Tree access.
+                  </p>
+                </div>
+
+                <Link className="buyMissing" href="/dashboard/membership">
+                  Go to Membership
+                </Link>
+              </>
+            ) : (
+              <>
+                <div className="checkoutHead">
+                  <div>
+                    <p className="eyebrow">Confirm Care Request</p>
+                    <h2>{operation?.name || "Forest Care"}</h2>
+                    <span>{operation?.description || "Operation preview."}</span>
+                  </div>
+
+                  <div className="checkoutTarget">
+                    <small>Target</small>
+                    <b>{targetLabel}</b>
+                  </div>
+                </div>
 
             {hasActiveSameRequest && (
               <div className="inventoryCheck ok">
@@ -1409,9 +1410,9 @@ export default function TreeOperationsPage() {
                 ? "Running Auto Renew..."
                 : "Run Auto Renew Check"}
             </button>
+              </>
+            )}
           </section>
-
-          )}
 
           <section className="history panel">
             <PanelHead

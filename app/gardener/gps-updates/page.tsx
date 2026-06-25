@@ -246,27 +246,32 @@ export default function GardenerGpsUpdatesPage() {
   }
 
   async function uploadEvidencePhoto(file: File, assignmentId: string) {
+    if (!caretaker) throw new Error("Caretaker profile not found.");
+    if (!profile) throw new Error("Profile not found.");
+
     const ext = file.name.split(".").pop() || "jpg";
-    const filePath = `gps/${assignmentId}/${Date.now()}.${ext}`;
+    const ownerProfileId =
+      caretaker.caretaker_profile_id || profile.id || caretaker.id;
 
-    let upload = await supabase.storage.from("tree-evidence").upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: true,
-    });
+    if (!ownerProfileId) {
+      throw new Error("Storage owner profile id not found.");
+    }
 
-    let bucket = "tree-evidence";
+    const filePath = `${ownerProfileId}/gps/${assignmentId}/${Date.now()}.${ext}`;
 
-    if (upload.error) {
-      upload = await supabase.storage.from("tree-photos").upload(filePath, file, {
+    const upload = await supabase.storage
+      .from("tree-evidence")
+      .upload(filePath, file, {
         cacheControl: "3600",
         upsert: true,
       });
-      bucket = "tree-photos";
-    }
 
     if (upload.error) throw upload.error;
 
-    const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
+    const { data } = supabase.storage
+      .from("tree-evidence")
+      .getPublicUrl(filePath);
+
     return data.publicUrl;
   }
 

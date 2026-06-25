@@ -101,6 +101,8 @@ export default function GardenerPhotoUpdatesPage() {
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [caretaker, setCaretaker] = useState<any>(null);
 
   const [tasks, setTasks] = useState<AssignedTask[]>([]);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
@@ -273,6 +275,8 @@ export default function GardenerPhotoUpdatesPage() {
       return;
     }
 
+    setProfile(profile);
+
     const { data: caretakerByProfile } = await supabase
       .from("caretakers")
       .select("*")
@@ -291,6 +295,8 @@ export default function GardenerPhotoUpdatesPage() {
       setLoading(false);
       return;
     }
+
+    setCaretaker(caretaker);
 
     const assignmentFilters = [
       `caretaker_id.eq.${caretaker.id}`,
@@ -423,26 +429,32 @@ export default function GardenerPhotoUpdatesPage() {
   }
 
   async function uploadWithFallback(file: File, folder: string) {
+    if (!caretaker) throw new Error("Caretaker profile not found.");
+    if (!profile) throw new Error("Profile not found.");
+
     const ext = file.name.split(".").pop() || "jpg";
-    const path = `${folder}/${crypto.randomUUID()}.${ext}`;
+    const ownerProfileId =
+      caretaker.caretaker_profile_id || profile.id || caretaker.id;
 
-    let bucket = "tree-evidence";
-    let upload = await supabase.storage.from(bucket).upload(path, file, {
-      cacheControl: "3600",
-      upsert: false,
-    });
+    if (!ownerProfileId) {
+      throw new Error("Storage owner profile id not found.");
+    }
 
-    if (upload.error) {
-      bucket = "tree-photos";
-      upload = await supabase.storage.from(bucket).upload(path, file, {
+    const path = `${ownerProfileId}/${folder}/${crypto.randomUUID()}.${ext}`;
+
+    const upload = await supabase.storage
+      .from("tree-evidence")
+      .upload(path, file, {
         cacheControl: "3600",
         upsert: false,
       });
-    }
 
     if (upload.error) throw upload.error;
 
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    const { data } = supabase.storage
+      .from("tree-evidence")
+      .getPublicUrl(path);
+
     return data.publicUrl;
   }
 

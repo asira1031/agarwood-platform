@@ -430,7 +430,7 @@ export default function WalletPage() {
           <p className="eyebrow">Agarwood Wallet Command Center</p>
           <h1>Wallet</h1>
           <span>
-            Manage cash-ins, withdrawals, wallet history, membership payments, and settlement approvals in one premium finance center. Cash-in is always available; KYC is required only for withdrawals.
+            Manage cash-ins, withdrawals, wallet history, membership payments, and settlement approvals in one premium finance center.
           </span>
         </div>
       </section>

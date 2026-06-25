@@ -118,6 +118,7 @@ function evidenceRules(service: string) {
 }
 
 export default function GardenerTasksPage() {
+  const [profile, setProfile] = useState<Row | null>(null);
   const [caretaker, setCaretaker] = useState<Row | null>(null);
   const [assignments, setAssignments] = useState<Row[]>([]);
   const [tasks, setTasks] = useState<Row[]>([]);
@@ -172,6 +173,7 @@ export default function GardenerTasksPage() {
       .maybeSingle();
 
     const profile = profileById || profileByEmail;
+    setProfile(profile || null);
 
     const { data: caretakerByProfile } = profile?.id
       ? await supabase
@@ -634,23 +636,28 @@ export default function GardenerTasksPage() {
 
   async function uploadEvidenceFile(file: File | null, folder: string) {
     if (!file || !selected) return null;
+    if (!caretaker) throw new Error("Caretaker profile not found.");
+    if (!profile) throw new Error("Profile not found.");
 
     const ext = file.name.split(".").pop() || "jpg";
-    const path = `${folder}/${selected.assignment.id}-${Date.now()}-${Math.random()
+    const ownerProfileId =
+      caretaker.caretaker_profile_id || profile.id || caretaker.id;
+
+    if (!ownerProfileId) {
+      throw new Error("Storage owner profile id not found.");
+    }
+
+    const path = `${ownerProfileId}/${folder}/${selected.assignment.id}-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
 
-    let bucket = "tree-evidence";
-    let upload = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
-
-    if (upload.error) {
-      bucket = "tree-photos";
-      upload = await supabase.storage.from(bucket).upload(path, file, { upsert: true });
-    }
+    const upload = await supabase.storage
+      .from("tree-evidence")
+      .upload(path, file, { upsert: true });
 
     if (upload.error) throw upload.error;
 
-    return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+    return supabase.storage.from("tree-evidence").getPublicUrl(path).data.publicUrl;
   }
 
   function validateSubmission() {

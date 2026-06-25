@@ -149,7 +149,10 @@ export default function GardenerConcernsPage() {
     if (!photoFile || !caretaker) return photoUrl.trim() || null;
 
     const safeName = photoFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-    const filePath = `concerns/${caretaker.id}/${Date.now()}-${safeName}`;
+    const ownerProfileId =
+      caretaker.caretaker_profile_id || profile?.id || caretaker.id;
+
+    const filePath = `${ownerProfileId}/concerns/${Date.now()}-${safeName}`;
 
     const evidenceUpload = await supabase.storage
       .from("tree-evidence")
@@ -160,24 +163,15 @@ export default function GardenerConcernsPage() {
       });
 
     if (!evidenceUpload.error) {
-      const { data } = supabase.storage.from("tree-evidence").getPublicUrl(filePath);
+      const { data } = supabase.storage
+        .from("tree-evidence")
+        .getPublicUrl(filePath);
+
       return data.publicUrl;
     }
 
-    console.warn("tree-evidence upload failed, trying tree-photos:", evidenceUpload.error.message);
-
-    const photoUpload = await supabase.storage
-      .from("tree-photos")
-      .upload(filePath, photoFile, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: photoFile.type || "image/jpeg",
-      });
-
-    if (photoUpload.error) throw photoUpload.error;
-
-    const { data } = supabase.storage.from("tree-photos").getPublicUrl(filePath);
-    return data.publicUrl;
+    console.warn("tree-evidence upload failed:", evidenceUpload.error.message);
+    throw evidenceUpload.error;
   }
 
   async function saveConcernReport() {

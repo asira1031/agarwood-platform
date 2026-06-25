@@ -57,7 +57,8 @@ const statusText: Record<string, string> = {
   INSPECTION_SUBMITTED: "Gardener submitted inspection evidence.",
   OFFER_SENT: "Admin sent you an offer. You can accept or wait.",
   CUSTOMER_ACCEPTED: "You accepted the offer. Admin will queue your payout.",
-  PAYOUT_QUEUED: "Admin queued your payout. Withdrawal is waiting for payout processing.",
+  PAYOUT_QUEUED:
+    "Admin queued your payout. Withdrawal is waiting for payout processing.",
   PAID: "Payout completed.",
   REJECTED: "Admin rejected the sell request.",
 };
@@ -97,8 +98,11 @@ export default function CustomerSellTreePageV6() {
     return Math.max(previewValue - previewFee, 0);
   }, [previewValue, previewFee]);
 
-  const membershipActive = String(profile?.membership_status || "").toUpperCase() === "ACTIVE";
-  const kycApproved = String(profile?.kyc_status || "").toUpperCase() === "APPROVED";
+  const membershipActive =
+    String(profile?.membership_status || "").toUpperCase() === "ACTIVE";
+
+  const kycApproved =
+    String(profile?.kyc_status || "").toUpperCase() === "APPROVED";
 
   async function resolveProfile() {
     const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -197,7 +201,13 @@ export default function CustomerSellTreePageV6() {
 
   async function createSellRequest() {
     if (!profile) return alert("Profile not found.");
-    if (!membershipActive) return alert("Annual Membership Required. Please activate membership first.");
+
+    if (!membershipActive) {
+      return alert(
+        "Annual Membership Required. Please activate membership first."
+      );
+    }
+
     if (!selectedTree) return alert("Please select a seedling to sell.");
 
     const existingActive = requests.find(
@@ -244,7 +254,9 @@ export default function CustomerSellTreePageV6() {
     if (!profile) return alert("Profile not found.");
 
     if (!kycApproved) {
-      return alert("KYC Verification Required. Cashout and sell tree payouts require approved KYC.");
+      return alert(
+        "KYC Verification Required. Cashout and sell tree payouts require approved KYC."
+      );
     }
 
     if (request.status !== "OFFER_SENT") {
@@ -252,8 +264,10 @@ export default function CustomerSellTreePageV6() {
     }
 
     if (!payoutMethod.trim()) return alert("Please select payout method.");
-    if (!payoutAccountName.trim()) return alert("Please enter payout account name.");
-    if (!payoutAccountNumber.trim()) return alert("Please enter payout account number.");
+    if (!payoutAccountName.trim())
+      return alert("Please enter payout account name.");
+    if (!payoutAccountNumber.trim())
+      return alert("Please enter payout account number.");
 
     const confirmed = window.confirm(
       "Accept this offer? Admin will queue the payout after review. No withdrawal will be created from customer side."
@@ -332,7 +346,8 @@ export default function CustomerSellTreePageV6() {
     if (request.withdrawal_request_id) {
       return (
         withdrawals.find(
-          (withdrawal) => String(withdrawal.id) === String(request.withdrawal_request_id)
+          (withdrawal) =>
+            String(withdrawal.id) === String(request.withdrawal_request_id)
         ) || null
       );
     }
@@ -350,12 +365,16 @@ export default function CustomerSellTreePageV6() {
   function statusBadge(status?: string | null) {
     const s = status || "PENDING";
 
-    if (s === "PAID") return "border-emerald-400/40 bg-emerald-500/15 text-emerald-300";
-    if (s === "REJECTED") return "border-red-400/40 bg-red-500/15 text-red-300";
-    if (s === "OFFER_SENT") return "border-amber-400/40 bg-amber-500/15 text-amber-300";
+    if (s === "PAID")
+      return "border-emerald-400/40 bg-emerald-500/15 text-emerald-300";
+    if (s === "REJECTED")
+      return "border-red-400/40 bg-red-500/15 text-red-300";
+    if (s === "OFFER_SENT")
+      return "border-amber-400/40 bg-amber-500/15 text-amber-300";
     if (s === "PAYOUT_QUEUED" || s === "CUSTOMER_ACCEPTED") {
       return "border-blue-400/40 bg-blue-500/15 text-blue-300";
     }
+
     return "border-white/15 bg-white/10 text-white/75";
   }
 
@@ -391,7 +410,8 @@ export default function CustomerSellTreePageV6() {
               Sell Tree Center V6
             </h1>
             <p className="mt-4 text-white/85 max-w-xl">
-              Create a sell request, wait for Admin offer, accept offer, then track payout queue.
+              Create a sell request, wait for Admin offer, accept offer, then
+              track payout queue.
             </p>
           </div>
         </section>
@@ -414,19 +434,30 @@ export default function CustomerSellTreePageV6() {
         <section className="mt-5 grid grid-cols-1 lg:grid-cols-[430px_1fr] gap-5">
           <div className="space-y-5">
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-              <StepHeader step="1" title="CREATE SELL REQUEST" subtitle="Select your owned seedling." />
+              <StepHeader
+                step="1"
+                title="CREATE SELL REQUEST"
+                subtitle="Select your owned seedling."
+              />
 
               {!membershipActive && (
                 <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
-                  <p className="text-amber-300 font-bold">Annual Membership Required</p>
-                  <p className="mt-2 text-sm text-white/75">
-                    Only active members can request Sell Tree review. Membership keeps tree ownership, care history, and payout processing protected.
+                  <p className="text-amber-300 font-bold">
+                    Annual Membership Required
                   </p>
-                  <a href="/dashboard/membership" className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black">
+                  <p className="mt-2 text-sm text-white/75">
+                    Only active members can request Sell Tree review. Membership
+                    keeps tree ownership, care history, and payout processing
+                    protected.
+                  </p>
+                  <a
+                    href="/dashboard/membership"
+                    className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black"
+                  >
                     Go to Membership
                   </a>
                 </div>
-              )
+              )}
 
               <div className="mt-6 space-y-4">
                 <label className="block">
@@ -447,11 +478,23 @@ export default function CustomerSellTreePageV6() {
 
                 {selectedTree ? (
                   <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5 space-y-3">
-                    <InfoRow label="Forest Name" value={getForestName(selectedTree)} />
-                    <InfoRow label="Seedling Name" value={getSeedlingName(selectedTree)} />
-                    <InfoRow label="Estimated Value" value={money(previewValue)} />
+                    <InfoRow
+                      label="Forest Name"
+                      value={getForestName(selectedTree)}
+                    />
+                    <InfoRow
+                      label="Seedling Name"
+                      value={getSeedlingName(selectedTree)}
+                    />
+                    <InfoRow
+                      label="Estimated Value"
+                      value={money(previewValue)}
+                    />
                     <InfoRow label="Preview Fee" value={money(previewFee)} />
-                    <InfoRow label="Preview Net Receive" value={money(previewNet)} />
+                    <InfoRow
+                      label="Preview Net Receive"
+                      value={money(previewNet)}
+                    />
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-white/60">
@@ -470,17 +513,28 @@ export default function CustomerSellTreePageV6() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-              <StepHeader step="2" title="PAYOUT DETAILS" subtitle="Required when accepting offer." />
+              <StepHeader
+                step="2"
+                title="PAYOUT DETAILS"
+                subtitle="Required when accepting offer."
+              />
 
               {!kycApproved && (
                 <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
-                  <p className="text-amber-300 font-bold">KYC Verification Required</p>
-                  <p className="mt-2 text-sm text-white/75">Cashout and sell tree payouts require approved KYC.</p>
-                  <a href="/dashboard/kyc" className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black">
+                  <p className="text-amber-300 font-bold">
+                    KYC Verification Required
+                  </p>
+                  <p className="mt-2 text-sm text-white/75">
+                    Cashout and sell tree payouts require approved KYC.
+                  </p>
+                  <a
+                    href="/dashboard/kyc"
+                    className="mt-4 inline-flex rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 px-5 py-3 text-sm font-bold text-black"
+                  >
                     Go to KYC
                   </a>
                 </div>
-              )
+              )}
 
               <div className="mt-6 space-y-4">
                 <label className="block">
@@ -521,7 +575,11 @@ export default function CustomerSellTreePageV6() {
           </div>
 
           <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-            <StepHeader step="3" title="SELL REQUEST HISTORY" subtitle="View Admin offer and payout status." />
+            <StepHeader
+              step="3"
+              title="SELL REQUEST HISTORY"
+              subtitle="View Admin offer and payout status."
+            />
 
             <div className="mt-6 space-y-4">
               {requests.length === 0 ? (
@@ -548,55 +606,96 @@ export default function CustomerSellTreePageV6() {
                             {getSeedlingName(tree)}
                           </h3>
                           <p className="text-white/60">{getForestName(tree)}</p>
-                          <p className="mt-1 text-xs text-white/45">{formatDate(request.created_at)}</p>
+                          <p className="mt-1 text-xs text-white/45">
+                            {formatDate(request.created_at)}
+                          </p>
                         </div>
 
-                        <span className={`w-fit rounded-xl border px-4 py-2 text-xs font-bold ${statusBadge(status)}`}>
+                        <span
+                          className={`w-fit rounded-xl border px-4 py-2 text-xs font-bold ${statusBadge(
+                            status
+                          )}`}
+                        >
                           {status}
                         </span>
                       </div>
 
                       <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <MiniBox label="Tree Value" value={money(request.tree_value)} />
-                        <MiniBox label="Admin Offer" value={money(request.approved_value)} />
-                        <MiniBox label="Net Receive" value={money(request.net_receive)} />
+                        <MiniBox
+                          label="Tree Value"
+                          value={money(request.tree_value)}
+                        />
+                        <MiniBox
+                          label="Admin Offer"
+                          value={money(request.approved_value)}
+                        />
+                        <MiniBox
+                          label="Net Receive"
+                          value={money(request.net_receive)}
+                        />
                       </div>
 
                       <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <InfoRow label="Platform Fee" value={money(request.platform_fee)} />
+                        <InfoRow
+                          label="Platform Fee"
+                          value={money(request.platform_fee)}
+                        />
                         <InfoRow
                           label="Payout Status"
-                          value={request.payout_status || (status === "PAYOUT_QUEUED" ? "QUEUED" : "Not queued yet")}
+                          value={
+                            request.payout_status ||
+                            (status === "PAYOUT_QUEUED"
+                              ? "QUEUED"
+                              : "Not queued yet")
+                          }
                         />
                         <InfoRow
                           label="Withdrawal Status"
-                          value={withdrawal?.status || (status === "PAYOUT_QUEUED" ? "PENDING" : "Not created yet")}
+                          value={
+                            withdrawal?.status ||
+                            (status === "PAYOUT_QUEUED"
+                              ? "PENDING"
+                              : "Not created yet")
+                          }
                         />
                         {withdrawal ? (
-                          <InfoRow label="Paid Amount" value={money(withdrawal.net_receive)} />
+                          <InfoRow
+                            label="Paid Amount"
+                            value={money(withdrawal.net_receive)}
+                          />
                         ) : null}
                       </div>
 
                       {request.admin_notes ? (
                         <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-4">
-                          <p className="text-amber-300 font-bold text-sm">Admin Notes</p>
-                          <p className="mt-2 text-white/85">{request.admin_notes}</p>
+                          <p className="text-amber-300 font-bold text-sm">
+                            Admin Notes
+                          </p>
+                          <p className="mt-2 text-white/85">
+                            {request.admin_notes}
+                          </p>
                         </div>
                       ) : null}
 
                       <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
-                        <p className="text-emerald-300 font-bold text-sm">Status Meaning</p>
+                        <p className="text-emerald-300 font-bold text-sm">
+                          Status Meaning
+                        </p>
                         <p className="mt-2 text-white/80">
-                          {statusText[status] || "Your sell request is being processed."}
+                          {statusText[status] ||
+                            "Your sell request is being processed."}
                         </p>
                       </div>
 
                       {status === "OFFER_SENT" ? (
                         <div className="mt-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
                           <div>
-                            <p className="text-amber-300 font-bold">Admin Offer Ready</p>
+                            <p className="text-amber-300 font-bold">
+                              Admin Offer Ready
+                            </p>
                             <p className="text-white/70 text-sm">
-                              Accepting saves your payout details only. Admin is the only one who can queue payout.
+                              Accepting saves your payout details only. Admin is
+                              the only one who can queue payout.
                             </p>
                           </div>
 
@@ -620,13 +719,16 @@ export default function CustomerSellTreePageV6() {
         <section className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-6">
           <h3 className="text-xl font-bold">Important Sell Tree Rule</h3>
           <p className="mt-2 text-white/75">
-            Sell Tree does not credit your wallet. Customer acceptance only saves payout details.
-            Admin queue payout creates the withdrawal request and records the platform fee.
+            Sell Tree does not credit your wallet. Customer acceptance only
+            saves payout details. Admin queue payout creates the withdrawal
+            request and records the platform fee.
           </p>
         </section>
 
         <footer className="py-8 text-center">
-          <p className="text-amber-300 font-serif text-xl font-bold">ARGANWOOD</p>
+          <p className="text-amber-300 font-serif text-xl font-bold">
+            ARGANWOOD
+          </p>
           <p className="text-xs text-white/45">Growing a Greener Tomorrow 🌿</p>
         </footer>
       </div>
