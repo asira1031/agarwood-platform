@@ -745,31 +745,35 @@ export default function GardenerTasksPage() {
   }
 
   async function rollbackInsertedEvidence(inserted: InsertedEvidenceIds) {
-    const cleanups: Promise<any>[] = [];
+    try {
+      if (inserted.photoIds.length > 0) {
+        const { error } = await supabase
+          .from("tree_photo_updates")
+          .delete()
+          .in("id", inserted.photoIds);
 
-    if (inserted.photoIds.length > 0) {
-      cleanups.push(
-        supabase.from("tree_photo_updates").delete().in("id", inserted.photoIds),
-      );
-    }
+        if (error) console.error("Photo rollback failed:", error.message);
+      }
 
-    if (inserted.gpsIds.length > 0) {
-      cleanups.push(supabase.from("tree_gps_logs").delete().in("id", inserted.gpsIds));
-    }
+      if (inserted.gpsIds.length > 0) {
+        const { error } = await supabase
+          .from("tree_gps_logs")
+          .delete()
+          .in("id", inserted.gpsIds);
 
-    if (inserted.healthIds.length > 0) {
-      cleanups.push(
-        supabase.from("tree_health_reports").delete().in("id", inserted.healthIds),
-      );
-    }
+        if (error) console.error("GPS rollback failed:", error.message);
+      }
 
-    if (cleanups.length === 0) return;
+      if (inserted.healthIds.length > 0) {
+        const { error } = await supabase
+          .from("tree_health_reports")
+          .delete()
+          .in("id", inserted.healthIds);
 
-    const results = await Promise.allSettled(cleanups);
-    const failed = results.find((result) => result.status === "rejected");
-
-    if (failed) {
-      console.error("Evidence rollback had a rejected cleanup:", failed);
+        if (error) console.error("Health rollback failed:", error.message);
+      }
+    } catch (error) {
+      console.error("Evidence rollback failed:", error);
     }
   }
 
