@@ -21,6 +21,13 @@ type SellTreeRequest = {
   approved_value: number | null;
   status: string | null;
   admin_notes: string | null;
+  withdrawal_request_id?: string | null;
+  platform_treasury_id?: string | null;
+  payout_status?: string | null;
+  payout_method?: string | null;
+  payout_account_name?: string | null;
+  payout_account_number?: string | null;
+  payout_queued_at?: string | null;
   created_at?: string | null;
 };
 
@@ -47,8 +54,8 @@ const statusText: Record<string, string> = {
   INSPECTION_REQUESTED: "Admin requested field inspection.",
   INSPECTION_SUBMITTED: "Gardener submitted inspection evidence.",
   OFFER_SENT: "Admin sent you an offer. You can accept or wait.",
-  CUSTOMER_ACCEPTED: "You accepted the offer. Payout is being prepared.",
-  PAYOUT_QUEUED: "Withdrawal request was created and is waiting for Admin payout.",
+  CUSTOMER_ACCEPTED: "You accepted the offer. Admin will queue your payout.",
+  PAYOUT_QUEUED: "Admin queued your payout. Withdrawal is waiting for payout processing.",
   PAID: "Payout completed.",
   REJECTED: "Admin rejected the sell request.",
 };
@@ -96,6 +103,7 @@ export default function CustomerSellTreePageV6() {
     }
 
     const user = authData.user;
+    const email = user.email?.trim().toLowerCase() || "";
 
     const { data: profileById } = await supabase
       .from("profiles")
@@ -106,7 +114,7 @@ export default function CustomerSellTreePageV6() {
     const { data: profileByEmail } = await supabase
       .from("profiles")
       .select("id, full_name, email")
-      .eq("email", user.email || "")
+      .eq("email", email)
       .maybeSingle();
 
     const resolved = profileById || profileByEmail;
@@ -209,6 +217,7 @@ export default function CustomerSellTreePageV6() {
         tree_value: treeValue,
         platform_fee: platformFee,
         net_receive: netReceive,
+        payout_status: "NOT_QUEUED",
         status: "PENDING",
         admin_notes: null,
       });
@@ -227,92 +236,47 @@ export default function CustomerSellTreePageV6() {
 
   async function acceptOffer(request: SellTreeRequest) {
     if (!profile) return alert("Profile not found.");
+
     if (request.status !== "OFFER_SENT") {
       return alert("This offer is not available for acceptance.");
     }
 
+    if (!payoutMethod.trim()) return alert("Please select payout method.");
     if (!payoutAccountName.trim()) return alert("Please enter payout account name.");
     if (!payoutAccountNumber.trim()) return alert("Please enter payout account number.");
 
-    const previousStatus = request.status || "OFFER_SENT";
-
-    const approvedValue = Number(
-      request.approved_value || request.net_receive || request.tree_value || 0
+    const confirmed = window.confirm(
+      "Accept this offer? Admin will queue the payout after review. No withdrawal will be created from customer side."
     );
-    const fee = Number(request.platform_fee || Math.round(approvedValue * PLATFORM_FEE_RATE));
-    const net = Number(request.net_receive || Math.max(approvedValue - fee, 0));
 
-    let createdWithdrawalId: string | null = null;
+    if (!confirmed) return;
 
     try {
       setSaving(true);
 
       const { error: acceptError } = await supabase
         .from("sell_tree_requests")
-        .update({ status: "CUSTOMER_ACCEPTED" })
-        .eq("id", request.id)
-        .eq("profile_id", profile.id);
-
-      if (acceptError) throw acceptError;
-
-      const { data: withdrawalData, error: withdrawalError } = await supabase
-        .from("withdrawal_requests")
-        .insert({
-          profile_id: profile.id,
-          amount: approvedValue,
-          processing_fee: fee,
-          net_receive: net,
-          status: "PENDING",
+        .update({
+          status: "CUSTOMER_ACCEPTED",
           payout_method: payoutMethod,
           payout_account_name: payoutAccountName.trim(),
           payout_account_number: payoutAccountNumber.trim(),
+          payout_status: "NOT_QUEUED",
+          updated_at: new Date().toISOString(),
         })
-        .select("id")
-        .single();
-
-      if (withdrawalError) {
-        await supabase
-          .from("sell_tree_requests")
-          .update({ status: previousStatus })
-          .eq("id", request.id)
-          .eq("profile_id", profile.id);
-
-        throw withdrawalError;
-      }
-
-      createdWithdrawalId = withdrawalData?.id || null;
-
-      const { error: queuedError } = await supabase
-        .from("sell_tree_requests")
-        .update({ status: "PAYOUT_QUEUED" })
         .eq("id", request.id)
-        .eq("profile_id", profile.id);
+        .eq("profile_id", profile.id)
+        .eq("status", "OFFER_SENT");
 
-      if (queuedError) {
-        if (createdWithdrawalId) {
-          await supabase
-            .from("withdrawal_requests")
-            .delete()
-            .eq("id", createdWithdrawalId)
-            .eq("profile_id", profile.id);
-        }
-
-        await supabase
-          .from("sell_tree_requests")
-          .update({ status: previousStatus })
-          .eq("id", request.id)
-          .eq("profile_id", profile.id);
-
-        throw queuedError;
-      }
+      if (acceptError) throw acceptError;
 
       setPayoutAccountName("");
       setPayoutAccountNumber("");
 
       await loadSellTreeCenter();
-      alert("Offer accepted. Withdrawal request created.");
+      alert("Offer accepted. Waiting for Admin payout queue.");
     } catch (error: any) {
-      alert(error.message || "Failed to accept offer. Changes were rolled back.");
+      alert(error.message || "Failed to accept offer.");
     } finally {
       setSaving(false);
     }
@@ -355,14 +319,15 @@ export default function CustomerSellTreePageV6() {
   }
 
   function findWithdrawalForRequest(request: SellTreeRequest) {
-    const net = Number(request.net_receive || 0);
-    const amount = Number(request.approved_value || request.tree_value || 0);
+    if (request.withdrawal_request_id) {
+      return (
+        withdrawals.find(
+          (withdrawal) => String(withdrawal.id) === String(request.withdrawal_request_id)
+        ) || null
+      );
+    }
 
-    return (
-      withdrawals.find((withdrawal) => Number(withdrawal.net_receive || 0) === net && net > 0) ||
-      withdrawals.find((withdrawal) => Number(withdrawal.amount || 0) === amount && amount > 0) ||
-      null
-    );
+    return null;
   }
 
   function money(value?: number | null) {
@@ -431,7 +396,7 @@ export default function CustomerSellTreePageV6() {
           />
           <StatCard
             title="Payout Queue"
-            value={withdrawals.filter((w) => w.status !== "PAID").length}
+            value={requests.filter((r) => r.status === "PAYOUT_QUEUED").length}
             icon="🏦"
           />
         </section>
@@ -568,6 +533,10 @@ export default function CustomerSellTreePageV6() {
                       <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                         <InfoRow label="Platform Fee" value={money(request.platform_fee)} />
                         <InfoRow
+                          label="Payout Status"
+                          value={request.payout_status || (status === "PAYOUT_QUEUED" ? "QUEUED" : "Not queued yet")}
+                        />
+                        <InfoRow
                           label="Withdrawal Status"
                           value={withdrawal?.status || (status === "PAYOUT_QUEUED" ? "PENDING" : "Not created yet")}
                         />
@@ -595,7 +564,7 @@ export default function CustomerSellTreePageV6() {
                           <div>
                             <p className="text-amber-300 font-bold">Admin Offer Ready</p>
                             <p className="text-white/70 text-sm">
-                              Accepting this creates a withdrawal request. Wallet will not be credited.
+                              Accepting saves your payout details only. Admin is the only one who can queue payout.
                             </p>
                           </div>
 
@@ -619,8 +588,8 @@ export default function CustomerSellTreePageV6() {
         <section className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-6">
           <h3 className="text-xl font-bold">Important Sell Tree Rule</h3>
           <p className="mt-2 text-white/75">
-            Sell Tree does not credit your wallet. After Admin sends an offer and you accept it,
-            a withdrawal request is created for payout processing.
+            Sell Tree does not credit your wallet. Customer acceptance only saves payout details.
+            Admin queue payout creates the withdrawal request and records the platform fee.
           </p>
         </section>
 
