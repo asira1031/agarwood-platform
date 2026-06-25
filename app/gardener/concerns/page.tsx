@@ -7,6 +7,7 @@ type Assignment = Record<string, any>;
 type ConcernReport = Record<string, any>;
 
 export default function GardenerConcernsPage() {
+  const [profile, setProfile] = useState<any>(null);
   const [caretaker, setCaretaker] = useState<any>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [concerns, setConcerns] = useState<ConcernReport[]>([]);
@@ -15,6 +16,7 @@ export default function GardenerConcernsPage() {
   const [priority, setPriority] = useState("NORMAL");
   const [description, setDescription] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -23,10 +25,7 @@ export default function GardenerConcernsPage() {
     loadData();
   }, []);
 
-  async function loadData() {
-    setLoading(true);
-    setMessage("");
-
+  async function resolveProfileAndCaretaker() {
     const {
       data: { user },
       error: userError,
@@ -34,72 +33,152 @@ export default function GardenerConcernsPage() {
 
     if (userError || !user) {
       window.location.href = "/login";
-      return;
+      return { profileRow: null, caretakerRow: null };
     }
 
     const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: caretakerRow, error: caretakerError } = await supabase
-      .from("caretakers")
+    const { data: profileById } = await supabase
+      .from("profiles")
       .select("*")
-      .eq("email", email)
+      .eq("id", user.id)
       .maybeSingle();
 
-    if (caretakerError) {
-      setMessage(caretakerError.message);
-      setLoading(false);
-      return;
+    let profileRow = profileById;
+
+    if (!profileRow && email) {
+      const { data: profileByEmail } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+
+      profileRow = profileByEmail;
     }
 
-    if (!caretakerRow) {
-      setMessage("Caretaker profile not found.");
-      setLoading(false);
-      return;
+    let caretakerRow: any = null;
+
+    if (profileRow?.id) {
+      const { data: caretakerByProfile, error: caretakerProfileError } = await supabase
+        .from("caretakers")
+        .select("*")
+        .eq("caretaker_profile_id", profileRow.id)
+        .maybeSingle();
+
+      if (caretakerProfileError) throw caretakerProfileError;
+
+      caretakerRow = caretakerByProfile;
     }
 
-    if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
-      setMessage("Your gardener account is not ACTIVE.");
-      setLoading(false);
-      return;
+    if (!caretakerRow && email) {
+      const { data: caretakerByEmail, error: caretakerEmailError } = await supabase
+        .from("caretakers")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (caretakerEmailError) throw caretakerEmailError;
+
+      caretakerRow = caretakerByEmail;
     }
 
-    setCaretaker(caretakerRow);
+    return { profileRow, caretakerRow };
+  }
 
-    const { data: assignmentRows, error: assignmentError } = await supabase
-      .from("caretaker_assignments")
-      .select("*")
-      .eq("caretaker_id", caretakerRow.id)
-      .order("started_at", { ascending: false });
+  async function loadData() {
+    setLoading(true);
+    setMessage("");
 
-    if (assignmentError) {
-      setMessage(assignmentError.message);
+    try {
+      const { profileRow, caretakerRow } = await resolveProfileAndCaretaker();
+
+      if (!caretakerRow) {
+        setMessage("Caretaker profile not found.");
+        setLoading(false);
+        return;
+      }
+
+      if (String(caretakerRow.status || "").toUpperCase() !== "ACTIVE") {
+        setMessage("Your gardener account is not ACTIVE.");
+        setLoading(false);
+        return;
+      }
+
+      setProfile(profileRow);
+      setCaretaker(caretakerRow);
+
+      const caretakerProfileId = caretakerRow.caretaker_profile_id || profileRow?.id || "";
+      const assignmentOr = caretakerProfileId
+        ? `caretaker_id.eq.${caretakerRow.id},caretaker_profile_id.eq.${caretakerProfileId}`
+        : `caretaker_id.eq.${caretakerRow.id}`;
+
+      const { data: assignmentRows, error: assignmentError } = await supabase
+        .from("caretaker_assignments")
+        .select("*")
+        .or(assignmentOr)
+        .order("created_at", { ascending: false });
+
+      if (assignmentError) throw assignmentError;
+
+      const { data: concernRows, error: concernError } = await supabase
+        .from("caretaker_concern_reports")
+        .select("*")
+        .eq("caretaker_id", caretakerRow.id)
+        .order("created_at", { ascending: false });
+
+      if (concernError) throw concernError;
+
+      const rows = assignmentRows || [];
+
+      setAssignments(rows);
+      setConcerns(concernRows || []);
+      setSelectedAssignmentId((current) => current || rows[0]?.id || "");
+    } catch (error: any) {
+      console.error("Concern load error:", error);
+      setMessage(error?.message || "Unable to load concern reports.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: concernRows, error: concernError } = await supabase
-      .from("caretaker_concern_reports")
-      .select("*")
-      .eq("caretaker_id", caretakerRow.id)
-      .order("created_at", { ascending: false });
-
-    if (concernError) {
-      setMessage(concernError.message);
-      setLoading(false);
-      return;
-    }
-
-    const rows = assignmentRows || [];
-
-    setAssignments(rows);
-    setConcerns(concernRows || []);
-    setSelectedAssignmentId((current) => current || rows[0]?.id || "");
-    setLoading(false);
   }
 
   const selectedAssignment = useMemo(() => {
     return assignments.find((item) => item.id === selectedAssignmentId) || null;
   }, [assignments, selectedAssignmentId]);
+
+  async function uploadConcernPhoto() {
+    if (!photoFile || !caretaker) return photoUrl.trim() || null;
+
+    const safeName = photoFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const filePath = `concerns/${caretaker.id}/${Date.now()}-${safeName}`;
+
+    const evidenceUpload = await supabase.storage
+      .from("tree-evidence")
+      .upload(filePath, photoFile, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: photoFile.type || "image/jpeg",
+      });
+
+    if (!evidenceUpload.error) {
+      const { data } = supabase.storage.from("tree-evidence").getPublicUrl(filePath);
+      return data.publicUrl;
+    }
+
+    console.warn("tree-evidence upload failed, trying tree-photos:", evidenceUpload.error.message);
+
+    const photoUpload = await supabase.storage
+      .from("tree-photos")
+      .upload(filePath, photoFile, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: photoFile.type || "image/jpeg",
+      });
+
+    if (photoUpload.error) throw photoUpload.error;
+
+    const { data } = supabase.storage.from("tree-photos").getPublicUrl(filePath);
+    return data.publicUrl;
+  }
 
   async function saveConcernReport() {
     setMessage("");
@@ -121,65 +200,68 @@ export default function GardenerConcernsPage() {
 
     setSaving(true);
 
-    const payload = {
-      assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
-      concern_type: concernType,
-      priority,
-      description: description.trim(),
-      photo_url: photoUrl.trim() || null,
-      status: "OPEN",
-    };
+    try {
+      const uploadedPhotoUrl = await uploadConcernPhoto();
 
-    const { error: concernError } = await supabase
-      .from("caretaker_concern_reports")
-      .insert(payload);
+      const payload = {
+        assignment_id: selectedAssignment.id,
+        caretaker_id: caretaker.id,
+        customer_profile_id: selectedAssignment.customer_profile_id || null,
+        tree_id: selectedAssignment.tree_id || null,
+        operation_request_id: selectedAssignment.operation_request_id || null,
+        concern_type: concernType,
+        priority,
+        description: description.trim(),
+        photo_url: uploadedPhotoUrl,
+        status: "OPEN",
+        created_at: new Date().toISOString(),
+      };
 
-    if (concernError) {
-      setMessage(concernError.message);
-      setSaving(false);
-      return;
-    }
+      const { error: concernError } = await supabase
+        .from("caretaker_concern_reports")
+        .insert(payload);
 
-    const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
-      assignment_id: selectedAssignment.id,
-      caretaker_id: caretaker.id,
-      customer_profile_id: selectedAssignment.customer_profile_id || null,
-      tree_id: selectedAssignment.tree_id || null,
-      operation_request_id: selectedAssignment.operation_request_id || null,
-      task_type: "Concern Report",
-      notes: description.trim(),
-      status: "SUBMITTED",
-    });
+      if (concernError) throw concernError;
 
-    if (taskError) {
-      setMessage(taskError.message);
-      setSaving(false);
-      return;
-    }
+      const { error: taskError } = await supabase.from("caretaker_task_logs").insert({
+        assignment_id: selectedAssignment.id,
+        caretaker_id: caretaker.id,
+        customer_profile_id: selectedAssignment.customer_profile_id || null,
+        tree_id: selectedAssignment.tree_id || null,
+        operation_request_id: selectedAssignment.operation_request_id || null,
+        task_type: "Concern Report",
+        notes: `Concern Report: ${concernType} / ${priority} — ${description.trim()}`,
+        status: "SUBMITTED",
+        created_at: new Date().toISOString(),
+      });
 
-    await supabase
-      .from("caretaker_assignments")
-      .update({ status: "IN_PROGRESS" })
-      .eq("id", selectedAssignment.id);
+      if (taskError) throw taskError;
 
-    if (selectedAssignment.operation_request_id) {
       await supabase
-        .from("tree_operation_requests")
+        .from("caretaker_assignments")
         .update({ status: "IN_PROGRESS" })
-        .eq("id", selectedAssignment.operation_request_id);
-    }
+        .eq("id", selectedAssignment.id);
 
-    setConcernType("TREE_CONDITION");
-    setPriority("NORMAL");
-    setDescription("");
-    setPhotoUrl("");
-    setSaving(false);
-    setMessage("Concern report submitted and synced to Admin Operations.");
-    await loadData();
+      if (selectedAssignment.operation_request_id) {
+        await supabase
+          .from("tree_operation_requests")
+          .update({ status: "IN_PROGRESS" })
+          .eq("id", selectedAssignment.operation_request_id);
+      }
+
+      setConcernType("TREE_CONDITION");
+      setPriority("NORMAL");
+      setDescription("");
+      setPhotoUrl("");
+      setPhotoFile(null);
+      setMessage("Concern report submitted and synced to Admin Operations.");
+      await loadData();
+    } catch (error: any) {
+      console.error("Concern submit error:", error);
+      setMessage(error?.message || "Failed to submit concern report.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function formatDate(value: string | null | undefined) {
@@ -209,7 +291,7 @@ export default function GardenerConcernsPage() {
   }
 
   return (
-    <main className="min-h-screen p-8 text-white">
+    <main className="min-h-screen bg-[#04130d] p-8 text-white">
       <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
         <div>
           <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
@@ -223,6 +305,12 @@ export default function GardenerConcernsPage() {
           <p className="mt-2 text-white/70">
             Report field concerns, urgent tree issues, site access problems, pest alerts, and caretaker notes.
           </p>
+
+          {profile?.email && (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.2em] text-white/40">
+              Signed in as {profile.email}
+            </p>
+          )}
         </div>
 
         {message && (
@@ -308,7 +396,18 @@ export default function GardenerConcernsPage() {
               />
 
               <label className="mt-4 block text-sm font-bold text-white/70">
-                Photo URL Optional
+                Upload Photo Optional
+              </label>
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setPhotoFile(e.target.files?.[0] || null)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none file:mr-4 file:rounded-lg file:border-0 file:bg-[#d9b45f] file:px-4 file:py-2 file:font-black file:text-[#071f16]"
+              />
+
+              <label className="mt-4 block text-sm font-bold text-white/70">
+                Or Photo URL Optional
               </label>
 
               <input

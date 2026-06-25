@@ -291,45 +291,69 @@ export default function AdminWithdrawalsPage() {
     return true;
   }
 
-  async function markProcessing(request: WithdrawalRequest) {
-    if (!request.id || !request.profile_id) return;
+  async function rollbackWithdrawalStatus(requestId: string, previousStatus: string) {
+    const { error } = await supabase
+      .from("withdrawal_requests")
+      .update({ status: previousStatus })
+      .eq("id", requestId);
 
-    if (normalize(request.status) !== "PENDING") {
-      setMessage("Only PENDING withdrawals can be moved to PROCESSING.");
+    if (error) {
+      console.error("Withdrawal status rollback failed:", error);
+      throw new Error(`Treasury failed, then withdrawal rollback failed: ${error.message}`);
+    }
+  }
+
+  async function rollbackWalletTransaction(
+    requestId: string,
+    previousTx: WalletTransaction | null,
+    insertedTxId: string | null
+  ) {
+    if (previousTx?.id) {
+      const { error } = await supabase
+        .from("wallet_transactions")
+        .update({
+          profile_id: previousTx.profile_id,
+          transaction_type: previousTx.transaction_type,
+          amount: previousTx.amount,
+          reference_no: previousTx.reference_no,
+          description: previousTx.description,
+          status: previousTx.status,
+        })
+        .eq("id", previousTx.id);
+
+      if (error) {
+        console.error("Wallet transaction rollback failed:", error);
+        throw new Error(`Treasury failed, then wallet transaction rollback failed: ${error.message}`);
+      }
+
       return;
     }
 
-    const confirmed = window.confirm(`Move withdrawal ${peso(request.amount)} to PROCESSING?`);
-    if (!confirmed) return;
+    if (insertedTxId) {
+      const { error } = await supabase
+        .from("wallet_transactions")
+        .delete()
+        .eq("id", insertedTxId);
 
-    setActionLoading(request.id);
-    setMessage("");
-
-    try {
-      const { data: updatedRequest, error } = await supabase
-        .from("withdrawal_requests")
-        .update({ status: "PROCESSING" })
-        .eq("id", request.id)
-        .eq("status", "PENDING")
-        .select("id,status")
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!updatedRequest || normalize(updatedRequest.status) !== "PROCESSING") {
-        throw new Error("Withdrawal request status was not updated.");
+      if (error) {
+        console.error("Inserted wallet transaction rollback failed:", error);
+        throw new Error(`Treasury failed, then inserted wallet transaction rollback failed: ${error.message}`);
       }
 
-      await updateWithdrawalTransaction(request, "PROCESSING");
-
-      setMessage("Withdrawal moved to PROCESSING.");
-      await loadData();
-      setTab("PROCESSING");
-    } catch (error: any) {
-      setMessage(error?.message || "Failed to move withdrawal to processing.");
+      return;
     }
 
-    setActionLoading("");
+    const { error } = await supabase
+      .from("wallet_transactions")
+      .delete()
+      .eq("reference_no", requestId)
+      .eq("transaction_type", "WITHDRAWAL")
+      .eq("status", "COMPLETED");
+
+    if (error) {
+      console.error("Fallback wallet transaction rollback failed:", error);
+      throw new Error(`Treasury failed, then fallback wallet transaction rollback failed: ${error.message}`);
+    }
   }
 
   async function insertWithdrawalTreasury(request: WithdrawalRequest) {
@@ -371,12 +395,53 @@ export default function AdminWithdrawalsPage() {
     }
   }
 
+  async function markProcessing(request: WithdrawalRequest) {
+    if (!request.id || !request.profile_id) return;
+
+    if (normalize(request.status) !== "PENDING") {
+      setMessage("Only PENDING withdrawals can be moved to PROCESSING.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Move withdrawal ${peso(request.amount)} to PROCESSING?`);
+    if (!confirmed) return;
+
+    setActionLoading(request.id);
+    setMessage("");
+
+    try {
+      const { data: updatedRequest, error } = await supabase
+        .from("withdrawal_requests")
+        .update({ status: "PROCESSING" })
+        .eq("id", request.id)
+        .eq("status", "PENDING")
+        .select("id,status")
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!updatedRequest || normalize(updatedRequest.status) !== "PROCESSING") {
+        throw new Error("Withdrawal request status was not updated.");
+      }
+
+      await updateWithdrawalTransaction(request, "PROCESSING");
+
+      setMessage("Withdrawal moved to PROCESSING.");
+      await loadData();
+      setTab("PROCESSING");
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to move withdrawal to processing.");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
   async function markPaid(request: WithdrawalRequest) {
     if (!request.id || !request.profile_id) return;
 
-    const currentStatus = normalize(request.status);
+    const previousStatus = normalize(request.status);
 
-    if (currentStatus !== "PROCESSING" && currentStatus !== "PENDING") {
+    if (previousStatus !== "PROCESSING" && previousStatus !== "PENDING") {
       setMessage("Only PENDING or PROCESSING withdrawals can be marked PAID.");
       return;
     }
@@ -389,7 +454,14 @@ export default function AdminWithdrawalsPage() {
     setActionLoading(request.id);
     setMessage("");
 
+    let previousTx: WalletTransaction | null = null;
+    let insertedTxId: string | null = null;
+    let withdrawalMovedToPaid = false;
+    let walletTxCompleted = false;
+
     try {
+      previousTx = await getFreshTransaction(request.id);
+
       const { data: updatedRequest, error: withdrawalError } = await supabase
         .from("withdrawal_requests")
         .update({ status: "PAID" })
@@ -398,43 +470,92 @@ export default function AdminWithdrawalsPage() {
         .select("id,status")
         .maybeSingle();
 
-      if (withdrawalError) {
-        throw withdrawalError;
-      }
+      if (withdrawalError) throw withdrawalError;
 
       if (!updatedRequest || normalize(updatedRequest.status) !== "PAID") {
         throw new Error("Withdrawal request status was not updated.");
       }
 
-      await updateWithdrawalTransaction(request, "COMPLETED");
+      withdrawalMovedToPaid = true;
 
-      const completedTx = await getFreshTransaction(request.id);
-      if (!completedTx || normalize(completedTx.status) !== "COMPLETED") {
-        throw new Error("Wallet transaction status was not updated.");
+      const amount = Number(previousTx?.amount || -Math.abs(Number(request.amount || 0)));
+      const description = `Withdrawal paid via ${
+        request.payout_method || "payout method"
+      }. Account: ${request.payout_account_name || "N/A"} - ${
+        request.payout_account_number || "N/A"
+      }.`;
+
+      if (previousTx?.id) {
+        const { data: updatedTx, error: txError } = await supabase
+          .from("wallet_transactions")
+          .update({
+            transaction_type: "WITHDRAWAL",
+            amount,
+            status: "COMPLETED",
+            description,
+          })
+          .eq("id", previousTx.id)
+          .select("id,status")
+          .maybeSingle();
+
+        if (txError) throw txError;
+
+        if (!updatedTx || normalize(updatedTx.status) !== "COMPLETED") {
+          throw new Error("Wallet transaction status was not updated.");
+        }
+      } else {
+        const { data: insertedTx, error: txError } = await supabase
+          .from("wallet_transactions")
+          .insert({
+            profile_id: request.profile_id,
+            transaction_type: "WITHDRAWAL",
+            amount,
+            reference_no: request.id,
+            description,
+            status: "COMPLETED",
+            created_at: new Date().toISOString(),
+          })
+          .select("id,status")
+          .maybeSingle();
+
+        if (txError) throw txError;
+
+        if (!insertedTx || normalize(insertedTx.status) !== "COMPLETED") {
+          throw new Error("Wallet transaction status was not updated.");
+        }
+
+        insertedTxId = insertedTx.id;
       }
+
+      walletTxCompleted = true;
 
       try {
         await insertWithdrawalTreasury(request);
       } catch (treasuryError: any) {
         console.error("Withdrawal treasury sync failed:", treasuryError);
 
-        setMessage(
-          `Treasury sync failed: ${
-            treasuryError?.message || "Unknown treasury error"
-          }`
-        );
+        if (walletTxCompleted) {
+          await rollbackWalletTransaction(request.id, previousTx, insertedTxId);
+        }
 
-        return;
+        if (withdrawalMovedToPaid) {
+          await rollbackWithdrawalStatus(request.id, previousStatus);
+        }
+
+        throw new Error(
+          `Treasury sync failed: ${treasuryError?.message || "Unknown treasury error"}`
+        );
       }
 
       setMessage("Withdrawal marked as PAID. Wallet transaction completed. Platform treasury synced.");
       await loadData();
       setTab("PAID");
     } catch (error: any) {
-      setMessage(error?.message || "Withdrawal request status was not updated.");
+      setMessage(error?.message || "Failed to mark withdrawal as PAID.");
+      await loadData();
+    } finally {
+      setActionLoading("");
     }
-
-    setActionLoading("");
   }
 
   async function rejectWithdrawal(request: WithdrawalRequest) {
@@ -475,9 +596,9 @@ export default function AdminWithdrawalsPage() {
       setTab("REJECTED");
     } catch (error: any) {
       setMessage(error?.message || "Failed to reject withdrawal.");
+    } finally {
+      setActionLoading("");
     }
-
-    setActionLoading("");
   }
 
   return (
@@ -488,8 +609,8 @@ export default function AdminWithdrawalsPage() {
           <h1>Payout Queue / Withdrawals</h1>
           <span>
             Review withdrawal requests, move to processing, and mark paid after external payout.
-            Admin does not deduct customer wallet again. Rejections restore the deducted wallet
-            balance once only.
+            Admin does not deduct customer wallet again. PAID status now requires wallet transaction
+            completion and platform treasury POSTED sync.
           </span>
         </div>
 

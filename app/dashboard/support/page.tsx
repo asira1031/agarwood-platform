@@ -10,7 +10,6 @@ type Profile = {
 };
 
 type TicketStatus = "OPEN" | "IN_PROGRESS" | "CLOSED";
-type TicketTab = TicketStatus | "ALL";
 
 type Ticket = {
   id: string;
@@ -43,19 +42,11 @@ type SupportMessage = {
 const forestBg =
   "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1800&q=80";
 
-const TABS: { key: TicketTab; label: string }[] = [
-  { key: "ALL", label: "My Tickets" },
-  { key: "OPEN", label: "Open" },
-  { key: "IN_PROGRESS", label: "In Progress" },
-  { key: "CLOSED", label: "Closed" },
-];
-
 export default function CustomerSupportPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [messages, setMessages] = useState<Record<string, SupportMessage[]>>({});
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
-  const [activeTab, setActiveTab] = useState<TicketTab>("ALL");
 
   const [subject, setSubject] = useState("");
   const [category, setCategory] = useState("GENERAL");
@@ -65,33 +56,24 @@ export default function CustomerSupportPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uiError, setUiError] = useState("");
-
-  const stats = useMemo(() => {
-    return {
-      ALL: tickets.length,
-      OPEN: tickets.filter((ticket) => normalizeStatus(ticket.status) === "OPEN").length,
-      IN_PROGRESS: tickets.filter((ticket) => normalizeStatus(ticket.status) === "IN_PROGRESS").length,
-      CLOSED: tickets.filter((ticket) => normalizeStatus(ticket.status) === "CLOSED").length,
-    };
-  }, [tickets]);
-
-  const filteredTickets = useMemo(() => {
-    if (activeTab === "ALL") return tickets;
-    return tickets.filter((ticket) => normalizeStatus(ticket.status) === activeTab);
-  }, [tickets, activeTab]);
+  const [uiMessage, setUiMessage] = useState("");
 
   const selectedMessages = selectedTicket ? messages[selectedTicket.id] || [] : [];
 
-  const conversationState = useMemo(() => {
-    if (!selectedTicket) return "";
-    if (normalizeStatus(selectedTicket.status) === "CLOSED") return "This ticket is closed. Create a new ticket if you need more help.";
+  const openTickets = useMemo(
+    () => tickets.filter((ticket) => normalizeStatus(ticket.status) === "OPEN"),
+    [tickets]
+  );
 
-    const last = selectedMessages[selectedMessages.length - 1];
-    if (!last) return "Waiting for Admin Reply";
+  const pendingSupportReply = useMemo(
+    () => tickets.filter((ticket) => needsSupportReply(ticket, messages)),
+    [tickets, messages]
+  );
 
-    return normalizeSender(last) === "ADMIN" ? "Admin replied" : "Waiting for Admin Reply";
-  }, [selectedMessages, selectedTicket]);
+  const closedTickets = useMemo(
+    () => tickets.filter((ticket) => normalizeStatus(ticket.status) === "CLOSED"),
+    [tickets]
+  );
 
   useEffect(() => {
     loadSupportCenter();
@@ -101,102 +83,61 @@ export default function CustomerSupportPage() {
   async function resolveProfile() {
     const { data: authData, error: authError } = await supabase.auth.getUser();
 
-    if (authError) {
-      console.error("Customer auth lookup failed:", authError);
-      throw new Error("profile not found: auth lookup failed");
-    }
-
-    if (!authData.user) {
-      throw new Error("profile not found: please login first");
+    if (authError || !authData.user) {
+      throw new Error("Please login first.");
     }
 
     const user = authData.user;
     const email = user.email?.trim() || "";
 
-    const { data: profileById, error: profileByIdError } = await supabase
+    const { data: profileById } = await supabase
       .from("profiles")
       .select("id, full_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (profileByIdError) {
-      console.error("Customer profile lookup by id failed:", profileByIdError);
+    if (profileById) return profileById as Profile;
+
+    const { data: profileByEmail } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .ilike("email", email)
+      .maybeSingle();
+
+    if (!profileByEmail) {
+      throw new Error("Customer profile not found.");
     }
 
-    let profileByEmail: Profile | null = null;
-
-    if (email) {
-      const { data: profileByEmailData, error: profileByEmailError } = await supabase
-        .from("profiles")
-        .select("id, full_name, email")
-        .ilike("email", email)
-        .maybeSingle();
-
-      if (profileByEmailError) {
-        console.error("Customer profile lookup by email failed:", profileByEmailError);
-      }
-
-      profileByEmail = profileByEmailData as Profile | null;
-    }
-
-    const resolved = (profileById || profileByEmail) as Profile | null;
-
-    if (!resolved) {
-      throw new Error("profile not found");
-    }
-
-    return resolved;
+    return profileByEmail as Profile;
   }
 
   async function loadSupportCenter(keepSelectedId?: string) {
     try {
       setLoading(true);
-      setUiError("");
+      setUiMessage("");
 
       const resolvedProfile = await resolveProfile();
       setProfile(resolvedProfile);
 
-      let ticketRows: Ticket[] = [];
-
-      const byCustomer = await supabase
+      const { data: ticketRows, error: ticketError } = await supabase
         .from("support_tickets")
         .select("*")
-        .eq("customer_id", resolvedProfile.id)
+        .or(`profile_id.eq.${resolvedProfile.id},customer_id.eq.${resolvedProfile.id}`)
         .order("updated_at", { ascending: false });
 
-      if (byCustomer.error) {
-        console.error("ticket load failed using customer_id:", byCustomer.error);
+      if (ticketError) throw ticketError;
 
-        const byProfile = await supabase
-          .from("support_tickets")
-          .select("*")
-          .eq("profile_id", resolvedProfile.id)
-          .order("updated_at", { ascending: false });
-
-        if (byProfile.error) {
-          console.error("ticket load failed using profile_id:", byProfile.error);
-          throw new Error(`ticket load failed: ${byProfile.error.message || byCustomer.error.message}`);
-        }
-
-        ticketRows = (byProfile.data || []) as Ticket[];
-      } else {
-        ticketRows = (byCustomer.data || []) as Ticket[];
-      }
-
-      const cleanTickets = ticketRows
+      const cleanTickets = ((ticketRows || []) as Ticket[])
         .map((ticket) => ({ ...ticket, status: normalizeStatus(ticket.status) }))
-        .sort((a, b) => dateMs(b.updated_at || b.created_at) - dateMs(a.updated_at || a.created_at));
+        .sort(
+          (a, b) =>
+            dateMs(b.updated_at || b.created_at) - dateMs(a.updated_at || a.created_at)
+        );
 
       setTickets(cleanTickets);
 
-      const nextSelected =
-        cleanTickets.find((ticket) => ticket.id === (keepSelectedId || selectedTicket?.id)) ||
-        cleanTickets[0] ||
-        null;
-
-      setSelectedTicket(nextSelected);
-
       if (cleanTickets.length === 0) {
+        setSelectedTicket(null);
         setMessages({});
         return;
       }
@@ -209,10 +150,7 @@ export default function CustomerSupportPage() {
         .in("ticket_id", ticketIds)
         .order("created_at", { ascending: true });
 
-      if (messageError) {
-        console.error("ticket load failed: support_messages:", messageError);
-        throw new Error(`ticket load failed: ${messageError.message}`);
-      }
+      if (messageError) throw messageError;
 
       const grouped: Record<string, SupportMessage[]> = {};
 
@@ -223,161 +161,17 @@ export default function CustomerSupportPage() {
       });
 
       setMessages(grouped);
+
+      const nextSelected =
+        cleanTickets.find((ticket) => ticket.id === keepSelectedId) ||
+        cleanTickets.find((ticket) => normalizeStatus(ticket.status) !== "CLOSED") ||
+        cleanTickets[0];
+
+      setSelectedTicket(nextSelected);
     } catch (error: any) {
-      const messageText = error?.message || "ticket load failed";
-      setUiError(messageText);
-      console.error("Customer support center load failed:", error);
+      setUiMessage(error?.message || "Failed to load Customer Support Center.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function createTicket() {
-    if (!profile) {
-      setUiError("profile not found");
-      return;
-    }
-
-    if (!subject.trim()) {
-      setUiError("Please enter a subject.");
-      return;
-    }
-
-    if (!message.trim()) {
-      setUiError("Please enter your message.");
-      return;
-    }
-
-    try {
-      setSaving(true);
-      setUiError("");
-
-      const now = new Date().toISOString();
-      const basePayload = {
-        subject: subject.trim(),
-        category,
-        priority,
-        status: "OPEN",
-        message: message.trim(),
-        customer_email: profile.email,
-        customer_name: profile.full_name || profile.email || "Customer",
-        created_at: now,
-        updated_at: now,
-      };
-
-      let ticket: Ticket | null = null;
-
-      const insertByCustomer = await supabase
-        .from("support_tickets")
-        .insert({
-          ...basePayload,
-          customer_id: profile.id,
-        })
-        .select("*")
-        .single();
-
-      if (insertByCustomer.error) {
-        console.error("ticket insert failed using customer_id:", insertByCustomer.error);
-
-        const insertByProfile = await supabase
-          .from("support_tickets")
-          .insert({
-            ...basePayload,
-            profile_id: profile.id,
-          })
-          .select("*")
-          .single();
-
-        if (insertByProfile.error) {
-          console.error("ticket insert failed using profile_id:", insertByProfile.error);
-          throw new Error(`ticket insert failed: ${insertByProfile.error.message || insertByCustomer.error.message}`);
-        }
-
-        ticket = insertByProfile.data as Ticket;
-      } else {
-        ticket = insertByCustomer.data as Ticket;
-      }
-
-      if (!ticket?.id) {
-        throw new Error("ticket insert failed: ticket id was not returned");
-      }
-
-      await insertSupportMessage({
-        ticketId: ticket.id,
-        profileId: profile.id,
-        role: "CUSTOMER",
-        email: profile.email,
-        text: message.trim(),
-        errorPrefix: "first message insert failed",
-      });
-
-      setSubject("");
-      setCategory("GENERAL");
-      setPriority("NORMAL");
-      setMessage("");
-      setReplyMessage("");
-
-      await loadSupportCenter(ticket.id);
-    } catch (error: any) {
-      const messageText = error?.message || "ticket insert failed";
-      setUiError(messageText);
-      console.error("Customer ticket create failed:", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function sendCustomerMessage() {
-    if (!profile) {
-      setUiError("profile not found");
-      return;
-    }
-
-    if (!selectedTicket) return;
-
-    if (normalizeStatus(selectedTicket.status) === "CLOSED") {
-      setUiError("This ticket is closed. Create a new ticket if you need more help.");
-      return;
-    }
-
-    if (!replyMessage.trim()) {
-      setUiError("Please enter your message.");
-      return;
-    }
-
-    try {
-      setSaving(true);
-      setUiError("");
-
-      const now = new Date().toISOString();
-
-      await insertSupportMessage({
-        ticketId: selectedTicket.id,
-        profileId: profile.id,
-        role: "CUSTOMER",
-        email: profile.email,
-        text: replyMessage.trim(),
-        errorPrefix: "message send failed",
-      });
-
-      const { error: updateError } = await supabase
-        .from("support_tickets")
-        .update({ updated_at: now })
-        .eq("id", selectedTicket.id);
-
-      if (updateError) {
-        console.error("message send failed: ticket updated_at update failed:", updateError);
-        throw new Error(`message send failed: ${updateError.message}`);
-      }
-
-      setReplyMessage("");
-      await loadSupportCenter(selectedTicket.id);
-    } catch (error: any) {
-      const messageText = error?.message || "message send failed";
-      setUiError(messageText);
-      console.error("Customer support message send failed:", error);
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -387,18 +181,16 @@ export default function CustomerSupportPage() {
     role,
     email,
     text,
-    errorPrefix,
   }: {
     ticketId: string;
     profileId: string;
     role: "CUSTOMER" | "ADMIN";
     email: string | null;
     text: string;
-    errorPrefix: string;
   }) {
     const now = new Date().toISOString();
 
-    const requestedPayload = {
+    const modernPayload = {
       ticket_id: ticketId,
       sender_profile_id: profileId,
       sender_role: role,
@@ -406,13 +198,11 @@ export default function CustomerSupportPage() {
       created_at: now,
     };
 
-    const requestedInsert = await supabase.from("support_messages").insert(requestedPayload);
+    const modernInsert = await supabase.from("support_messages").insert(modernPayload);
 
-    if (!requestedInsert.error) return;
+    if (!modernInsert.error) return;
 
-    console.error(`${errorPrefix} using sender_profile_id/sender_role:`, requestedInsert.error);
-
-    const existingPayload = {
+    const fallbackPayload = {
       ticket_id: ticketId,
       sender_type: role,
       sender_id: profileId,
@@ -421,28 +211,154 @@ export default function CustomerSupportPage() {
       created_at: now,
     };
 
-    const existingInsert = await supabase.from("support_messages").insert(existingPayload);
+    const fallbackInsert = await supabase
+      .from("support_messages")
+      .insert(fallbackPayload);
 
-    if (existingInsert.error) {
-      console.error(`${errorPrefix} using sender_type/sender_id:`, existingInsert.error);
-      throw new Error(`${errorPrefix}: ${existingInsert.error.message || requestedInsert.error.message}`);
+    if (fallbackInsert.error) {
+      throw new Error(
+        fallbackInsert.error.message || modernInsert.error.message || "Message failed."
+      );
     }
   }
 
-  function selectTab(tab: TicketTab) {
-    setActiveTab(tab);
-    const first =
-      tab === "ALL"
-        ? tickets[0]
-        : tickets.find((ticket) => normalizeStatus(ticket.status) === tab);
-    if (first) setSelectedTicket(first);
+  async function createTicket() {
+    if (!profile) return setUiMessage("Customer profile not found.");
+    if (!subject.trim()) return setUiMessage("Please enter a support subject.");
+    if (!message.trim()) return setUiMessage("Please enter your support message.");
+
+    try {
+      setSaving(true);
+      setUiMessage("");
+
+      const now = new Date().toISOString();
+      const cleanSubject = subject.trim();
+      const cleanMessage = message.trim();
+
+      const ticketPayload = {
+        profile_id: profile.id,
+        customer_id: profile.id,
+        customer_name: profile.full_name,
+        customer_email: profile.email,
+        subject: cleanSubject,
+        category,
+        priority,
+        status: "OPEN",
+        message: cleanMessage,
+        created_at: now,
+        updated_at: now,
+      };
+
+      const { data: ticketData, error: ticketError } = await supabase
+        .from("support_tickets")
+        .insert(ticketPayload)
+        .select("*")
+        .single();
+
+      if (ticketError) {
+        const fallbackPayload = {
+          profile_id: profile.id,
+          subject: cleanSubject,
+          category,
+          priority,
+          status: "OPEN",
+          message: cleanMessage,
+          created_at: now,
+          updated_at: now,
+        };
+
+        const { data: fallbackTicket, error: fallbackError } = await supabase
+          .from("support_tickets")
+          .insert(fallbackPayload)
+          .select("*")
+          .single();
+
+        if (fallbackError) throw fallbackError;
+
+        await insertSupportMessage({
+          ticketId: fallbackTicket.id,
+          profileId: profile.id,
+          role: "CUSTOMER",
+          email: profile.email,
+          text: cleanMessage,
+        });
+
+        setSubject("");
+        setMessage("");
+        setCategory("GENERAL");
+        setPriority("NORMAL");
+        await loadSupportCenter(fallbackTicket.id);
+        setUiMessage("Message sent to Admin Support.");
+        return;
+      }
+
+      await insertSupportMessage({
+        ticketId: ticketData.id,
+        profileId: profile.id,
+        role: "CUSTOMER",
+        email: profile.email,
+        text: cleanMessage,
+      });
+
+      setSubject("");
+      setMessage("");
+      setCategory("GENERAL");
+      setPriority("NORMAL");
+
+      await loadSupportCenter(ticketData.id);
+      setUiMessage("Message sent to Admin Support.");
+    } catch (error: any) {
+      setUiMessage(error?.message || "Failed to create support ticket.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function sendCustomerReply() {
+    if (!profile) return setUiMessage("Customer profile not found.");
+    if (!selectedTicket) return;
+    if (!replyMessage.trim()) return setUiMessage("Please enter your reply.");
+
+    try {
+      setSaving(true);
+      setUiMessage("");
+
+      const cleanReply = replyMessage.trim();
+      const now = new Date().toISOString();
+
+      await insertSupportMessage({
+        ticketId: selectedTicket.id,
+        profileId: profile.id,
+        role: "CUSTOMER",
+        email: profile.email,
+        text: cleanReply,
+      });
+
+      const { error: updateError } = await supabase
+        .from("support_tickets")
+        .update({
+          status: normalizeStatus(selectedTicket.status) === "CLOSED" ? "OPEN" : selectedTicket.status || "OPEN",
+          updated_at: now,
+        })
+        .eq("id", selectedTicket.id);
+
+      if (updateError) throw updateError;
+
+      setReplyMessage("");
+      await loadSupportCenter(selectedTicket.id);
+      setUiMessage("Reply sent to Admin Support.");
+    } catch (error: any) {
+      setUiMessage(error?.message || "Failed to send reply.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (loading) {
     return (
       <main className="min-h-screen bg-[#020b06] text-white flex items-center justify-center">
         <div className="rounded-3xl border border-amber-400/20 bg-white/5 px-8 py-6 text-amber-200">
-          Loading Admin Support...
+          Loading Customer Support Center...
         </div>
       </main>
     );
@@ -454,62 +370,59 @@ export default function CustomerSupportPage() {
         <section
           className="relative overflow-hidden rounded-[2rem] border border-emerald-300/20 bg-cover bg-center p-8 md:p-12"
           style={{
-            backgroundImage: `linear-gradient(90deg, rgba(2,11,6,.98), rgba(2,11,6,.66), rgba(2,11,6,.25)), url(${forestBg})`,
+            backgroundImage: `linear-gradient(90deg, rgba(2,11,6,.98), rgba(2,11,6,.72), rgba(2,11,6,.28)), url(${forestBg})`,
           }}
         >
           <div className="relative z-10 max-w-3xl">
             <p className="text-amber-300 text-sm font-bold tracking-[0.25em] uppercase">
-              Admin Support
+              Customer Support Center
             </p>
             <h1 className="mt-4 text-4xl md:text-5xl font-serif font-bold">
-              Live Support Center
+              Message Admin Support
             </h1>
             <p className="mt-4 text-white/85 max-w-xl">
-              Create a ticket, continue the same conversation, and receive replies from Admin Support.
+              Create a support request and continue the same Support Conversation
+              when Admin Support replies.
             </p>
             <p className="mt-3 text-sm text-white/60">
-              Customer: <span className="text-amber-200">{profile?.full_name || profile?.email || "Customer"}</span>
+              Customer:{" "}
+              <span className="text-amber-200">
+                {profile?.full_name || profile?.email || "Customer"}
+              </span>
             </p>
           </div>
         </section>
 
-        {uiError ? (
-          <section className="mt-5 rounded-2xl border border-red-400/40 bg-red-500/10 p-4 text-red-200">
-            {uiError}
+        {uiMessage ? (
+          <section className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-amber-100">
+            {uiMessage}
           </section>
         ) : null}
 
-        <section className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => selectTab(tab.key)}
-              className={`rounded-3xl border p-5 text-left transition ${
-                activeTab === tab.key
-                  ? "border-amber-400 bg-amber-400 text-black"
-                  : "border-white/10 bg-white/[0.04] text-white hover:border-amber-400/40"
-              }`}
-            >
-              <p className="text-sm font-bold">{tab.label}</p>
-              <p className="mt-3 text-4xl font-bold">{stats[tab.key]}</p>
-            </button>
-          ))}
+        <section className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <StatCard title="Open Support" value={openTickets.length} icon="💬" />
+          <StatCard title="Pending Support Reply" value={pendingSupportReply.length} icon="⏳" />
+          <StatCard title="Resolved Conversations" value={closedTickets.length} icon="✅" />
         </section>
 
-        <section className="mt-5 grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-5">
+        <section className="mt-5 grid grid-cols-1 lg:grid-cols-[430px_1fr] gap-5">
           <div className="space-y-5">
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-              <h2 className="font-bold text-lg">Create Ticket</h2>
-              <p className="text-white/60 text-sm">Start a new Admin Support conversation.</p>
+              <StepHeader
+                step="1"
+                title="Message Admin Support"
+                subtitle="Send your concern to the support team."
+              />
 
-              <div className="mt-5 space-y-4">
+              <div className="mt-6 space-y-4">
                 <label className="block">
                   <span className="text-sm font-semibold">Subject</span>
                   <input
                     className="mt-2 w-full rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
-                    placeholder="Example: Wallet cash-in concern"
                     value={subject}
                     onChange={(event) => setSubject(event.target.value)}
+                    placeholder="Example: Tree purchase concern"
+                    maxLength={120}
                   />
                 </label>
 
@@ -520,14 +433,12 @@ export default function CustomerSupportPage() {
                     value={category}
                     onChange={(event) => setCategory(event.target.value)}
                   >
-                    <option value="GENERAL">General</option>
-                    <option value="ACCOUNT">Account</option>
-                    <option value="WALLET">Wallet</option>
-                    <option value="TREE">Tree</option>
+                    <option value="GENERAL">General Support</option>
+                    <option value="WALLET">Wallet / Payment</option>
+                    <option value="TREE">Tree / Forest</option>
                     <option value="MARKETPLACE">Marketplace</option>
-                    <option value="TREE_OPERATIONS">Tree Operations</option>
-                    <option value="SELL_TREE">Sell Tree</option>
-                    <option value="CARE_PROGRAM">Care Program</option>
+                    <option value="KYC">KYC / Profile</option>
+                    <option value="PAYOUT">Withdrawal / Payout</option>
                   </select>
                 </label>
 
@@ -538,7 +449,6 @@ export default function CustomerSupportPage() {
                     value={priority}
                     onChange={(event) => setPriority(event.target.value)}
                   >
-                    <option value="LOW">Low</option>
                     <option value="NORMAL">Normal</option>
                     <option value="HIGH">High</option>
                     <option value="URGENT">Urgent</option>
@@ -546,15 +456,17 @@ export default function CustomerSupportPage() {
                 </label>
 
                 <label className="block">
-                  <span className="text-sm font-semibold">Message</span>
+                  <span className="text-sm font-semibold">Your Message</span>
                   <textarea
-                    className="mt-2 w-full min-h-32 rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
-                    placeholder="Tell Admin Support what happened..."
+                    className="mt-2 w-full min-h-36 rounded-xl bg-black/25 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
                     value={message}
-                    maxLength={1000}
                     onChange={(event) => setMessage(event.target.value)}
+                    placeholder="Type your message for Admin Support..."
+                    maxLength={1000}
                   />
-                  <p className="text-right text-xs text-white/50">{message.length} / 1000</p>
+                  <p className="mt-1 text-right text-xs text-white/45">
+                    {message.length} / 1000
+                  </p>
                 </label>
 
                 <button
@@ -562,17 +474,19 @@ export default function CustomerSupportPage() {
                   disabled={saving}
                   className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
                 >
-                  {saving ? "Saving..." : "Create Ticket"}
+                  {saving ? "Sending..." : "Send to Admin Support"}
                 </button>
               </div>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-bold text-lg">My Tickets</h2>
-                  <p className="text-white/60 text-sm">Open / In Progress / Closed tabs.</p>
-                </div>
+              <div className="flex items-center justify-between">
+                <StepHeader
+                  step="2"
+                  title="Your Support Requests"
+                  subtitle="Open a ticket to continue chatting."
+                />
+
                 <button
                   onClick={() => loadSupportCenter(selectedTicket?.id)}
                   disabled={saving}
@@ -582,15 +496,16 @@ export default function CustomerSupportPage() {
                 </button>
               </div>
 
-              <div className="mt-5 space-y-3 max-h-[620px] overflow-y-auto pr-1">
-                {filteredTickets.length === 0 ? (
+              <div className="mt-6 space-y-3 max-h-[520px] overflow-y-auto pr-1">
+                {tickets.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-white/60">
-                    No support tickets yet.
+                    No support requests yet.
                   </div>
                 ) : (
-                  filteredTickets.map((ticket) => {
-                    const last = (messages[ticket.id] || [])[messages[ticket.id]?.length - 1];
-                    const lastSender = normalizeSender(last);
+                  tickets.map((ticket) => {
+                    const latest = latestMessage(ticket, messages);
+                    const preview = latest?.message || ticket.message || "No message preview.";
+                    const waiting = needsSupportReply(ticket, messages);
 
                     return (
                       <button
@@ -606,20 +521,34 @@ export default function CustomerSupportPage() {
                           <div className="h-11 w-11 shrink-0 rounded-full border border-amber-400/40 bg-amber-500/10 text-amber-300 flex items-center justify-center font-bold">
                             {ticketIcon(ticket.status)}
                           </div>
+
                           <div className="min-w-0 flex-1">
-                            <p className="font-bold truncate">{ticket.subject || "Support Ticket"}</p>
-                            <p className="mt-1 text-xs text-white/60">
-                              {ticket.category || "GENERAL"} • {ticket.priority || "NORMAL"}
+                            <p className="font-bold truncate">
+                              {ticket.subject || "Support Conversation"}
                             </p>
-                            <p className="mt-1 text-xs text-white/50 truncate">
-                              {last ? (lastSender === "ADMIN" ? "Admin replied" : "Waiting for Admin Reply") : "Waiting for Admin Reply"}
+                            <p className="mt-1 text-xs text-white/55">
+                              {customerCategory(ticket.category)} • {customerPriority(ticket.priority)}
                             </p>
-                            <p className="mt-1 text-xs text-white/45">
+                            <p className="mt-2 text-sm text-white/80 line-clamp-2">
+                              {preview}
+                            </p>
+                            <p className="mt-2 text-xs text-white/45">
                               Updated {formatDate(ticket.updated_at || ticket.created_at)}
                             </p>
+
+                            {waiting ? (
+                              <p className="mt-2 w-fit rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1 text-xs font-bold text-amber-200">
+                                Pending Support Reply
+                              </p>
+                            ) : null}
                           </div>
-                          <span className={`shrink-0 text-xs px-3 py-1 rounded-full border ${statusBadge(ticket.status)}`}>
-                            {normalizeStatus(ticket.status)}
+
+                          <span
+                            className={`shrink-0 text-xs px-3 py-1 rounded-full border ${statusBadge(
+                              ticket.status
+                            )}`}
+                          >
+                            {customerStatus(ticket.status)}
                           </span>
                         </div>
                       </button>
@@ -633,55 +562,86 @@ export default function CustomerSupportPage() {
           <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
             {!selectedTicket ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-8 text-white/60">
-                Select a ticket to view the Conversation.
+                Select a support request to view your Support Conversation.
               </div>
             ) : (
               <div className="flex min-h-[760px] flex-col">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                  <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                     <div>
                       <p className="text-amber-300 text-xs font-bold tracking-[0.2em] uppercase">
-                        Conversation
+                        Support Conversation
                       </p>
-                      <h2 className="mt-2 text-2xl font-bold">{selectedTicket.subject || "Support Ticket"}</h2>
+                      <h2 className="mt-2 text-2xl font-bold">
+                        {selectedTicket.subject || "Support Request"}
+                      </h2>
                       <p className="mt-2 text-sm text-white/60">
-                        Admin Support • {selectedTicket.category || "GENERAL"} • {selectedTicket.priority || "NORMAL"}
+                        {customerCategory(selectedTicket.category)} •{" "}
+                        {customerPriority(selectedTicket.priority)}
                       </p>
-                      <p className="mt-2 text-sm text-emerald-300">{conversationState}</p>
                     </div>
-                    <span className={`w-fit text-xs px-4 py-2 rounded-xl border ${statusBadge(selectedTicket.status)}`}>
-                      {normalizeStatus(selectedTicket.status)}
+
+                    <span
+                      className={`w-fit text-xs px-4 py-2 rounded-xl border ${statusBadge(
+                        selectedTicket.status
+                      )}`}
+                    >
+                      {customerStatus(selectedTicket.status)}
                     </span>
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <InfoBox label="Support Status" value={customerStatus(selectedTicket.status)} />
+                    <InfoBox
+                      label="Reply State"
+                      value={
+                        needsSupportReply(selectedTicket, messages)
+                          ? "Pending Support Reply"
+                          : "Admin Support replied"
+                      }
+                    />
+                    <InfoBox
+                      label="Last Updated"
+                      value={formatDate(selectedTicket.updated_at || selectedTicket.created_at)}
+                    />
                   </div>
                 </div>
 
                 <div className="mt-5 flex-1 space-y-4 overflow-y-auto rounded-2xl border border-white/10 bg-black/20 p-5">
                   {selectedMessages.length === 0 ? (
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/60">
-                      No messages yet.
+                      No conversation messages yet.
                     </div>
                   ) : (
                     selectedMessages.map((msg) => {
                       const sender = normalizeSender(msg);
-                      const isCustomer = sender === "CUSTOMER";
+                      const isAdmin = sender === "ADMIN";
 
                       return (
                         <div
                           key={msg.id}
-                          className={`flex ${isCustomer ? "justify-end" : "justify-start"}`}
+                          className={`flex ${isAdmin ? "justify-start" : "justify-end"}`}
                         >
                           <div
                             className={`max-w-[85%] rounded-2xl border p-4 ${
-                              isCustomer
-                                ? "border-amber-400/25 bg-amber-500/10"
-                                : "border-emerald-400/25 bg-emerald-500/10"
+                              isAdmin
+                                ? "border-emerald-400/25 bg-emerald-500/10"
+                                : "border-amber-400/25 bg-amber-500/10"
                             }`}
                           >
-                            <p className={`text-sm font-bold ${isCustomer ? "text-amber-200" : "text-emerald-300"}`}>
-                              {isCustomer ? "You" : "Admin Support"}
+                            <p
+                              className={`text-sm font-bold ${
+                                isAdmin ? "text-emerald-300" : "text-amber-200"
+                              }`}
+                            >
+                              {isAdmin ? "Admin Support" : "You"}
                             </p>
-                            <p className="mt-2 whitespace-pre-wrap text-white/90">{msg.message}</p>
-                            <p className="mt-3 text-xs text-white/45">{formatDate(msg.created_at)}</p>
+                            <p className="mt-2 whitespace-pre-wrap text-white/90">
+                              {msg.message}
+                            </p>
+                            <p className="mt-3 text-xs text-white/45">
+                              {formatDate(msg.created_at)}
+                            </p>
                           </div>
                         </div>
                       );
@@ -690,34 +650,29 @@ export default function CustomerSupportPage() {
                 </div>
 
                 <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5">
-                  {normalizeStatus(selectedTicket.status) === "CLOSED" ? (
-                    <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white/70">
-                      This ticket is closed. Create a new ticket if you need more help.
-                    </div>
-                  ) : (
-                    <>
-                      <label className="block">
-                        <span className="text-sm font-bold">Send Message</span>
-                        <textarea
-                          className="mt-3 w-full min-h-28 rounded-xl bg-white/5 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
-                          placeholder="Type your message to Admin Support..."
-                          value={replyMessage}
-                          maxLength={1000}
-                          onChange={(event) => setReplyMessage(event.target.value)}
-                        />
-                        <p className="text-right text-xs text-white/50">{replyMessage.length} / 1000</p>
-                      </label>
+                  <label className="block">
+                    <span className="text-sm font-bold">Reply to Admin Support</span>
+                    <textarea
+                      className="mt-3 w-full min-h-32 rounded-xl bg-white/5 border border-white/10 px-4 py-3 outline-none focus:border-amber-400"
+                      placeholder="Type your reply..."
+                      value={replyMessage}
+                      maxLength={1000}
+                      onChange={(event) => setReplyMessage(event.target.value)}
+                    />
+                    <p className="text-right text-xs text-white/50">
+                      {replyMessage.length} / 1000
+                    </p>
+                  </label>
 
-                      <button
-                        onClick={sendCustomerMessage}
-                        disabled={saving}
-                        className="mt-3 w-full md:w-72 float-right rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
-                      >
-                        {saving ? "Sending..." : "Send Message"}
-                      </button>
-                      <div className="clear-both" />
-                    </>
-                  )}
+                  <button
+                    onClick={sendCustomerReply}
+                    disabled={saving}
+                    className="mt-3 w-full md:w-72 float-right rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
+                  >
+                    {saving ? "Sending..." : "Send Reply"}
+                  </button>
+
+                  <div className="clear-both" />
                 </div>
               </div>
             )}
@@ -725,6 +680,61 @@ export default function CustomerSupportPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function StepHeader({
+  step,
+  title,
+  subtitle,
+}: {
+  step: string;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="h-9 w-9 rounded-full border border-amber-400 text-amber-300 flex items-center justify-center font-bold">
+        {step}
+      </div>
+      <div>
+        <h2 className="font-bold text-lg">{title}</h2>
+        <p className="text-white/60 text-sm">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string;
+  value: number;
+  icon: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+      <div className="flex items-center gap-3">
+        <div className="h-11 w-11 rounded-2xl bg-emerald-500/15 flex items-center justify-center text-xl">
+          {icon}
+        </div>
+        <p className="text-sm font-semibold text-white/85">{title}</p>
+      </div>
+      <p className="mt-4 text-4xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function InfoBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <p className="text-xs uppercase tracking-[0.18em] text-white/45 font-bold">
+        {label}
+      </p>
+      <p className="mt-2 text-white/90 font-bold break-words">{value}</p>
+    </div>
   );
 }
 
@@ -738,15 +748,65 @@ function normalizeStatus(status?: string | null): TicketStatus {
 }
 
 function normalizeSender(message?: SupportMessage | null) {
-  const role = String(message?.sender_role || message?.sender_type || "CUSTOMER").trim().toUpperCase();
+  const role = String(message?.sender_role || message?.sender_type || "CUSTOMER")
+    .trim()
+    .toUpperCase();
+
   return role === "ADMIN" ? "ADMIN" : "CUSTOMER";
+}
+
+function latestMessage(ticket: Ticket, messages: Record<string, SupportMessage[]>) {
+  const thread = messages[ticket.id] || [];
+  return thread[thread.length - 1] || null;
+}
+
+function needsSupportReply(ticket: Ticket, messages: Record<string, SupportMessage[]>) {
+  if (normalizeStatus(ticket.status) === "CLOSED") return false;
+  const latest = latestMessage(ticket, messages);
+  if (!latest) return true;
+  return normalizeSender(latest) === "CUSTOMER";
+}
+
+function customerStatus(status?: string | null) {
+  const s = normalizeStatus(status);
+
+  if (s === "CLOSED") return "Resolved";
+  if (s === "IN_PROGRESS") return "Admin Support Reviewing";
+
+  return "Pending Support Reply";
+}
+
+function customerCategory(category?: string | null) {
+  const clean = String(category || "GENERAL").toUpperCase();
+
+  const labels: Record<string, string> = {
+    GENERAL: "General Support",
+    WALLET: "Wallet / Payment",
+    TREE: "Tree / Forest",
+    MARKETPLACE: "Marketplace",
+    KYC: "KYC / Profile",
+    PAYOUT: "Withdrawal / Payout",
+  };
+
+  return labels[clean] || "General Support";
+}
+
+function customerPriority(priority?: string | null) {
+  const clean = String(priority || "NORMAL").toUpperCase();
+
+  if (clean === "URGENT") return "Urgent";
+  if (clean === "HIGH") return "High Priority";
+
+  return "Normal Priority";
 }
 
 function statusBadge(status?: string | null) {
   const s = normalizeStatus(status);
 
   if (s === "CLOSED") return "bg-white/10 text-white/70 border-white/20";
-  if (s === "IN_PROGRESS") return "bg-green-500/15 text-green-300 border-green-400/30";
+  if (s === "IN_PROGRESS") {
+    return "bg-green-500/15 text-green-300 border-green-400/30";
+  }
 
   return "bg-amber-500/15 text-amber-300 border-amber-400/40";
 }
@@ -754,7 +814,7 @@ function statusBadge(status?: string | null) {
 function ticketIcon(status?: string | null) {
   const s = normalizeStatus(status);
   if (s === "CLOSED") return "✓";
-  if (s === "IN_PROGRESS") return "⌁";
+  if (s === "IN_PROGRESS") return "💬";
   return "!";
 }
 

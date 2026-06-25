@@ -6,10 +6,9 @@ import { supabase } from "@/lib/supabase";
 type TreePurchaseRequest = {
   id: string;
   profile_id: string | null;
-  tree_type: string | null;
-  quantity: number | null;
-  unit_price: number | null;
-  total_amount: number | null;
+  tree_id: string | null;
+  tree_code: string | null;
+  purchase_price: number | null;
   status: string | null;
   created_at: string | null;
 };
@@ -24,6 +23,18 @@ type WalletRow = {
   id: string;
   profile_id: string | null;
   balance: number | null;
+  created_at: string | null;
+};
+
+type TreeRow = {
+  id: string;
+  profile_id: string | null;
+  customer_profile_id: string | null;
+  tree_code: string | null;
+  display_name: string | null;
+  custom_name: string | null;
+  purchase_price: number | null;
+  status: string | null;
   created_at: string | null;
 };
 
@@ -48,9 +59,7 @@ export default function AdminTreePurchasesPage() {
 
     const { data: requestRows, error: requestError } = await supabase
       .from("tree_purchase_requests")
-      .select(
-        "id, profile_id, tree_type, quantity, unit_price, total_amount, status, created_at"
-      )
+      .select("id, profile_id, tree_id, tree_code, purchase_price, status, created_at")
       .order("created_at", { ascending: false });
 
     if (requestError) {
@@ -124,12 +133,12 @@ export default function AdminTreePurchasesPage() {
   }, [tab, requests, pendingRequests, approvedRequests, rejectedRequests]);
 
   const pendingAmount = pendingRequests.reduce(
-    (sum, request) => sum + Number(request.total_amount || 0),
+    (sum, request) => sum + Number(request.purchase_price || 0),
     0
   );
 
   const approvedAmount = approvedRequests.reduce(
-    (sum, request) => sum + Number(request.total_amount || 0),
+    (sum, request) => sum + Number(request.purchase_price || 0),
     0
   );
 
@@ -141,7 +150,7 @@ export default function AdminTreePurchasesPage() {
     return wallets.find((wallet) => wallet.profile_id === profileId) || null;
   }
 
-  function formatMoney(value: number | null) {
+  function formatMoney(value: number | null | undefined) {
     return Number(value || 0).toLocaleString("en-PH", {
       style: "currency",
       currency: "PHP",
@@ -174,10 +183,74 @@ export default function AdminTreePurchasesPage() {
     return "border-yellow-400/30 bg-yellow-500/20 text-yellow-200";
   }
 
-  function buildTreeCode(index: number) {
-    const timestamp = Date.now().toString().slice(-8);
-    const suffix = String(index + 1).padStart(3, "0");
-    return `ARG-${timestamp}-${suffix}`;
+  function buildTreeCode() {
+    const timestamp = Date.now().toString(16).toUpperCase();
+    const random = Math.random().toString(16).slice(2, 8).toUpperCase();
+    return `AGW-${timestamp}${random}`.slice(0, 18);
+  }
+
+  async function cleanupApprovalRollback(params: {
+    requestId: string;
+    createdTreeId?: string;
+    linkedTreeId?: string | null;
+  }) {
+    if (params.createdTreeId) {
+      await supabase.from("trees").delete().eq("id", params.createdTreeId);
+    }
+
+    if (params.linkedTreeId) {
+      await supabase
+        .from("trees")
+        .update({ status: "PENDING" })
+        .eq("id", params.linkedTreeId);
+    }
+
+    await supabase
+      .from("tree_purchase_requests")
+      .update({ status: "PENDING" })
+      .eq("id", params.requestId);
+
+    await supabase
+      .from("wallet_transactions")
+      .delete()
+      .eq("reference_no", params.requestId);
+
+    await supabase
+      .from("platform_treasury")
+      .delete()
+      .eq("reference_no", params.requestId);
+  }
+
+  async function insertTreasury(request: TreePurchaseRequest, amount: number) {
+    const basePayload: Record<string, any> = {
+      source: "TREE_PURCHASE",
+      source_type: "TREE_PURCHASE",
+      source_id: request.id,
+      reference_no: request.id,
+      profile_id: request.profile_id,
+      customer_profile_id: request.profile_id,
+      amount,
+      status: "POSTED",
+      created_at: new Date().toISOString(),
+    };
+
+    const fullPayload = {
+      ...basePayload,
+      reference_id: request.id,
+      description: `Tree purchase approved: ${request.tree_code || request.id}`,
+    };
+
+    const { error: fullError } = await supabase
+      .from("platform_treasury")
+      .insert(fullPayload);
+
+    if (!fullError) return null;
+
+    const { error: fallbackError } = await supabase
+      .from("platform_treasury")
+      .insert(basePayload);
+
+    return fallbackError || fullError;
   }
 
   async function approveRequest(request: TreePurchaseRequest) {
@@ -186,89 +259,127 @@ export default function AdminTreePurchasesPage() {
       return;
     }
 
-    const quantity = Math.max(1, Number(request.quantity || 1));
-    const totalAmount = Number(request.total_amount || 0);
+    const amount = Math.abs(Number(request.purchase_price || 0));
 
-    if (totalAmount <= 0) {
+    if (amount <= 0) {
       setMessage("Invalid tree purchase amount.");
       return;
     }
 
-    const confirmed = window.confirm(
-      `Approve this tree purchase and assign ${quantity} tree record(s)?`
-    );
-
+    const confirmed = window.confirm("Approve this tree purchase request?");
     if (!confirmed) return;
 
     setActionLoading(request.id);
     setMessage("");
 
-    const wallet = getLatestWallet(request.profile_id);
+    let finalTree: TreeRow | null = null;
+    let createdTreeId = "";
 
-    const treesToInsert = Array.from({ length: quantity }).map((_, index) => {
-      const treeCode = buildTreeCode(index);
+    try {
+      const wallet = getLatestWallet(request.profile_id);
 
-      return {
-        profile_id: request.profile_id,
-        tree_code: treeCode,
-        custom_name: treeCode,
-        display_name: request.tree_type || "Arganwood Tree",
-        tree_type: request.tree_type || "Arganwood Tree",
-        stage: "NEW",
-        growth_stage: "NEW",
-        current_stage: "NEW",
-        status: "ACTIVE",
-      };
-    });
+      if (!wallet) {
+        throw new Error("Customer wallet not found.");
+      }
 
-    const { error: treeError } = await supabase.from("trees").insert(treesToInsert);
+      const finalTreeCode = request.tree_code || buildTreeCode();
 
-    if (treeError) {
-      setMessage(treeError.message);
-      setActionLoading("");
-      return;
-    }
+      if (request.tree_id) {
+        const { data: updatedTree, error: treeUpdateError } = await supabase
+          .from("trees")
+          .update({
+            status: "ACTIVE",
+            purchase_price: amount,
+            tree_code: finalTreeCode,
+          })
+          .eq("id", request.tree_id)
+          .select(
+            "id, profile_id, customer_profile_id, tree_code, display_name, custom_name, purchase_price, status, created_at"
+          )
+          .single();
 
-    const { error: requestError } = await supabase
-      .from("tree_purchase_requests")
-      .update({
-        status: "APPROVED",
-      })
-      .eq("id", request.id);
+        if (treeUpdateError) throw treeUpdateError;
+        finalTree = updatedTree as TreeRow;
+      } else {
+        const { data: insertedTree, error: treeInsertError } = await supabase
+          .from("trees")
+          .insert({
+            profile_id: request.profile_id,
+            customer_profile_id: request.profile_id,
+            tree_code: finalTreeCode,
+            display_name: "Arganwood Tree",
+            custom_name: finalTreeCode,
+            purchase_price: amount,
+            status: "ACTIVE",
+          })
+          .select(
+            "id, profile_id, customer_profile_id, tree_code, display_name, custom_name, purchase_price, status, created_at"
+          )
+          .single();
 
-    if (requestError) {
-      setMessage(requestError.message);
-      setActionLoading("");
-      return;
-    }
+        if (treeInsertError) throw treeInsertError;
 
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "TREE_PURCHASE_APPROVED",
-      amount: -Math.abs(totalAmount),
-      reference_no: request.id,
-      status: "APPROVED",
-      description: `Tree purchase approved: ${quantity} ${
-        request.tree_type || "Arganwood Tree"
-      }. Platform/Admin received ${formatMoney(totalAmount)}.`,
-    });
+        finalTree = insertedTree as TreeRow;
+        createdTreeId = finalTree.id;
+      }
 
-    if (txError) {
-      setMessage(`Approved, but wallet transaction log failed: ${txError.message}`);
+      if (!finalTree?.id) {
+        throw new Error("Tree approval failed. No tree record returned.");
+      }
+
+      const { error: requestUpdateError } = await supabase
+        .from("tree_purchase_requests")
+        .update({
+          status: "APPROVED",
+          tree_id: finalTree.id,
+          tree_code: finalTree.tree_code || finalTreeCode,
+        })
+        .eq("id", request.id);
+
+      if (requestUpdateError) throw requestUpdateError;
+
+      const { error: txError } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          profile_id: request.profile_id,
+          transaction_type: "TREE_PURCHASE_APPROVED",
+          amount: -Math.abs(amount),
+          reference_no: request.id,
+          description: `Tree purchase approved: ${
+            finalTree.tree_code || finalTreeCode
+          } for ${formatMoney(amount)}.`,
+          status: "COMPLETED",
+          created_at: new Date().toISOString(),
+        });
+
+      if (txError) throw txError;
+
+      const treasuryError = await insertTreasury(request, amount);
+
+      if (treasuryError) {
+        throw new Error(`Treasury sync failed: ${treasuryError.message}`);
+      }
+
+      setMessage(
+        `Tree purchase approved. Tree ${
+          finalTree.tree_code || finalTreeCode
+        } activated and treasury posted ${formatMoney(amount)}.`
+      );
+
       setActionLoading("");
       await loadData();
-      return;
+      setTab("PENDING");
+    } catch (error: any) {
+      await cleanupApprovalRollback({
+        requestId: request.id,
+        createdTreeId,
+        linkedTreeId: request.tree_id,
+      });
+
+      setMessage(error?.message || "Approval failed. Rollback completed.");
+      setActionLoading("");
+      await loadData();
     }
-
-    setMessage(
-      `Tree purchase approved. ${quantity} tree(s) created and platform/admin received ${formatMoney(
-        totalAmount
-      )}.`
-    );
-
-    setActionLoading("");
-    await loadData();
-    setTab("PENDING");
   }
 
   async function rejectRequest(request: TreePurchaseRequest) {
@@ -296,22 +407,25 @@ export default function AdminTreePurchasesPage() {
       return;
     }
 
-    const { error: txError } = await supabase.from("wallet_transactions").insert({
-      profile_id: request.profile_id,
-      transaction_type: "TREE_PURCHASE_REJECTED",
-      amount: 0,
-      reference_no: request.id,
-      status: "REJECTED",
-      description: `Tree purchase rejected: ${
-        request.tree_type || "Arganwood Tree"
-      }. No tree assigned.`,
-    });
+    if (request.profile_id) {
+      const { error: txError } = await supabase.from("wallet_transactions").insert({
+        profile_id: request.profile_id,
+        transaction_type: "TREE_PURCHASE_REJECTED",
+        amount: 0,
+        reference_no: request.id,
+        status: "REJECTED",
+        description: `Tree purchase rejected: ${
+          request.tree_code || request.id
+        }. No tree activated.`,
+        created_at: new Date().toISOString(),
+      });
 
-    if (txError) {
-      setMessage(`Rejected, but transaction log failed: ${txError.message}`);
-      setActionLoading("");
-      await loadData();
-      return;
+      if (txError) {
+        setMessage(`Rejected, but transaction log failed: ${txError.message}`);
+        setActionLoading("");
+        await loadData();
+        return;
+      }
     }
 
     setMessage("Tree purchase rejected and moved to rejected history.");
@@ -334,8 +448,7 @@ export default function AdminTreePurchasesPage() {
             </h1>
 
             <p className="mt-2 text-white/70">
-              Review pending tree purchases. Approved and rejected requests move
-              to history logs.
+              One approved request activates one tree and posts wallet plus treasury records.
             </p>
           </div>
 
@@ -359,7 +472,7 @@ export default function AdminTreePurchasesPage() {
           <StatCard label="Approved" value={String(approvedRequests.length)} />
           <StatCard label="Rejected" value={String(rejectedRequests.length)} />
           <StatCard label="Pending Value" value={formatMoney(pendingAmount)} />
-          <StatCard label="Admin Received" value={formatMoney(approvedAmount)} />
+          <StatCard label="Treasury Posted" value={formatMoney(approvedAmount)} />
         </section>
 
         <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
@@ -388,23 +501,20 @@ export default function AdminTreePurchasesPage() {
 
         <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
           {loading ? (
-            <div className="p-8 text-white/70">
-              Loading tree purchase requests...
-            </div>
+            <div className="p-8 text-white/70">Loading tree purchase requests...</div>
           ) : activeRequests.length === 0 ? (
             <div className="p-8 text-white/70">
               No tree purchase requests found in this tab.
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1200px] text-left text-sm">
+              <table className="w-full min-w-[1100px] text-left text-sm">
                 <thead className="bg-[#071f16]/80 text-white/70">
                   <tr>
                     <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Tree Type</th>
-                    <th className="px-5 py-4">Quantity</th>
-                    <th className="px-5 py-4">Unit Price</th>
-                    <th className="px-5 py-4">Total</th>
+                    <th className="px-5 py-4">Tree Identifier</th>
+                    <th className="px-5 py-4">Linked Tree</th>
+                    <th className="px-5 py-4">Amount</th>
                     <th className="px-5 py-4">Wallet Balance</th>
                     <th className="px-5 py-4">Status</th>
                     <th className="px-5 py-4">Created</th>
@@ -433,20 +543,16 @@ export default function AdminTreePurchasesPage() {
                           </div>
                         </td>
 
-                        <td className="px-5 py-4">
-                          {request.tree_type || "Arganwood Tree"}
+                        <td className="px-5 py-4 font-semibold text-[#f7d774]">
+                          {request.tree_code || "Will generate on approval"}
                         </td>
 
-                        <td className="px-5 py-4">
-                          {Number(request.quantity || 1)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {formatMoney(request.unit_price)}
+                        <td className="px-5 py-4 text-white/70">
+                          {request.tree_id ? "Linked existing tree" : "Create new tree"}
                         </td>
 
                         <td className="px-5 py-4 font-bold text-[#f7d774]">
-                          {formatMoney(request.total_amount)}
+                          {formatMoney(request.purchase_price)}
                         </td>
 
                         <td className="px-5 py-4 text-white/80">
@@ -475,9 +581,7 @@ export default function AdminTreePurchasesPage() {
                                 disabled={actionLoading === request.id}
                                 className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
                               >
-                                {actionLoading === request.id
-                                  ? "Working..."
-                                  : "Approve"}
+                                {actionLoading === request.id ? "Working..." : "Approve"}
                               </button>
 
                               <button
@@ -489,9 +593,7 @@ export default function AdminTreePurchasesPage() {
                               </button>
                             </div>
                           ) : (
-                            <span className="text-xs text-white/50">
-                              Completed
-                            </span>
+                            <span className="text-xs text-white/50">Completed</span>
                           )}
                         </td>
                       </tr>

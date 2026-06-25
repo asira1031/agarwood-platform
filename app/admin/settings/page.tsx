@@ -3,52 +3,30 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type SettingRow = Record<string, any>;
+type PlatformSettings = {
+  id: string;
+  platform_fee_percent: number | string;
+  withdrawal_fee_percent: number | string;
+  tree_sale_fee_percent: number | string;
+  auto_renew_enabled: boolean;
+  support_email: string;
+  support_mobile: string;
+  updated_at?: string | null;
+};
 
-const DEFAULT_SETTINGS = [
-  {
-    key: "platform_fee_percent",
-    label: "Platform Fee %",
-    value: "2",
-    description: "Default platform fee for sell tree, operations, and marketplace revenue.",
-  },
-  {
-    key: "withdrawal_fee_percent",
-    label: "Withdrawal Fee %",
-    value: "2",
-    description: "Default withdrawal processing fee.",
-  },
-  {
-    key: "tree_sale_fee_percent",
-    label: "Tree Sale Fee %",
-    value: "2",
-    description: "Fee deducted when customer sells a tree.",
-  },
-  {
-    key: "auto_renew_enabled",
-    label: "Auto Renew Enabled",
-    value: "false",
-    description: "Controls care program auto-renew display and future automation.",
-  },
-  {
-    key: "support_email",
-    label: "Support Email",
-    value: "support@arganwood.com",
-    description: "Primary customer support email.",
-  },
-  {
-    key: "support_mobile",
-    label: "Support Mobile",
-    value: "",
-    description: "Primary customer support mobile number.",
-  },
-];
+const DEFAULT_SETTINGS = {
+  platform_fee_percent: 2,
+  withdrawal_fee_percent: 2,
+  tree_sale_fee_percent: 2,
+  auto_renew_enabled: true,
+  support_email: "support@arganwood.com",
+  support_mobile: "",
+};
 
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<Record<string, string>>({});
-  const [rows, setRows] = useState<SettingRow[]>([]);
+  const [settings, setSettings] = useState<PlatformSettings | null>(null);
   const [loading, setLoading] = useState(true);
-  const [savingKey, setSavingKey] = useState("");
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -60,102 +38,84 @@ export default function AdminSettingsPage() {
     setMessage("");
 
     const { data, error } = await supabase
-      .from("admin_settings")
+      .from("platform_settings")
       .select("*")
-      .order("created_at", { ascending: true });
+      .order("updated_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
     if (error) {
-      setMessage(
-        "admin_settings table not found or not readable. Create the table first if needed."
-      );
-      setRows([]);
-      const fallback: Record<string, string> = {};
-      DEFAULT_SETTINGS.forEach((item) => {
-        fallback[item.key] = item.value;
-      });
-      setSettings(fallback);
+      setMessage(error.message);
       setLoading(false);
       return;
     }
 
-    const nextSettings: Record<string, string> = {};
+    if (!data) {
+      const { data: inserted, error: insertError } = await supabase
+        .from("platform_settings")
+        .insert({
+          ...DEFAULT_SETTINGS,
+          updated_at: new Date().toISOString(),
+        })
+        .select("*")
+        .single();
 
-    DEFAULT_SETTINGS.forEach((item) => {
-      const found = (data || []).find(
-        (row) =>
-          row.setting_key === item.key ||
-          row.key === item.key ||
-          row.name === item.key
-      );
+      if (insertError) {
+        setMessage(insertError.message);
+        setLoading(false);
+        return;
+      }
 
-      nextSettings[item.key] = String(
-        found?.setting_value ?? found?.value ?? item.value
-      );
-    });
+      setSettings(inserted);
+      setLoading(false);
+      return;
+    }
 
-    setRows(data || []);
-    setSettings(nextSettings);
+    setSettings(data);
     setLoading(false);
   }
 
-  async function saveSetting(item: (typeof DEFAULT_SETTINGS)[number]) {
-    setSavingKey(item.key);
-    setMessage("");
-
-    const value = settings[item.key] ?? "";
-
-    const existing = rows.find(
-      (row) =>
-        row.setting_key === item.key ||
-        row.key === item.key ||
-        row.name === item.key
-    );
-
-    if (existing?.id) {
-      const { error } = await supabase
-        .from("admin_settings")
-        .update({
-          setting_value: value,
-          value,
-          description: item.description,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id);
-
-      if (error) {
-        setMessage(error.message);
-        setSavingKey("");
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("admin_settings").insert({
-        setting_key: item.key,
-        setting_value: value,
-        key: item.key,
-        value,
-        description: item.description,
-      });
-
-      if (error) {
-        setMessage(error.message);
-        setSavingKey("");
-        return;
-      }
-    }
-
-    setMessage(`${item.label} saved.`);
-    setSavingKey("");
-    await loadSettings();
+  function updateField<K extends keyof PlatformSettings>(
+    key: K,
+    value: PlatformSettings[K]
+  ) {
+    setSettings((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        [key]: value,
+      };
+    });
   }
 
-  async function saveAll() {
+  async function saveSettings() {
+    if (!settings?.id) return;
+
+    setSaving(true);
     setMessage("");
 
-    for (const item of DEFAULT_SETTINGS) {
-      await saveSetting(item);
+    const { error } = await supabase
+      .from("platform_settings")
+      .update({
+        platform_fee_percent: Number(settings.platform_fee_percent || 0),
+        withdrawal_fee_percent: Number(settings.withdrawal_fee_percent || 0),
+        tree_sale_fee_percent: Number(settings.tree_sale_fee_percent || 0),
+        auto_renew_enabled: Boolean(settings.auto_renew_enabled),
+        support_email: settings.support_email || "support@arganwood.com",
+        support_mobile: settings.support_mobile || "",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", settings.id);
+
+    if (error) {
+      setMessage(error.message);
+      setSaving(false);
+      return;
     }
 
-    setMessage("All settings saved.");
+    setMessage("Platform settings saved.");
+    setSaving(false);
+    await loadSettings();
   }
 
   return (
@@ -172,25 +132,26 @@ export default function AdminSettingsPage() {
             </h1>
 
             <p className="mt-2 text-white/70">
-              Manage fee percentages, support contact info, and auto-renew controls.
+              Manage platform fees, withdrawal fees, tree sale fees, auto-renew,
+              and support contact details.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
             <button
               onClick={loadSettings}
-              disabled={loading}
+              disabled={loading || saving}
               className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
             >
               {loading ? "Refreshing..." : "Refresh"}
             </button>
 
             <button
-              onClick={saveAll}
-              disabled={loading}
+              onClick={saveSettings}
+              disabled={loading || saving || !settings}
               className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-sm font-black text-[#071f16] disabled:opacity-50"
             >
-              Save All
+              {saving ? "Saving..." : "Save Settings"}
             </button>
           </div>
         </div>
@@ -203,95 +164,121 @@ export default function AdminSettingsPage() {
 
         {loading ? (
           <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            Loading settings...
+            Loading platform settings...
+          </div>
+        ) : !settings ? (
+          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-8 text-red-100">
+            Unable to load platform settings.
           </div>
         ) : (
           <section className="grid gap-5 lg:grid-cols-2">
-            {DEFAULT_SETTINGS.map((item) => {
-              const isBoolean = item.key.includes("enabled");
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Platform Fee %
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Default platform fee for revenue-generating transactions.
+              </p>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={settings.platform_fee_percent}
+                onChange={(e) =>
+                  updateField("platform_fee_percent", e.target.value)
+                }
+                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+            </div>
 
-              return (
-                <div
-                  key={item.key}
-                  className="rounded-3xl border border-white/10 bg-white/[0.06] p-6"
-                >
-                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <h2 className="text-xl font-bold text-[#ffe49a]">
-                        {item.label}
-                      </h2>
-                      <p className="mt-2 text-sm text-white/60">
-                        {item.description}
-                      </p>
-                      <p className="mt-2 text-xs text-white/40">
-                        Key: {item.key}
-                      </p>
-                    </div>
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Withdrawal Fee %
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Processing fee deducted from withdrawal requests.
+              </p>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={settings.withdrawal_fee_percent}
+                onChange={(e) =>
+                  updateField("withdrawal_fee_percent", e.target.value)
+                }
+                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+            </div>
 
-                    <button
-                      onClick={() => saveSetting(item)}
-                      disabled={savingKey === item.key}
-                      className="rounded-xl bg-[#d9b45f] px-4 py-2 text-sm font-black text-[#071f16] disabled:opacity-50"
-                    >
-                      {savingKey === item.key ? "Saving..." : "Save"}
-                    </button>
-                  </div>
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Tree Sale Fee %
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Fee deducted when a customer sells a tree.
+              </p>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={settings.tree_sale_fee_percent}
+                onChange={(e) =>
+                  updateField("tree_sale_fee_percent", e.target.value)
+                }
+                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+              />
+            </div>
 
-                  {isBoolean ? (
-                    <select
-                      value={settings[item.key] || item.value}
-                      onChange={(e) =>
-                        setSettings((current) => ({
-                          ...current,
-                          [item.key]: e.target.value,
-                        }))
-                      }
-                      className="mt-5 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
-                    >
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input
-                      value={settings[item.key] || ""}
-                      onChange={(e) =>
-                        setSettings((current) => ({
-                          ...current,
-                          [item.key]: e.target.value,
-                        }))
-                      }
-                      className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
-                      placeholder={item.value}
-                    />
-                  )}
-                </div>
-              );
-            })}
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Auto Renew Enabled
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Controls global care program auto-renew availability.
+              </p>
+              <select
+                value={settings.auto_renew_enabled ? "true" : "false"}
+                onChange={(e) =>
+                  updateField("auto_renew_enabled", e.target.value === "true")
+                }
+                className="mt-5 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
+              >
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Support Email
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Primary customer support email.
+              </p>
+              <input
+                value={settings.support_email || ""}
+                onChange={(e) => updateField("support_email", e.target.value)}
+                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                placeholder="support@arganwood.com"
+              />
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
+              <h2 className="text-xl font-bold text-[#ffe49a]">
+                Support Mobile
+              </h2>
+              <p className="mt-2 text-sm text-white/60">
+                Primary customer support mobile number.
+              </p>
+              <input
+                value={settings.support_mobile || ""}
+                onChange={(e) => updateField("support_mobile", e.target.value)}
+                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                placeholder="+63..."
+              />
+            </div>
           </section>
         )}
-
-        <section className="rounded-3xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-6">
-          <h2 className="text-xl font-bold text-[#ffe49a]">
-            SQL Note
-          </h2>
-
-          <p className="mt-2 text-sm text-white/70">
-            If this page shows admin_settings table not found, create that table first.
-          </p>
-
-          <pre className="mt-4 overflow-auto rounded-2xl bg-black/30 p-4 text-xs text-white/70">
-{`create table if not exists admin_settings (
-  id uuid primary key default gen_random_uuid(),
-  setting_key text unique,
-  setting_value text,
-  key text,
-  value text,
-  description text,
-  created_at timestamptz default now(),
-  updated_at timestamptz default now()
-);`}
-          </pre>
-        </section>
       </div>
     </main>
   );

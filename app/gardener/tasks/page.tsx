@@ -17,6 +17,12 @@ type WorkItem = {
   evidenceStatus: string;
 };
 
+type InsertedEvidenceIds = {
+  photoIds: string[];
+  gpsIds: string[];
+  healthIds: string[];
+};
+
 const SERVICE_LABELS: Record<string, string> = {
   PHOTO_UPDATE: "Photo Update",
   GPS_VERIFICATION: "GPS Verification",
@@ -184,7 +190,8 @@ export default function GardenerTasksPage() {
     const caretakerRow = caretakerByProfile || caretakerByEmail;
 
     if (!caretakerRow) return fail("Gardener profile not found.");
-    if (statusOf(caretakerRow.status) !== "ACTIVE") return fail("Your gardener account is not ACTIVE.");
+    if (statusOf(caretakerRow.status) !== "ACTIVE")
+      return fail("Your gardener account is not ACTIVE.");
 
     setCaretaker(caretakerRow);
 
@@ -222,7 +229,10 @@ export default function GardenerTasksPage() {
 
     let requestRows: Row[] = [];
     if (requestIds.length) {
-      const { data } = await supabase.from("tree_operation_requests").select("*").in("id", requestIds);
+      const { data } = await supabase
+        .from("tree_operation_requests")
+        .select("*")
+        .in("id", requestIds);
       requestRows = data || [];
     }
 
@@ -247,7 +257,10 @@ export default function GardenerTasksPage() {
 
     let groupRows: Row[] = [];
     if (groupIds.length) {
-      const { data } = await supabase.from("tree_groups").select("*").in("id", groupIds);
+      const { data } = await supabase
+        .from("tree_groups")
+        .select("*")
+        .in("id", groupIds);
       groupRows = data || [];
     }
 
@@ -264,7 +277,10 @@ export default function GardenerTasksPage() {
 
     let customerRows: Row[] = [];
     if (customerIds.length) {
-      const { data } = await supabase.from("profiles").select("id, full_name, email").in("id", customerIds);
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, full_name, email")
+        .in("id", customerIds);
       customerRows = data || [];
     }
 
@@ -299,7 +315,11 @@ export default function GardenerTasksPage() {
     return assignments.map((assignment) => {
       const task =
         tasks.find((x) => String(x.assignment_id || "") === String(assignment.id)) ||
-        tasks.find((x) => String(x.operation_request_id || "") === String(assignment.operation_request_id || "")) ||
+        tasks.find(
+          (x) =>
+            String(x.operation_request_id || "") ===
+            String(assignment.operation_request_id || ""),
+        ) ||
         null;
 
       const request = assignment.operation_request_id
@@ -309,7 +329,8 @@ export default function GardenerTasksPage() {
       const treeId = assignment.tree_id || task?.tree_id || request?.tree_id;
       const tree = treeId ? treeMap.get(String(treeId)) || null : null;
 
-      const groupId = assignment.group_id || task?.group_id || request?.group_id || tree?.group_id;
+      const groupId =
+        assignment.group_id || task?.group_id || request?.group_id || tree?.group_id;
       const group = groupId ? groupMap.get(String(groupId)) || null : null;
 
       const customerId =
@@ -332,7 +353,12 @@ export default function GardenerTasksPage() {
         tree,
         group,
         customer,
-        status: statusOf(task?.status || assignment.status || request?.assignment_status || request?.status),
+        status: statusOf(
+          task?.status ||
+            assignment.status ||
+            request?.assignment_status ||
+            request?.status,
+        ),
         evidenceStatus: statusOf(task?.evidence_status || "PENDING"),
       };
     });
@@ -348,7 +374,8 @@ export default function GardenerTasksPage() {
 
   const visibleItems = useMemo(() => {
     if (filter === "ALL") return workItems;
-    if (filter === "ACTIVE") return workItems.filter((x) => !["COMPLETED", "CANCELLED"].includes(x.status));
+    if (filter === "ACTIVE")
+      return workItems.filter((x) => !["COMPLETED", "CANCELLED"].includes(x.status));
     return workItems.filter((x) => x.status === filter);
   }, [workItems, filter]);
 
@@ -364,7 +391,6 @@ export default function GardenerTasksPage() {
   const selectedService = serviceOf(selected);
   const rules = evidenceRules(selectedService);
   const isVerified = selected && verifiedKey === selected.key;
-
 
   function parseScannedTreeValue(raw: string) {
     const value = raw.trim();
@@ -441,7 +467,9 @@ export default function GardenerTasksPage() {
     const parsed = parseScannedTreeValue(raw);
     const scannedCode = parsed.treeCode.trim().toLowerCase();
     const scannedId = parsed.treeId.trim().toLowerCase();
-    const treeCode = String(item.tree?.tree_code || item.assignment.tree_code || item.request?.tree_code || "")
+    const treeCode = String(
+      item.tree?.tree_code || item.assignment.tree_code || item.request?.tree_code || "",
+    )
       .trim()
       .toLowerCase();
     const treeId = String(item.tree?.id || item.assignment.tree_id || item.request?.tree_id || "")
@@ -450,7 +478,10 @@ export default function GardenerTasksPage() {
 
     return {
       parsed,
-      matched: Boolean((scannedCode && treeCode && scannedCode === treeCode) || (scannedId && treeId && scannedId === treeId)),
+      matched: Boolean(
+        (scannedCode && treeCode && scannedCode === treeCode) ||
+          (scannedId && treeId && scannedId === treeId),
+      ),
     };
   }
 
@@ -484,7 +515,7 @@ export default function GardenerTasksPage() {
             setMessage("Wrong Tree / Tree mismatch. Evidence upload blocked.");
           }
         },
-        () => undefined
+        () => undefined,
       );
     } catch (error: any) {
       setScannerRunning(false);
@@ -625,7 +656,8 @@ export default function GardenerTasksPage() {
   function validateSubmission() {
     if (!selected || !caretaker) return "Work order not loaded.";
     if (!selected.assignment.id) return "Missing assignment_id.";
-    if (!(selected.assignment.operation_request_id || selected.request?.id)) return "Missing operation_request_id.";
+    if (!(selected.assignment.operation_request_id || selected.request?.id))
+      return "Missing operation_request_id.";
     if (!(selected.assignment.tree_id || selected.request?.tree_id)) return "Missing tree_id.";
     if (
       !(
@@ -640,6 +672,12 @@ export default function GardenerTasksPage() {
     }
     if (!caretaker.id) return "Missing caretaker_id.";
     if (!isVerified) return "Tree QR must be verified before evidence upload.";
+    if (["SUBMITTED", "COMPLETED", "CANCELLED"].includes(selected.status)) {
+      return `This work order is already ${selected.status.replaceAll("_", " ")}. Duplicate evidence is blocked.`;
+    }
+    if (selected.evidenceStatus === "SUBMITTED") {
+      return "Evidence was already submitted for this task. Duplicate evidence is blocked.";
+    }
     if (rules.photo && !currentPhoto) return "Current photo is required.";
     if (rules.before && !beforePhoto) return "Before photo is required.";
     if (rules.after && !afterPhoto) return "After photo is required.";
@@ -649,17 +687,9 @@ export default function GardenerTasksPage() {
     return "";
   }
 
-  async function submitWork() {
-    const validationError = validateSubmission();
-    if (validationError || !selected || !caretaker) {
-      setMessage(validationError);
-      return;
-    }
+  function getSubmissionCore() {
+    if (!selected || !caretaker) throw new Error("Work order not loaded.");
 
-    setSaving(true);
-    setMessage("");
-
-    const now = new Date().toISOString();
     const operationRequestId = selected.assignment.operation_request_id || selected.request?.id;
     const treeId = selected.assignment.tree_id || selected.request?.tree_id;
     const customerProfileId =
@@ -669,65 +699,101 @@ export default function GardenerTasksPage() {
       selected.tree?.customer_profile_id ||
       selected.tree?.profile_id;
 
+    if (!selected.assignment.id) throw new Error("Missing assignment_id.");
+    if (!operationRequestId) throw new Error("Missing operation_request_id.");
+    if (!treeId) throw new Error("Missing tree_id.");
+    if (!customerProfileId) throw new Error("Missing customer_profile_id.");
+    if (!caretaker.id) throw new Error("Missing caretaker_id.");
+
+    return {
+      assignmentId: selected.assignment.id,
+      operationRequestId,
+      treeId,
+      customerProfileId,
+    };
+  }
+
+  async function getExistingEvidenceCounts(assignmentId: string) {
+    const [photoResult, gpsResult, healthResult] = await Promise.all([
+      supabase
+        .from("tree_photo_updates")
+        .select("id", { count: "exact" })
+        .eq("assignment_id", assignmentId)
+        .limit(1),
+      supabase
+        .from("tree_gps_logs")
+        .select("id", { count: "exact" })
+        .eq("assignment_id", assignmentId)
+        .limit(1),
+      supabase
+        .from("tree_health_reports")
+        .select("id", { count: "exact" })
+        .eq("assignment_id", assignmentId)
+        .limit(1),
+    ]);
+
+    if (photoResult.error) throw photoResult.error;
+    if (gpsResult.error) throw gpsResult.error;
+    if (healthResult.error) throw healthResult.error;
+
+    return {
+      photos: photoResult.count || 0,
+      gps: gpsResult.count || 0,
+      health: healthResult.count || 0,
+      total: (photoResult.count || 0) + (gpsResult.count || 0) + (healthResult.count || 0),
+    };
+  }
+
+  async function rollbackInsertedEvidence(inserted: InsertedEvidenceIds) {
+    const cleanups: Promise<any>[] = [];
+
+    if (inserted.photoIds.length > 0) {
+      cleanups.push(
+        supabase.from("tree_photo_updates").delete().in("id", inserted.photoIds),
+      );
+    }
+
+    if (inserted.gpsIds.length > 0) {
+      cleanups.push(supabase.from("tree_gps_logs").delete().in("id", inserted.gpsIds));
+    }
+
+    if (inserted.healthIds.length > 0) {
+      cleanups.push(
+        supabase.from("tree_health_reports").delete().in("id", inserted.healthIds),
+      );
+    }
+
+    if (cleanups.length === 0) return;
+
+    const results = await Promise.allSettled(cleanups);
+    const failed = results.find((result) => result.status === "rejected");
+
+    if (failed) {
+      console.error("Evidence rollback had a rejected cleanup:", failed);
+    }
+  }
+
+  async function syncSubmissionStatuses(args: {
+    now: string;
+    operationRequestId: string;
+    treeId: string;
+    customerProfileId: string;
+  }) {
+    if (!selected || !caretaker) throw new Error("Work order not loaded.");
+
+    let createdTaskId: string | null = null;
+    const previousTaskSnapshot = selected.task?.id
+      ? {
+          id: selected.task.id,
+          status: selected.task.status || null,
+          evidence_status: selected.task.evidence_status || null,
+          notes: selected.task.notes || null,
+          submitted_at: selected.task.submitted_at || null,
+          updated_at: selected.task.updated_at || null,
+        }
+      : null;
+
     try {
-      const currentPhotoUrl = await uploadEvidenceFile(currentPhoto, "current");
-      const beforePhotoUrl = await uploadEvidenceFile(beforePhoto, "before");
-      const afterPhotoUrl = await uploadEvidenceFile(afterPhoto, "after");
-
-      if (currentPhotoUrl || beforePhotoUrl || afterPhotoUrl) {
-        const { error } = await supabase.from("tree_photo_updates").insert({
-          assignment_id: selected.assignment.id,
-          operation_request_id: operationRequestId,
-          tree_id: treeId,
-          customer_profile_id: customerProfileId,
-          caretaker_id: caretaker.id,
-          photo_url: currentPhotoUrl,
-          before_photo_url: beforePhotoUrl,
-          after_photo_url: afterPhotoUrl,
-          notes: notes || null,
-          status: "SUBMITTED",
-          created_at: now,
-          updated_at: now,
-        });
-
-        if (error) throw error;
-      }
-
-      if (rules.gps || latitude || longitude) {
-        const { error } = await supabase.from("tree_gps_logs").insert({
-          assignment_id: selected.assignment.id,
-          operation_request_id: operationRequestId,
-          tree_id: treeId,
-          customer_profile_id: customerProfileId,
-          caretaker_id: caretaker.id,
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          notes: notes || null,
-          status: "SUBMITTED",
-          created_at: now,
-          updated_at: now,
-        });
-
-        if (error) throw error;
-      }
-
-      if (rules.health || healthStatus) {
-        const { error } = await supabase.from("tree_health_reports").insert({
-          assignment_id: selected.assignment.id,
-          operation_request_id: operationRequestId,
-          tree_id: treeId,
-          customer_profile_id: customerProfileId,
-          caretaker_id: caretaker.id,
-          health_status: healthStatus,
-          notes: notes || null,
-          status: "SUBMITTED",
-          created_at: now,
-          updated_at: now,
-        });
-
-        if (error) throw error;
-      }
-
       const taskId =
         selected.task?.id ||
         (
@@ -735,10 +801,10 @@ export default function GardenerTasksPage() {
             .from("caretaker_task_logs")
             .insert({
               assignment_id: selected.assignment.id,
-              operation_request_id: operationRequestId,
-              tree_id: treeId,
+              operation_request_id: args.operationRequestId,
+              tree_id: args.treeId,
               group_id: selected.assignment.group_id || selected.request?.group_id || null,
-              customer_profile_id: customerProfileId,
+              customer_profile_id: args.customerProfileId,
               caretaker_id: caretaker.id,
               caretaker_profile_id: caretaker.caretaker_profile_id || null,
               task_type: selectedService,
@@ -746,59 +812,241 @@ export default function GardenerTasksPage() {
               status: "SUBMITTED",
               evidence_status: "SUBMITTED",
               notes: notes || "Evidence submitted.",
-              submitted_at: now,
-              created_at: now,
-              updated_at: now,
+              submitted_at: args.now,
+              created_at: args.now,
+              updated_at: args.now,
             })
             .select("id")
             .single()
         ).data?.id;
 
-      if (taskId) {
-        const { error } = await supabase
-          .from("caretaker_task_logs")
-          .update({
-            status: "SUBMITTED",
-            evidence_status: "SUBMITTED",
-            notes: notes || selected.task?.notes || "Evidence submitted.",
-            submitted_at: now,
-            updated_at: now,
-          })
-          .eq("id", taskId);
+      if (!taskId) {
+        throw new Error("caretaker_task_logs submit sync failed: task_id not returned.");
+      }
 
-        if (error) throw error;
+      if (!selected.task?.id) createdTaskId = taskId;
+
+      const { error: taskUpdateError } = await supabase
+        .from("caretaker_task_logs")
+        .update({
+          status: "SUBMITTED",
+          evidence_status: "SUBMITTED",
+          notes: notes || selected.task?.notes || "Evidence submitted.",
+          submitted_at: args.now,
+          updated_at: args.now,
+        })
+        .eq("id", taskId);
+
+      if (taskUpdateError) {
+        throw new Error(`caretaker_task_logs sync failed: ${taskUpdateError.message}`);
       }
 
       const { error: assignmentError } = await supabase
         .from("caretaker_assignments")
         .update({
           status: "SUBMITTED",
-          submitted_at: now,
-          updated_at: now,
+          submitted_at: args.now,
+          updated_at: args.now,
         })
         .eq("id", selected.assignment.id);
 
-      if (assignmentError) throw assignmentError;
+      if (assignmentError) {
+        throw new Error(`caretaker_assignments sync failed: ${assignmentError.message}`);
+      }
 
       const { error: requestError } = await supabase
         .from("tree_operation_requests")
         .update({
           status: "SUBMITTED",
           assignment_status: "SUBMITTED",
-          updated_at: now,
+          updated_at: args.now,
         })
-        .eq("id", operationRequestId);
+        .eq("id", args.operationRequestId);
 
-      if (requestError) throw requestError;
+      if (requestError) {
+        throw new Error(`tree_operation_requests sync failed: ${requestError.message}`);
+      }
 
-      setMessage("Evidence submitted. Waiting for Admin approval.");
+      return taskId;
+    } catch (error) {
+      if (createdTaskId) {
+        await supabase.from("caretaker_task_logs").delete().eq("id", createdTaskId);
+      } else if (previousTaskSnapshot?.id) {
+        await supabase
+          .from("caretaker_task_logs")
+          .update({
+            status: previousTaskSnapshot.status,
+            evidence_status: previousTaskSnapshot.evidence_status,
+            notes: previousTaskSnapshot.notes,
+            submitted_at: previousTaskSnapshot.submitted_at,
+            updated_at: previousTaskSnapshot.updated_at || new Date().toISOString(),
+          })
+          .eq("id", previousTaskSnapshot.id);
+      }
+
+      throw error;
+    }
+  }
+
+  async function submitWork() {
+    if (saving) return;
+
+    if (!selected || !caretaker) {
+      setMessage("Work order not loaded.");
+      return;
+    }
+
+    if (!isVerified) {
+      setMessage("Tree QR must be verified before evidence upload.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+
+    const now = new Date().toISOString();
+    const insertedEvidence: InsertedEvidenceIds = {
+      photoIds: [],
+      gpsIds: [],
+      healthIds: [],
+    };
+
+    try {
+      if (["SUBMITTED", "COMPLETED", "CANCELLED"].includes(selected.status)) {
+        throw new Error(
+          `This work order is already ${selected.status.replaceAll("_", " ")}. Duplicate evidence is blocked.`,
+        );
+      }
+
+      if (selected.evidenceStatus === "SUBMITTED") {
+        throw new Error("Evidence was already submitted for this task. Duplicate evidence is blocked.");
+      }
+
+      const core = getSubmissionCore();
+      const existingEvidence = await getExistingEvidenceCounts(core.assignmentId);
+
+      if (existingEvidence.total > 0) {
+        await syncSubmissionStatuses({
+          now,
+          operationRequestId: core.operationRequestId,
+          treeId: core.treeId,
+          customerProfileId: core.customerProfileId,
+        });
+
+        setMessage(
+          "Existing evidence was found for this assignment. Duplicate upload was blocked, and status sync was retried to SUBMITTED.",
+        );
+        resetEvidenceForm();
+        await loadData();
+        return;
+      }
+
+      const validationError = validateSubmission();
+      if (validationError) throw new Error(validationError);
+
+      const currentPhotoUrl = await uploadEvidenceFile(currentPhoto, "current");
+      const beforePhotoUrl = await uploadEvidenceFile(beforePhoto, "before");
+      const afterPhotoUrl = await uploadEvidenceFile(afterPhoto, "after");
+
+      if (currentPhotoUrl || beforePhotoUrl || afterPhotoUrl) {
+        const { data, error } = await supabase
+          .from("tree_photo_updates")
+          .insert({
+            assignment_id: core.assignmentId,
+            operation_request_id: core.operationRequestId,
+            tree_id: core.treeId,
+            customer_profile_id: core.customerProfileId,
+            caretaker_id: caretaker.id,
+            photo_url: currentPhotoUrl,
+            before_photo_url: beforePhotoUrl,
+            after_photo_url: afterPhotoUrl,
+            notes: notes || null,
+            status: "SUBMITTED",
+            created_at: now,
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+
+        if (error || !data?.id) {
+          throw new Error(`tree_photo_updates insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        insertedEvidence.photoIds.push(data.id);
+      }
+
+      if (rules.gps || latitude || longitude) {
+        const { data, error } = await supabase
+          .from("tree_gps_logs")
+          .insert({
+            assignment_id: core.assignmentId,
+            operation_request_id: core.operationRequestId,
+            tree_id: core.treeId,
+            customer_profile_id: core.customerProfileId,
+            caretaker_id: caretaker.id,
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+            notes: notes || null,
+            status: "SUBMITTED",
+            created_at: now,
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+
+        if (error || !data?.id) {
+          throw new Error(`tree_gps_logs insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        insertedEvidence.gpsIds.push(data.id);
+      }
+
+      if (rules.health || healthStatus) {
+        const { data, error } = await supabase
+          .from("tree_health_reports")
+          .insert({
+            assignment_id: core.assignmentId,
+            operation_request_id: core.operationRequestId,
+            tree_id: core.treeId,
+            customer_profile_id: core.customerProfileId,
+            caretaker_id: caretaker.id,
+            health_status: healthStatus,
+            notes: notes || null,
+            status: "SUBMITTED",
+            created_at: now,
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+
+        if (error || !data?.id) {
+          throw new Error(`tree_health_reports insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        insertedEvidence.healthIds.push(data.id);
+      }
+
+      await syncSubmissionStatuses({
+        now,
+        operationRequestId: core.operationRequestId,
+        treeId: core.treeId,
+        customerProfileId: core.customerProfileId,
+      });
+
+      setMessage("Evidence submitted. Task, assignment, and operation request are synced to SUBMITTED.");
       resetEvidenceForm();
       await loadData();
     } catch (error: any) {
-      setMessage(error?.message || "Submit work failed.");
-    }
+      await rollbackInsertedEvidence(insertedEvidence);
 
-    setSaving(false);
+      setMessage(
+        `${
+          error?.message || "Submit work failed."
+        } Evidence rows from this attempt were rolled back to prevent duplicate spam. Please retry Submit Work after fixing the error.`,
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -810,7 +1058,9 @@ export default function GardenerTasksPage() {
           <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
             Gardener Field Workflow
           </p>
-          <h1 className="mt-3 text-4xl font-black tracking-tight">Forest Work Center</h1>
+          <h1 className="mt-3 text-4xl font-black tracking-tight">
+            Forest Work Center
+          </h1>
           <p className="mt-3 max-w-4xl text-sm font-semibold leading-relaxed text-white/65">
             Start assigned work, verify tree QR, submit required evidence, then wait for Admin
             completion approval.
@@ -834,19 +1084,21 @@ export default function GardenerTasksPage() {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-2">
-                {["ACTIVE", "ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"].map((x) => (
-                  <button
-                    key={x}
-                    onClick={() => setFilter(x)}
-                    className={`rounded-full px-4 py-2 text-xs font-black ${
-                      filter === x
-                        ? "bg-[#d9b45f] text-[#071f16]"
-                        : "border border-white/10 bg-white/10 text-white/65"
-                    }`}
-                  >
-                    {x.replaceAll("_", " ")}
-                  </button>
-                ))}
+                {["ACTIVE", "ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"].map(
+                  (x) => (
+                    <button
+                      key={x}
+                      onClick={() => setFilter(x)}
+                      className={`rounded-full px-4 py-2 text-xs font-black ${
+                        filter === x
+                          ? "bg-[#d9b45f] text-[#071f16]"
+                          : "border border-white/10 bg-white/10 text-white/65"
+                      }`}
+                    >
+                      {x.replaceAll("_", " ")}
+                    </button>
+                  ),
+                )}
               </div>
 
               <div className="mt-5 space-y-3">
@@ -896,14 +1148,45 @@ export default function GardenerTasksPage() {
                 <p className="text-sm font-bold text-white/55">Select a work order.</p>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Info label="Tree Name" value={selected.tree?.display_name || selected.tree?.custom_name || "Friendly Tree"} />
-                  <Info label="Tree Code" value={selected.tree?.tree_code || selected.tree?.id || "—"} />
-                  <Info label="Forest / Group" value={selected.group?.forest_name || selected.group?.group_name || "Single Tree"} />
-                  <Info label="Customer" value={selected.customer?.full_name || selected.customer?.email || "Unknown Customer"} />
+                  <Info
+                    label="Tree Name"
+                    value={
+                      selected.tree?.display_name ||
+                      selected.tree?.custom_name ||
+                      "Friendly Tree"
+                    }
+                  />
+                  <Info
+                    label="Tree Code"
+                    value={selected.tree?.tree_code || selected.tree?.id || "—"}
+                  />
+                  <Info
+                    label="Forest / Group"
+                    value={
+                      selected.group?.forest_name ||
+                      selected.group?.group_name ||
+                      "Single Tree"
+                    }
+                  />
+                  <Info
+                    label="Customer"
+                    value={selected.customer?.full_name || selected.customer?.email || "Unknown Customer"}
+                  />
                   <Info label="Requested Service" value={serviceLabel(selectedService)} />
-                  <Info label="Admin Notes" value={selected.assignment.admin_notes || selected.request?.admin_notes || selected.request?.notes || "—"} />
+                  <Info
+                    label="Admin Notes"
+                    value={
+                      selected.assignment.admin_notes ||
+                      selected.request?.admin_notes ||
+                      selected.request?.notes ||
+                      "—"
+                    }
+                  />
                   <Info label="Assignment Status" value={selected.status.replaceAll("_", " ")} />
-                  <Info label="Evidence Status" value={selected.evidenceStatus.replaceAll("_", " ")} />
+                  <Info
+                    label="Evidence Status"
+                    value={selected.evidenceStatus.replaceAll("_", " ")}
+                  />
                 </div>
               )}
 
@@ -948,8 +1231,13 @@ export default function GardenerTasksPage() {
 
               {scannerOpen && selected && (
                 <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-black/30 p-4">
-                  <div id={`tasks-qr-scanner-${selected.key}`} className="min-h-[280px] overflow-hidden rounded-xl" />
-                  <p className="mt-3 text-xs font-bold text-white/50">Point the camera at the physical tree QR sticker.</p>
+                  <div
+                    id={`tasks-qr-scanner-${selected.key}`}
+                    className="min-h-[280px] overflow-hidden rounded-xl"
+                  />
+                  <p className="mt-3 text-xs font-bold text-white/50">
+                    Point the camera at the physical tree QR sticker.
+                  </p>
                 </div>
               )}
 
@@ -966,7 +1254,9 @@ export default function GardenerTasksPage() {
               <p className="text-sm font-bold text-[#ffe49a]">{serviceLabel(selectedService)}</p>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
-                {(rules.photo || selectedService === "GPS_VERIFICATION" || selectedService === "HEALTH_CHECK") && (
+                {(rules.photo ||
+                  selectedService === "GPS_VERIFICATION" ||
+                  selectedService === "HEALTH_CHECK") && (
                   <FileInput
                     label={rules.photo ? "Current Photo Required" : "Photo Optional"}
                     file={currentPhoto}
@@ -975,17 +1265,29 @@ export default function GardenerTasksPage() {
                 )}
 
                 {rules.before && (
-                  <FileInput label="Before Photo Required" file={beforePhoto} setFile={setBeforePhoto} />
+                  <FileInput
+                    label="Before Photo Required"
+                    file={beforePhoto}
+                    setFile={setBeforePhoto}
+                  />
                 )}
 
                 {rules.after && (
-                  <FileInput label="After Photo Required" file={afterPhoto} setFile={setAfterPhoto} />
+                  <FileInput
+                    label="After Photo Required"
+                    file={afterPhoto}
+                    setFile={setAfterPhoto}
+                  />
                 )}
 
                 {rules.gps && (
                   <>
                     <TextInput label="Latitude Required" value={latitude} setValue={setLatitude} />
-                    <TextInput label="Longitude Required" value={longitude} setValue={setLongitude} />
+                    <TextInput
+                      label="Longitude Required"
+                      value={longitude}
+                      setValue={setLongitude}
+                    />
                   </>
                 )}
 
@@ -1033,7 +1335,7 @@ export default function GardenerTasksPage() {
                 disabled={saving || !selected || !isVerified}
                 className="mt-5 w-full rounded-2xl bg-emerald-500 px-6 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Submit Work for Admin Review
+                {saving ? "Submitting Work..." : "Submit Work for Admin Review"}
               </button>
             </Card>
           </div>
@@ -1055,7 +1357,9 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 function MiniStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.16em] text-white/35">{label}</p>
+      <p className="text-xs font-black uppercase tracking-[0.16em] text-white/35">
+        {label}
+      </p>
       <p className="mt-2 text-2xl font-black text-[#ffe49a]">{value}</p>
     </div>
   );
@@ -1064,8 +1368,12 @@ function MiniStat({ label, value }: { label: string; value: number }) {
 function Info({ label, value }: { label: string; value: any }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">{label}</p>
-      <p className="mt-2 break-words text-sm font-bold text-white/80">{value || "—"}</p>
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">
+        {label}
+      </p>
+      <p className="mt-2 break-words text-sm font-bold text-white/80">
+        {value || "—"}
+      </p>
     </div>
   );
 }
@@ -1081,7 +1389,9 @@ function TextInput({
 }) {
   return (
     <div>
-      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</p>
+      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">
+        {label}
+      </p>
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -1102,7 +1412,9 @@ function FileInput({
 }) {
   return (
     <div>
-      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</p>
+      <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">
+        {label}
+      </p>
       <input
         type="file"
         accept="image/*"
