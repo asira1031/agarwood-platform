@@ -23,11 +23,7 @@ type MarketplaceProduct = {
   price: number | null;
   note: string | null;
   stock_status: string | null;
-  image_url?: string | null;
-  photo_url?: string | null;
-  thumbnail_url?: string | null;
-  product_image_url?: string | null;
-  cover_url?: string | null;
+  image_url: string | null;
   category: string | null;
   unit: string | null;
   low_stock_level: number | null;
@@ -82,20 +78,6 @@ const SUPPLY_CATEGORIES: SupplyCategory[] = [
   "Tree Care Programs",
 ];
 
-const TREE_ALLOWED_NAMES = ["agarwood seed", "agarwood seedling", "young seedling"];
-
-const PACKAGE_ALLOWED_NAMES = [
-  "10 seeds",
-  "50 seeds",
-  "100 seeds",
-  "10 seedlings",
-  "50 seedlings",
-  "100 seedlings",
-  "10 young seedlings",
-  "50 young seedlings",
-  "100 young seedlings",
-];
-
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -121,64 +103,77 @@ function getForestName(group: TreeGroup | null | undefined) {
   return group?.forest_name || group?.group_name || "Unnamed Forest";
 }
 
-function getProductImageUrl(product: MarketplaceProduct): string {
-  const candidates = [
-    product.image_url,
-    product.photo_url,
-    product.thumbnail_url,
-    product.product_image_url,
-    product.cover_url,
-  ];
-
-  const uploaded = candidates.find(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
-
-  if (uploaded) return uploaded;
+function getProductImageUrl(product: MarketplaceProduct): string | undefined {
+  if (
+    typeof product.image_url === "string" &&
+    product.image_url.trim().length > 0
+  ) {
+    return product.image_url;
+  }
 
   const category = normalize(product.category);
   const name = normalize(product.name);
 
-  if (name.includes("100") && name.includes("seed")) return "/products/package-100.jpg";
-  if (name.includes("50") && name.includes("seed")) return "/products/package-50.jpg";
-  if (name.includes("10") && name.includes("seed")) return "/products/package-10.jpg";
-
-  if (name.includes("young") && name.includes("seedling")) return "/products/young-seedling.jpg";
-  if (name.includes("seedling")) return "/products/agarwood-seedling.jpg";
-  if (name.includes("seed")) return "/products/agarwood-seeds.jpg";
-
-  if (category.includes("care program") || category.includes("tree care programs")) {
-    return "/products/care-package-logo.jpg";
+  if (name.includes("young") && name.includes("seedling")) {
+    return "/products/agarwood-seedling.jpg";
   }
 
-  if (category.includes("fertilizer")) return "/products/fertilizer.jpg";
-  if (category.includes("nutrient") || category.includes("booster")) return "/products/nutrients.jpg";
-  if (category.includes("fungicide") || category.includes("fungal")) return "/products/fungicide.jpg";
-  if (category.includes("pest") || category.includes("insect")) return "/products/pest-control.jpg";
-  if (category.includes("soil") || category.includes("compost")) return "/products/soil.jpg";
-  if (category.includes("health") || category.includes("treatment")) return "/products/tree-health.jpg";
-  if (category.includes("care")) return "/products/gardener-care.jpg";
+  if (name.includes("seedling")) {
+    return "/products/agarwood-seedling.jpg";
+  }
+
+  if (name.includes("100") && name.includes("seed")) {
+    return "/products/package-100.jpg";
+  }
+
+  if (name.includes("50") && name.includes("seed")) {
+    return "/products/package-50.jpg";
+  }
+
+  if (name.includes("10") && name.includes("seed")) {
+    return "/products/package-10.jpg";
+  }
+
+  if (name.includes("seed")) {
+    return "/products/agarwood-seeds.jpg";
+  }
+
+  if (category.includes("fertilizer") || name.includes("fertilizer")) {
+    return "/products/fertilizer.jpg";
+  }
+
+  if (category.includes("nutrient") || name.includes("nutrient") || name.includes("booster")) {
+    return "/products/nutrients.jpg";
+  }
+
+  if (category.includes("fungicide") || name.includes("fungicide")) {
+    return "/products/fungicide.jpg";
+  }
+
+  if (category.includes("pest") || name.includes("pest") || name.includes("insecticide")) {
+    return "/products/pest-control.jpg";
+  }
+
+  if (category.includes("soil") || name.includes("soil")) {
+    return "/products/soil.jpg";
+  }
+
+  if (category.includes("health") || name.includes("treatment") || name.includes("health")) {
+    return "/products/tree-health.jpg";
+  }
+
+  if (category.includes("care") || name.includes("care")) {
+    return "/products/care-package-logo.jpg";
+  }
 
   return "/products/default-product.jpg";
 }
 
-function isTreeAllowed(product: MarketplaceProduct) {
-  const type = String(product.product_type || "").trim().toUpperCase();
-  const name = normalize(product.name);
-
-  if (type !== "TREE") return false;
-
-  return TREE_ALLOWED_NAMES.includes(name);
+function getProductInitial(product: MarketplaceProduct): string {
+  const name = product.name || "A";
+  return name.trim().slice(0, 1).toUpperCase();
 }
 
-function isPackageAllowed(product: MarketplaceProduct) {
-  const type = String(product.product_type || "").trim().toUpperCase();
-  const name = normalize(product.name);
-
-  if (type !== "PACKAGE" && type !== "TREE_PACKAGE") return false;
-
-  return PACKAGE_ALLOWED_NAMES.includes(name);
-}
 
 function normalizeSupplyCategory(category: string | null | undefined): SupplyCategory {
   const raw = normalize(category);
@@ -596,7 +591,7 @@ export default function MarketplacePage() {
     const { data: productRows, error: productError } = await supabase
       .from("marketplace_products")
       .select(
-        "id, product_key, name, price, note, stock_status, image_url, photo_url, thumbnail_url, product_image_url, cover_url, category, unit, low_stock_level, product_type, status, created_at"
+        "id, product_key, name, price, note, stock_status, image_url, category, unit, low_stock_level, product_type, status, created_at"
       )
       .eq("status", "ACTIVE")
       .order("created_at", { ascending: true });
@@ -714,8 +709,8 @@ export default function MarketplacePage() {
     return products.filter((product) => {
       const type = getProductType(product);
 
-      if (type === "TREE") return isTreeAllowed(product);
-      if (type === "PACKAGE") return isPackageAllowed(product);
+      if (type === "TREE") return true;
+      if (type === "PACKAGE") return true;
       return type === "SUPPLY";
     });
   }, [products]);
@@ -1210,7 +1205,13 @@ export default function MarketplacePage() {
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
                       <div className="productImage">
-                        <img src={productImageUrl} alt={product.name || "Marketplace product"} />
+                        {productImageUrl ? (
+                          <img src={productImageUrl} alt={product.name || "Marketplace product"} />
+                        ) : (
+                          <div className="productImageFallback">
+                            <span>{getProductInitial(product)}</span>
+                          </div>
+                        )}
                         <em>{product.stock_status || "AVAILABLE"}</em>
                       </div>
 
@@ -1272,7 +1273,13 @@ export default function MarketplacePage() {
             </button>
 
             <div className="modalProductImage">
-              <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
+              {selectedProductImageUrl ? (
+                <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
+              ) : (
+                <div className="productImageFallback">
+                  <span>{getProductInitial(selectedProduct)}</span>
+                </div>
+              )}
             </div>
 
             <p className="eyebrow">Product Details</p>
@@ -1382,7 +1389,7 @@ export default function MarketplacePage() {
                     Existing Forest
                     <select value={selectedGroupId} onChange={(event) => setSelectedGroupId(event.target.value)}>
                       <option value="">Select forest</option>
-                      {treeGroups.map((group, index) => (
+                      {treeGroups.map((group) => (
                         <option key={group.id} value={group.id}>
                           {getForestName(group)}{Number(group.total_trees || 0) > 0 ? ` • ${Number(group.total_trees || 0)} tree(s)` : ""}
                         </option>
@@ -1865,6 +1872,29 @@ export default function MarketplacePage() {
           display: block;
         }
 
+        .productImageFallback {
+          width: 100%;
+          height: 100%;
+          display: grid;
+          place-items: center;
+          background:
+            radial-gradient(circle at 50% 20%, rgba(244,213,139,.20), transparent 30%),
+            linear-gradient(135deg, rgba(14,48,31,.92), rgba(6,23,15,.96));
+        }
+
+        .productImageFallback span {
+          width: 64px;
+          height: 64px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          color: #f4d58b;
+          border: 1px solid rgba(244,213,139,.34);
+          background: rgba(255,255,255,.07);
+          font-weight: 900;
+          font-size: 28px;
+          letter-spacing: -.04em;
+        }
 
         .productImage em {
           position: absolute;
@@ -1880,10 +1910,6 @@ export default function MarketplacePage() {
           letter-spacing: .08em;
           box-shadow: 0 8px 18px rgba(16,40,31,.16);
         }
-
-
-
-
 
         .cardHead {
           display: flex;
@@ -2046,8 +2072,6 @@ export default function MarketplacePage() {
           cursor: pointer;
           font-weight: 900;
         }
-
-
 
         .modal h2 {
           margin: 0;

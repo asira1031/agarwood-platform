@@ -59,9 +59,5 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  return (
-    <main className="min-h-screen w-full overflow-x-hidden bg-[#07140f] text-[#f8f1d8]">
-      {children}
-    </main>
-  );
+  return <>{children}</>;
 }
