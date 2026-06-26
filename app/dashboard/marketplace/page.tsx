@@ -23,7 +23,6 @@ type MarketplaceProduct = {
   price: number | null;
   note: string | null;
   stock_status: string | null;
-  icon: string | null;
   image_url?: string | null;
   photo_url?: string | null;
   thumbnail_url?: string | null;
@@ -122,7 +121,7 @@ function getForestName(group: TreeGroup | null | undefined) {
   return group?.forest_name || group?.group_name || "Unnamed Forest";
 }
 
-function getProductImageUrl(product: MarketplaceProduct): string | undefined {
+function getProductImageUrl(product: MarketplaceProduct): string {
   const candidates = [
     product.image_url,
     product.photo_url,
@@ -131,16 +130,36 @@ function getProductImageUrl(product: MarketplaceProduct): string | undefined {
     product.cover_url,
   ];
 
-  const found = candidates.find(
+  const uploaded = candidates.find(
     (value) => typeof value === "string" && value.trim().length > 0,
   );
 
-  return found || undefined;
-}
+  if (uploaded) return uploaded;
 
-function getProductInitial(product: MarketplaceProduct): string {
-  const name = product.name || "A";
-  return name.trim().slice(0, 1).toUpperCase();
+  const category = normalize(product.category);
+  const name = normalize(product.name);
+
+  if (name.includes("100") && name.includes("seed")) return "/products/package-100.jpg";
+  if (name.includes("50") && name.includes("seed")) return "/products/package-50.jpg";
+  if (name.includes("10") && name.includes("seed")) return "/products/package-10.jpg";
+
+  if (name.includes("young") && name.includes("seedling")) return "/products/young-seedling.jpg";
+  if (name.includes("seedling")) return "/products/agarwood-seedling.jpg";
+  if (name.includes("seed")) return "/products/agarwood-seeds.jpg";
+
+  if (category.includes("care program") || category.includes("tree care programs")) {
+    return "/products/care-package-logo.jpg";
+  }
+
+  if (category.includes("fertilizer")) return "/products/fertilizer.jpg";
+  if (category.includes("nutrient") || category.includes("booster")) return "/products/nutrients.jpg";
+  if (category.includes("fungicide") || category.includes("fungal")) return "/products/fungicide.jpg";
+  if (category.includes("pest") || category.includes("insect")) return "/products/pest-control.jpg";
+  if (category.includes("soil") || category.includes("compost")) return "/products/soil.jpg";
+  if (category.includes("health") || category.includes("treatment")) return "/products/tree-health.jpg";
+  if (category.includes("care")) return "/products/gardener-care.jpg";
+
+  return "/products/default-product.jpg";
 }
 
 function isTreeAllowed(product: MarketplaceProduct) {
@@ -577,7 +596,7 @@ export default function MarketplacePage() {
     const { data: productRows, error: productError } = await supabase
       .from("marketplace_products")
       .select(
-        "id, product_key, name, price, note, stock_status, icon, image_url, category, unit, low_stock_level, product_type, status, created_at"
+        "id, product_key, name, price, note, stock_status, image_url, photo_url, thumbnail_url, product_image_url, cover_url, category, unit, low_stock_level, product_type, status, created_at"
       )
       .eq("status", "ACTIVE")
       .order("created_at", { ascending: true });
@@ -1191,13 +1210,7 @@ export default function MarketplacePage() {
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
                       <div className="productImage">
-                        {productImageUrl ? (
-                          <img src={productImageUrl} alt={product.name || "Marketplace product"} />
-                        ) : (
-                          <div className="productImageFallback">
-                            <span>{getProductInitial(product)}</span>
-                          </div>
-                        )}
+                        <img src={productImageUrl} alt={product.name || "Marketplace product"} />
                         <em>{product.stock_status || "AVAILABLE"}</em>
                       </div>
 
@@ -1259,13 +1272,7 @@ export default function MarketplacePage() {
             </button>
 
             <div className="modalProductImage">
-              {selectedProductImageUrl ? (
-                <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
-              ) : (
-                <div className="productImageFallback">
-                  <span>{getProductInitial(selectedProduct)}</span>
-                </div>
-              )}
+              <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
             </div>
 
             <p className="eyebrow">Product Details</p>
@@ -1858,29 +1865,6 @@ export default function MarketplacePage() {
           display: block;
         }
 
-        .productImageFallback {
-          width: 100%;
-          height: 100%;
-          display: grid;
-          place-items: center;
-          background:
-            radial-gradient(circle at 50% 20%, rgba(244,213,139,.20), transparent 30%),
-            linear-gradient(135deg, rgba(14,48,31,.92), rgba(6,23,15,.96));
-        }
-
-        .productImageFallback span {
-          width: 64px;
-          height: 64px;
-          border-radius: 999px;
-          display: grid;
-          place-items: center;
-          color: #f4d58b;
-          border: 1px solid rgba(244,213,139,.34);
-          background: rgba(255,255,255,.07);
-          font-weight: 900;
-          font-size: 28px;
-          letter-spacing: -.04em;
-        }
 
         .productImage em {
           position: absolute;
@@ -1897,43 +1881,9 @@ export default function MarketplacePage() {
           box-shadow: 0 8px 18px rgba(16,40,31,.16);
         }
 
-        .imageBox {
-          position: relative;
-          height: 128px;
-          border-radius: 24px;
-          display: grid;
-          place-items: center;
-          background:
-            radial-gradient(circle at 50% 28%, rgba(255,255,255,.64), transparent 34%),
-            linear-gradient(135deg, #eee2c9, #f8f1df);
-          margin-bottom: 16px;
-          overflow: hidden;
-        }
 
-        .imageBox img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
 
-        .imageBox span {
-          position: absolute;
-          top: 12px;
-          right: 12px;
-          border-radius: 999px;
-          padding: 7px 10px;
-          background: rgba(36,69,54,.12);
-          color: #244536;
-          font-size: 10px;
-          font-weight: 900;
-          letter-spacing: .08em;
-        }
 
-        .icon {
-          font-size: 58px;
-          filter: drop-shadow(0 10px 16px rgba(58,42,18,.18));
-        }
 
         .cardHead {
           display: flex;
@@ -2097,24 +2047,7 @@ export default function MarketplacePage() {
           font-weight: 900;
         }
 
-        .modalIcon {
-          width: 96px;
-          height: 96px;
-          border-radius: 28px;
-          display: grid;
-          place-items: center;
-          background: #f3ead8;
-          font-size: 48px;
-          margin-bottom: 16px;
-          overflow: hidden;
-        }
 
-        .modalIcon img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
 
         .modal h2 {
           margin: 0;

@@ -577,44 +577,116 @@ export default function DashboardPage() {
     return actions.sort((a, b) => a.priority - b.priority).slice(0, 7);
   }, [trees.length, activeOperation, walletBalance, membershipStatus, gpsEvidence.length, photoEvidence.length]);
 
-  const missionStats = useMemo(() => {
-    const total = operationRequests.length;
+  const missionSummary = useMemo(() => {
+    const counts = {
+      pending: 0,
+      assigned: 0,
+      active: 0,
+      completed: 0,
+    };
 
-    const pending = operationRequests.filter((mission) =>
-      ["PENDING", "REQUESTED", "PAID", "PROCESSING"].includes(
-        normalize(mission.status || mission.assignment_status)
-      )
-    ).length;
+    operationRequests.forEach((operation) => {
+      const status = missionStatus(operation);
 
-    const active = operationRequests.filter((mission) =>
-      ["ASSIGNED", "IN_PROGRESS"].includes(normalize(mission.status || mission.assignment_status))
-    ).length;
+      if (status === "COMPLETED") {
+        counts.completed += 1;
+      } else if (status === "ASSIGNED") {
+        counts.assigned += 1;
+      } else if (status === "IN_PROGRESS") {
+        counts.active += 1;
+      } else {
+        counts.pending += 1;
+      }
+    });
 
-    const completed = operationRequests.filter((mission) =>
-      ["COMPLETED", "APPROVED", "DONE"].includes(normalize(mission.status || mission.assignment_status))
-    ).length;
-
-    return { total, pending, active, completed };
+    return counts;
   }, [operationRequests]);
 
   const missionLogs = useMemo(() => {
     return operationRequests
-      .map((mission) => ({
-        id: `mission-log-${mission.id}`,
-        title: cleanLabel(
-          mission.service_name ||
-            mission.operation_type ||
-            mission.service_type ||
-            mission.request_type ||
-            "Tree Mission"
-        ),
-        detail: normalize(mission.status || mission.assignment_status || "PENDING").replaceAll("_", " "),
-        date: mission.completed_at || mission.created_at || mission.requested_at || null,
-        href: "/dashboard/tree-operations",
-      }))
+      .map((operation) => {
+        const tree = findTree(operation.tree_id, trees);
+
+        return {
+          id: operation.id,
+          mission: cleanLabel(
+            operation.service_name ||
+              operation.operation_type ||
+              operation.service_type ||
+              operation.request_type ||
+              operation.item_name ||
+              "Tree Mission",
+          ),
+          tree: treeLabel(tree) || operation.group_id || "Forest Mission",
+          status: missionStatus(operation),
+          date: operation.completed_at || operation.created_at || operation.requested_at || null,
+        };
+      })
       .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
-      .slice(0, 8);
-  }, [operationRequests]);
+      .slice(0, 5);
+  }, [operationRequests, trees]);
+
+  const exploreActions = useMemo(
+    () => [
+      {
+        title: "Marketplace",
+        text: "Buy trees, packages, and care supplies.",
+        href: "/dashboard/marketplace",
+        image: "/images/marketplace-care-package.png",
+        icon: <MarketIcon />,
+      },
+      {
+        title: "My Trees",
+        text: "Open your owned plantation portfolio.",
+        href: "/dashboard/my-trees",
+        image: "/images/agarwood-real-tree.jpg",
+        icon: <TreeIcon />,
+      },
+      {
+        title: "Tree Services",
+        text: "Request GPS, photo, health, or field work.",
+        href: "/dashboard/tree-operations",
+        image: "/images/agarwood-seedling-nursery.png",
+        icon: <ServiceIcon />,
+      },
+      {
+        title: "Membership",
+        text: "Manage customer access and renewals.",
+        href: "/dashboard/membership",
+        image: "/images/arganwood-membership.png",
+        icon: <MembershipIcon />,
+      },
+      {
+        title: "Wallet",
+        text: "Manage balance, cash-in, and withdrawals.",
+        href: "/dashboard/wallet",
+        image: "/images/arganwood-wallet.png",
+        icon: <WalletIcon />,
+      },
+      {
+        title: "Investments",
+        text: "Track investment balance and portfolio value.",
+        href: "/dashboard/investments",
+        image: "/images/arganwood-investment.png",
+        icon: <PulseIcon />,
+      },
+      {
+        title: "Support",
+        text: "Contact support for account help.",
+        href: "/dashboard/support",
+        image: "/images/arganwood-support.png",
+        icon: <SupportIcon />,
+      },
+      {
+        title: "Sell Tree",
+        text: "Request review for eligible tree sale.",
+        href: "/dashboard/sell-tree",
+        image: "/images/arganwood-sell-tree.png",
+        icon: <SellIcon />,
+      },
+    ],
+    [],
+  );
 
   const recentActivity = useMemo(() => {
     const walletRows = walletTransactions.map((tx) => ({
@@ -710,63 +782,27 @@ export default function DashboardPage() {
         </header>
 
         <section className="overviewGrid">
-          <OverviewCard label="Mission Total" value={String(missionStats.total)} note="All service missions" icon={<ServiceIcon />} />
-          <OverviewCard label="Pending Missions" value={String(missionStats.pending)} note="Awaiting admin action" icon={<ClockIcon />} />
-          <OverviewCard label="Active Missions" value={String(missionStats.active)} note="Assigned or in progress" icon={<TrackIcon />} />
-          <OverviewCard label="Completed Missions" value={String(missionStats.completed)} note="Approved field work" icon={<PulseIcon />} />
+          <OverviewCard label="Total Trees" value={String(trees.length)} note="Owned seedlings" icon={<TreeIcon />} />
+          <OverviewCard label="Plantations" value={String(groups.length || uniqueGroupCount(trees))} note="Forest groups" icon={<PlantationIcon />} />
+          <OverviewCard label="Overall Status" value={overallStatus} note="Based on approved evidence" icon={<PulseIcon />} />
+          <OverviewCard label="Latest Update" value={formatDate(latestEvidenceDate)} note="Farm proof or operation" icon={<ClockIcon />} />
         </section>
 
-        <section className="mainGrid">
-          <article className="carePlanPanel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Tree Care Plan</p>
-                <h2>Next Care Action</h2>
-              </div>
-              <StatusPill value={treeCarePlan.hasTree ? treeCarePlan.recommendedAction : "Portfolio Setup"} />
+        <section className="panel missionSummaryPanel">
+          <div className="panelTop">
+            <div>
+              <p className="eyebrow">Mission Summary</p>
+              <h2>Mission Engine</h2>
             </div>
+            <Link className="smallLink" href="/dashboard/tree-operations">View All Missions</Link>
+          </div>
 
-            <div className="carePlanBody">
-              <CareInfo label="Current Stage" value={treeCarePlan.stage} />
-              <CareInfo label="Current Condition" value={treeCarePlan.condition} />
-              <CareInfo label="Next Recommended Action" value={treeCarePlan.recommendedAction} highlight />
-            </div>
-
-            <div className="whyBox">
-              <strong>Why this matters</strong>
-              <p>{treeCarePlan.reason}</p>
-            </div>
-
-            <div className="buttonRow">
-              <Link href="/dashboard/my-trees">View Care Plan</Link>
-              <Link href="/dashboard/tree-operations">Request Tree Service</Link>
-            </div>
-          </article>
-
-          <article className="plantationPanel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Plantation Overview</p>
-                <h2>Remote Forest Connection</h2>
-              </div>
-            </div>
-
-            <div className="forestVisual">
-              <div className="orb" />
-              <div className="hill h1" />
-              <div className="hill h2" />
-              <div className="forestRows">
-                {Array.from({ length: 18 }).map((_, index) => (
-                  <span key={index} />
-                ))}
-              </div>
-              <div className="visualCard">
-                <small>Owned Trees</small>
-                <strong>{trees.length}</strong>
-                <p>{overallStatus}</p>
-              </div>
-            </div>
-          </article>
+          <div className="missionSummaryGrid">
+            <OverviewCard label="Pending Missions" value={String(missionSummary.pending)} note="Awaiting admin action" icon={<ServiceIcon />} />
+            <OverviewCard label="Assigned Missions" value={String(missionSummary.assigned)} note="Assigned to gardener" icon={<SupportIcon />} />
+            <OverviewCard label="Active Missions" value={String(missionSummary.active)} note="In progress field work" icon={<TrackIcon />} />
+            <OverviewCard label="Completed Missions" value={String(missionSummary.completed)} note="Approved field work" icon={<PulseIcon />} />
+          </div>
         </section>
 
         <section className="splitGrid">
@@ -812,26 +848,34 @@ export default function DashboardPage() {
             )}
           </article>
 
-          <article className="panel">
+          <article className="panel missionLogsPanel">
             <div className="panelTop">
               <div>
-                <p className="eyebrow">Plantation Timeline</p>
-                <h2>Latest Farm Proof</h2>
+                <p className="eyebrow">Mission Logs</p>
+                <h2>Operation History</h2>
               </div>
+              <Link className="smallLink" href="/dashboard/tree-operations">View All Logs</Link>
             </div>
 
-            {timelineItems.length === 0 ? (
-              <EmptyState text="Your first plantation update will appear here after Admin approval." />
+            {missionLogs.length === 0 ? (
+              <EmptyState text="No mission logs yet. Requested tree services will appear here." />
             ) : (
-              <div className="timelineList">
-                {timelineItems.map((item) => (
-                  <Link className="timelineItem" href={item.href} key={item.id}>
-                    <span><TimelineIcon type={item.type} /></span>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p>{item.description}</p>
-                      <small>{formatDate(item.date)}</small>
-                    </div>
+              <div className="missionLogTable">
+                <div className="missionLogHeader">
+                  <span>Mission</span>
+                  <span>Tree / Plantation</span>
+                  <span>Status</span>
+                  <span>Date</span>
+                  <span>Action</span>
+                </div>
+
+                {missionLogs.map((log) => (
+                  <Link className="missionRow" href="/dashboard/tree-operations" key={log.id}>
+                    <strong>{log.mission}</strong>
+                    <span>{log.tree}</span>
+                    <MissionStatusPill value={log.status} />
+                    <span>{formatDate(log.date)}</span>
+                    <span className="viewMission">View</span>
                   </Link>
                 ))}
               </div>
@@ -839,53 +883,26 @@ export default function DashboardPage() {
           </article>
         </section>
 
-        <section className="splitGrid bottom">
-          <article className="panel explorePanel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Explore</p>
-                <h2>Discover Your Arganwood Tools</h2>
-              </div>
+        <section className="panel explorePanel">
+          <div className="panelTop">
+            <div>
+              <p className="eyebrow">Explore</p>
+              <h2>Discover Your Arganwood Tools</h2>
             </div>
+          </div>
 
-            <div className="actionGrid centeredExplore">
-              {smartActions.map((action) => (
-                <Link className="actionCard exploreCard" href={action.href} key={`${action.title}-${action.href}`}>
+          <div className="exploreGrid">
+            {exploreActions.map((action) => (
+              <Link className="exploreCard" href={action.href} key={action.href}>
+                <div className="exploreImage">
+                  <img src={action.image} alt={action.title} />
                   <span>{action.icon}</span>
-                  <div>
-                    <strong>{action.title}</strong>
-                    <p>{action.text}</p>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          </article>
-
-          <article className="panel logsPanel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Mission Logs</p>
-                <h2>Operation History</h2>
-              </div>
-              <StatusPill value={`${missionStats.completed}/${missionStats.total} Complete`} />
-            </div>
-
-            {missionLogs.length === 0 ? (
-              <EmptyState text="No mission logs yet. Requested tree services will appear here." />
-            ) : (
-              <div className="recentList">
-                {missionLogs.map((item) => (
-                  <Link href={item.href} className="recentRow" key={item.id}>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p>{item.detail}</p>
-                    </div>
-                    <span>{formatDate(item.date)}</span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </article>
+                </div>
+                <strong>{action.title}</strong>
+                <p>{action.text}</p>
+              </Link>
+            ))}
+          </div>
         </section>
       </section>
 
@@ -956,6 +973,10 @@ function CareInfo({ label, value, highlight }: { label: string; value: string; h
 
 function StatusPill({ value }: { value: string }) {
   return <span className="statusPill">{value}</span>;
+}
+
+function MissionStatusPill({ value }: { value: string }) {
+  return <span className={`missionStatus ${normalize(value).toLowerCase()}`}>{cleanLabel(value)}</span>;
 }
 
 function EmptyState({ text }: { text: string }) {
@@ -1062,6 +1083,28 @@ function getTreeImageUrl(tree: TreeRow): string | undefined {
   }
 
   return undefined;
+}
+
+function missionStatus(operation: TreeOperationRequest) {
+  const status = normalize(operation.status || operation.assignment_status);
+
+  if (status.includes("COMPLETE") || status.includes("APPROVED") || status.includes("DONE")) {
+    return "COMPLETED";
+  }
+
+  if (status.includes("PROGRESS") || status.includes("STARTED") || status.includes("WORKING")) {
+    return "IN_PROGRESS";
+  }
+
+  if (status.includes("ASSIGNED")) {
+    return "ASSIGNED";
+  }
+
+  if (status.includes("CANCEL") || status.includes("REJECT")) {
+    return "CANCELLED";
+  }
+
+  return "PENDING";
 }
 
 function forestName(tree: TreeRow, groupMap: Map<string, Row>) {
@@ -1785,28 +1828,166 @@ const styles = `
   }
 
 
+  .missionSummaryPanel {
+    margin-bottom: 18px;
+  }
 
-  .centeredExplore {
-    align-items: stretch;
+  .missionSummaryGrid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .missionLogsPanel {
+    min-height: 100%;
+  }
+
+  .missionLogTable {
+    display: grid;
+    gap: 0;
+    overflow: hidden;
+    border-radius: 20px;
+    border: 1px solid rgba(214,178,94,.12);
+    background: rgba(0,0,0,.18);
+  }
+
+  .missionLogHeader,
+  .missionRow {
+    display: grid;
+    grid-template-columns: 1.25fr 1.2fr .8fr .9fr .55fr;
+    gap: 12px;
+    align-items: center;
+    padding: 13px 14px;
+  }
+
+  .missionLogHeader {
+    color: rgba(248,241,216,.58);
+    font-size: 11px;
+    font-weight: 950;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(214,178,94,.13);
+  }
+
+  .missionRow {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(214,178,94,.10);
+  }
+
+  .missionRow:last-child {
+    border-bottom: 0;
+  }
+
+  .missionRow strong {
+    color: #fff8dc;
+  }
+
+  .missionRow span {
+    color: rgba(248,241,216,.68);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .missionStatus {
+    width: fit-content;
+    border-radius: 999px;
+    padding: 6px 9px;
+    color: #ffe49a !important;
+    border: 1px solid rgba(214,178,94,.24);
+    background: rgba(214,178,94,.12);
+    font-size: 11px !important;
+    font-weight: 950 !important;
+  }
+
+  .missionStatus.completed {
+    color: #b7ff8a !important;
+    border-color: rgba(111,214,94,.24);
+    background: rgba(111,214,94,.12);
+  }
+
+  .missionStatus.assigned,
+  .missionStatus.in_progress {
+    color: #9edcff !important;
+    border-color: rgba(94,171,214,.24);
+    background: rgba(94,171,214,.12);
+  }
+
+  .missionStatus.cancelled {
+    color: #ffb2a4 !important;
+    border-color: rgba(214,94,94,.24);
+    background: rgba(214,94,94,.12);
+  }
+
+  .viewMission {
+    color: #d6b25e !important;
+    text-align: right;
+  }
+
+  .explorePanel {
+    margin-bottom: 18px;
+  }
+
+  .exploreGrid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
   }
 
   .exploreCard {
-    min-height: 150px;
+    display: grid;
+    min-height: 190px;
+    align-content: start;
+    gap: 10px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 22px;
+    padding: 12px;
+    border: 1px solid rgba(214,178,94,.14);
+    background: rgba(0,0,0,.22);
+  }
+
+  .exploreImage {
+    position: relative;
+    min-height: 98px;
+    display: grid;
     place-items: center;
+    overflow: hidden;
+    border-radius: 17px;
+    background: rgba(214,178,94,.10);
+  }
+
+  .exploreImage img {
+    width: 100%;
+    height: 118px;
+    object-fit: cover;
+    opacity: .88;
+  }
+
+  .exploreImage span {
+    position: absolute;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 16px;
+    color: #d6b25e;
+    background: rgba(3,20,13,.72);
+    border: 1px solid rgba(214,178,94,.22);
+    backdrop-filter: blur(10px);
+  }
+
+  .exploreCard strong {
+    color: #fff8dc;
     text-align: center;
   }
 
-  .exploreCard > span {
-    margin: 0 auto;
-    width: 58px;
-    height: 58px;
-    border-radius: 22px;
-  }
-
   .exploreCard p {
-    max-width: 230px;
-    margin-left: auto;
-    margin-right: auto;
+    margin: 0;
+    color: rgba(248,241,216,.62);
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   @media (max-width: 1220px) {
@@ -1835,8 +2016,23 @@ const styles = `
       grid-template-columns: 1fr;
     }
 
-    .overviewGrid {
+    .overviewGrid,
+    .missionSummaryGrid,
+    .exploreGrid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .missionLogHeader {
+      display: none;
+    }
+
+    .missionRow {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .viewMission {
+      text-align: left;
     }
   }
 
@@ -1851,6 +2047,8 @@ const styles = `
 
     .sideNav nav,
     .overviewGrid,
+    .missionSummaryGrid,
+    .exploreGrid,
     .actionGrid {
       grid-template-columns: 1fr;
     }
