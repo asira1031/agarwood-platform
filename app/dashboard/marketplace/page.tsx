@@ -25,6 +25,10 @@ type MarketplaceProduct = {
   stock_status: string | null;
   icon: string | null;
   image_url?: string | null;
+  photo_url?: string | null;
+  thumbnail_url?: string | null;
+  product_image_url?: string | null;
+  cover_url?: string | null;
   category: string | null;
   unit: string | null;
   low_stock_level: number | null;
@@ -116,6 +120,27 @@ function getProfileFirstName(profile: Profile | null) {
 
 function getForestName(group: TreeGroup | null | undefined) {
   return group?.forest_name || group?.group_name || "Unnamed Forest";
+}
+
+function getProductImageUrl(product: MarketplaceProduct): string | undefined {
+  const candidates = [
+    product.image_url,
+    product.photo_url,
+    product.thumbnail_url,
+    product.product_image_url,
+    product.cover_url,
+  ];
+
+  const found = candidates.find(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+
+  return found || undefined;
+}
+
+function getProductInitial(product: MarketplaceProduct): string {
+  const name = product.name || "A";
+  return name.trim().slice(0, 1).toUpperCase();
 }
 
 function isTreeAllowed(product: MarketplaceProduct) {
@@ -219,16 +244,6 @@ function isTreePurchaseProduct(product: MarketplaceProduct) {
   const category = normalizeSupplyCategory(product.category);
 
   return category !== "Tree Care Programs" && (productType === "TREE" || productType === "PACKAGE");
-}
-
-function getProductIcon(product: MarketplaceProduct) {
-  const type = getProductType(product);
-
-  if (product.icon) return product.icon;
-  if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "🌿";
-  if (type === "TREE") return "🌳";
-  if (type === "PACKAGE") return "📦";
-  return "🌱";
 }
 
 function getPrimaryActionLabel(product: MarketplaceProduct) {
@@ -1014,6 +1029,7 @@ export default function MarketplacePage() {
 
   const selectedCategory = selectedProduct ? normalizeSupplyCategory(selectedProduct.category) : "All Supplies";
   const selectedProductType = selectedProduct ? getProductType(selectedProduct) : "TREE";
+  const selectedProductImageUrl = selectedProduct ? getProductImageUrl(selectedProduct) : undefined;
   const selectedIsTreePurchase = selectedProduct ? isTreePurchaseProduct(selectedProduct) : false;
   const selectedQuantity = selectedProduct ? getSelectedTreeQuantity(selectedProduct) : 1;
   const selectedSubtotal = selectedProduct ? getSelectedPurchaseSubtotal(selectedProduct) : 0;
@@ -1065,7 +1081,7 @@ export default function MarketplacePage() {
 
       <section className="tabs">
         <button className={activeTab === "TREE" ? "active" : ""} onClick={() => setActiveTab("TREE")}>
-          <span className="tabIcon">🌳</span>
+          <span className="tabIcon">BT</span>
           <span>
             Buy Trees
             <small>{stats.trees} items</small>
@@ -1076,7 +1092,7 @@ export default function MarketplacePage() {
           className={activeTab === "TREE_PACKAGE" ? "active" : ""}
           onClick={() => setActiveTab("TREE_PACKAGE")}
         >
-          <span className="tabIcon">📦</span>
+          <span className="tabIcon">TP</span>
           <span>
             Tree Package
             <small>{stats.treePackages} items</small>
@@ -1087,7 +1103,7 @@ export default function MarketplacePage() {
           className={activeTab === "CARE_PACKAGE" ? "active" : ""}
           onClick={() => setActiveTab("CARE_PACKAGE")}
         >
-          <span className="tabIcon">🌿</span>
+          <span className="tabIcon">CP</span>
           <span>
             Care Package
             <small>{stats.carePackages} items</small>
@@ -1095,7 +1111,7 @@ export default function MarketplacePage() {
         </button>
 
         <button className={activeTab === "SUPPLY" ? "active" : ""} onClick={() => setActiveTab("SUPPLY")}>
-          <span className="tabIcon">🌱</span>
+          <span className="tabIcon">BS</span>
           <span>
             Buy Supplies
             <small>{stats.supplies} items</small>
@@ -1121,14 +1137,14 @@ export default function MarketplacePage() {
                     className={activeSupplyCategory === category ? "active" : ""}
                     onClick={() => setActiveSupplyCategory(category)}
                   >
-                    {category === "All Supplies" && "🌱"}
-                    {category === "Fertilizers" && "🧪"}
-                    {category === "Nutrients & Boosters" && "⚡"}
-                    {category === "Fungicides" && "🛡️"}
-                    {category === "Pest Control" && "🐞"}
-                    {category === "Soil Products" && "🪴"}
-                    {category === "Tree Health" && "💚"}
-                    {category === "Tree Care Programs" && "🌿"}
+                    <span className="categoryBadge">
+                      {category
+                        .split(" ")
+                        .map((part) => part[0])
+                        .join("")
+                        .slice(0, 2)
+                        .toUpperCase()}
+                    </span>
                     <span>{category}</span>
                   </button>
                 ))}
@@ -1170,16 +1186,19 @@ export default function MarketplacePage() {
                   const category = normalizeSupplyCategory(product.category);
                   const isProgram = category === "Tree Care Programs";
                   const treePurchase = isTreePurchaseProduct(product);
+                  const productImageUrl = getProductImageUrl(product);
 
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
-                      <div className="imageBox">
-                        {product.image_url ? (
-                          <img src={product.image_url} alt={product.name || "Marketplace product"} />
+                      <div className="productImage">
+                        {productImageUrl ? (
+                          <img src={productImageUrl} alt={product.name || "Marketplace product"} />
                         ) : (
-                          <div className="icon">{getProductIcon(product)}</div>
+                          <div className="productImageFallback">
+                            <span>{getProductInitial(product)}</span>
+                          </div>
                         )}
-                        <span>{product.stock_status || "AVAILABLE"}</span>
+                        <em>{product.stock_status || "AVAILABLE"}</em>
                       </div>
 
                       <div className="cardHead">
@@ -1239,11 +1258,13 @@ export default function MarketplacePage() {
               ×
             </button>
 
-            <div className="modalIcon">
-              {selectedProduct.image_url ? (
-                <img src={selectedProduct.image_url} alt={selectedProduct.name || "Marketplace product"} />
+            <div className="modalProductImage">
+              {selectedProductImageUrl ? (
+                <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
               ) : (
-                getProductIcon(selectedProduct)
+                <div className="productImageFallback">
+                  <span>{getProductInitial(selectedProduct)}</span>
+                </div>
               )}
             </div>
 
@@ -1646,7 +1667,23 @@ export default function MarketplacePage() {
         }
 
         .tabIcon {
-          font-size: 26px;
+          width: 42px;
+          height: 42px;
+          border-radius: 16px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(36,69,54,.12);
+          background: rgba(255,253,246,.55);
+          color: #244536;
+          font-size: 13px;
+          font-weight: 1000;
+          letter-spacing: .04em;
+        }
+
+        .tabs button.active .tabIcon {
+          color: #f4d58b;
+          border-color: rgba(244,213,139,.34);
+          background: rgba(255,255,255,.08);
         }
 
         .tabs button span:last-child {
@@ -1719,6 +1756,27 @@ export default function MarketplacePage() {
           box-shadow: 0 16px 30px rgba(36,69,54,.18);
         }
 
+        .categoryBadge {
+          width: 34px;
+          height: 34px;
+          border-radius: 13px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 auto;
+          color: #8c6a3c;
+          background: rgba(255,253,246,.70);
+          border: 1px solid rgba(92,70,35,.10);
+          font-size: 11px;
+          font-weight: 1000;
+          letter-spacing: .03em;
+        }
+
+        .categoryList button.active .categoryBadge {
+          color: #f4d58b;
+          background: rgba(255,255,255,.08);
+          border-color: rgba(244,213,139,.28);
+        }
+
         .productArea {
           min-width: 0;
         }
@@ -1770,6 +1828,73 @@ export default function MarketplacePage() {
           background:
             radial-gradient(circle at 92% 8%, rgba(255, 221, 143, .38), transparent 30%),
             rgba(255,253,246,.92);
+        }
+
+        .productImage,
+        .modalProductImage {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 10;
+          border-radius: 22px;
+          overflow: hidden;
+          background:
+            linear-gradient(135deg, rgba(244,213,139,.16), rgba(34,80,52,.28)),
+            rgba(255,255,255,.06);
+          border: 1px solid rgba(232,190,103,.16);
+          margin-bottom: 16px;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+        }
+
+        .modalProductImage {
+          width: min(260px, 100%);
+          margin-bottom: 18px;
+        }
+
+        .productImage img,
+        .modalProductImage img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .productImageFallback {
+          width: 100%;
+          height: 100%;
+          display: grid;
+          place-items: center;
+          background:
+            radial-gradient(circle at 50% 20%, rgba(244,213,139,.20), transparent 30%),
+            linear-gradient(135deg, rgba(14,48,31,.92), rgba(6,23,15,.96));
+        }
+
+        .productImageFallback span {
+          width: 64px;
+          height: 64px;
+          border-radius: 999px;
+          display: grid;
+          place-items: center;
+          color: #f4d58b;
+          border: 1px solid rgba(244,213,139,.34);
+          background: rgba(255,255,255,.07);
+          font-weight: 900;
+          font-size: 28px;
+          letter-spacing: -.04em;
+        }
+
+        .productImage em {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          border-radius: 999px;
+          padding: 7px 10px;
+          background: rgba(255,253,246,.86);
+          color: #244536;
+          font-size: 10px;
+          font-weight: 900;
+          font-style: normal;
+          letter-spacing: .08em;
+          box-shadow: 0 8px 18px rgba(16,40,31,.16);
         }
 
         .imageBox {

@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   getMissionInventoryItems,
   getMissionKeyFromText,
-  getMissionRule,
   missionNeedsInventory,
 } from "@/lib/tree-mission-engine";
 
@@ -148,10 +147,7 @@ type MissionInfo = {
     | "FERTILIZER"
     | "HEALTH_CHECK"
     | "QR_TAGGING"
-    | "CARE_PROGRAM"
-    | "PEST_CONTROL"
-    | "PRUNING"
-    | "TREE_OPERATION";
+    | "CARE_PROGRAM";
   label: string;
   group: MissionGroup;
   evidenceMode: EvidenceMode;
@@ -182,7 +178,7 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "GPS Verification",
     category: "Service",
     price: 80,
-    icon: "📍",
+    icon: "GPS_VERIFICATION",
     missionGroup: "Verification",
     evidenceMode: "GPS_ONLY",
     evidenceLabel: "GPS only",
@@ -194,7 +190,7 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Photo Update",
     category: "Service",
     price: 100,
-    icon: "📸",
+    icon: "PHOTO_UPDATE",
     missionGroup: "Verification",
     evidenceMode: "PHOTO_CURRENT_ONLY",
     evidenceLabel: "Current photo only",
@@ -206,7 +202,7 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Watering",
     category: "Service",
     price: 150,
-    icon: "💧",
+    icon: "WATERING",
     missionGroup: "Maintenance",
     evidenceMode: "PHOTO_BEFORE_AFTER",
     evidenceLabel: "Before & after photos",
@@ -217,7 +213,7 @@ const BASE_OPERATIONS: OperationItem[] = [
     name: "Fertilizer",
     category: "Inventory Use",
     price: 45,
-    icon: "🌿",
+    icon: "FERTILIZER",
     missionGroup: "Maintenance",
     evidenceMode: "PHOTO_BEFORE_AFTER",
     evidenceLabel: "Before & after photos",
@@ -228,23 +224,10 @@ const BASE_OPERATIONS: OperationItem[] = [
     requiredQty: 1,
   },
   {
-    name: "Pest Control",
-    category: "Inventory Use",
-    price: 90,
-    icon: "🛡️",
-    missionGroup: "Maintenance",
-    evidenceMode: "PHOTO_BEFORE_AFTER",
-    evidenceLabel: "Before & after photos",
-    gardenerRequirement: "Gardener must confirm pesticide/fungicide supply used and submit before and after photos only.",
-    description: "Request pest or fungal protection treatment for the selected target.",
-    requiredInventoryCategory: "Pesticide",
-    requiredQty: 1,
-  },
-  {
     name: "Health Check",
     category: "Service",
     price: 120,
-    icon: "🩺",
+    icon: "HEALTH_CHECK",
     missionGroup: "Inspection",
     evidenceMode: "HEALTH_ONLY",
     evidenceLabel: "Health status only",
@@ -306,13 +289,14 @@ function alertClass(value: string | null | undefined) {
   return "attention";
 }
 
-function alertIcon(value: string | null | undefined) {
+function alertLabel(value: string | null | undefined) {
   const status = normalize(value);
 
-  if (status === "PROTECTED") return "🟢";
-  if (status === "CRITICAL") return "🔴";
+  if (status === "PROTECTED") return "Healthy";
+  if (status === "CRITICAL") return "Needs Attention";
+  if (status === "SUBMITTED") return "Pending Evidence";
 
-  return "🟡";
+  return "Monitoring";
 }
 
 function getProgramDuration(program: MarketplaceProduct) {
@@ -354,22 +338,108 @@ function getNextRenewalDate(duration: string) {
 }
 
 function getOperationIcon(item: OperationItem) {
-  return item.icon || (item.category === "Care Program" ? "🛡️" : "🌿");
+  return <OperationIcon type={item.name || item.icon || item.category} />;
 }
 
 function getMissionInfo(item: OperationItem | undefined): MissionInfo {
-  const missionText = `${item?.name || ""} ${item?.category || ""}`;
-  const rule = getMissionRule(missionText);
-  const key = getMissionKeyFromText(missionText);
+  const rawName = String(item?.name || "").toLowerCase();
+
+  if (item?.category === "Care Program") {
+    return {
+      missionKey: "CARE_PROGRAM",
+      label: item.name || "Care Program",
+      group: "Protection Plan",
+      evidenceMode: "PHOTO_BEFORE_AFTER",
+      evidenceLabel: "Before & after photos",
+      gardenerRequirement:
+        "Automatic Mission Workflow: Customer → Admin → Gardener → Customer.",
+    };
+  }
+
+  if (rawName.includes("gps")) {
+    return {
+      missionKey: "GPS_VERIFICATION",
+      label: "GPS Verification",
+      group: "Verification",
+      evidenceMode: "GPS_ONLY",
+      evidenceLabel: "GPS only",
+      gardenerRequirement: "Gardener must submit GPS location only.",
+    };
+  }
+
+  if (rawName.includes("photo")) {
+    return {
+      missionKey: "PHOTO_UPDATE",
+      label: "Photo Update",
+      group: "Verification",
+      evidenceMode: "PHOTO_CURRENT_ONLY",
+      evidenceLabel: "Current photo only",
+      gardenerRequirement: "Gardener must submit one current proof photo only.",
+    };
+  }
+
+  if (rawName.includes("water")) {
+    return {
+      missionKey: "WATERING",
+      label: "Watering",
+      group: "Maintenance",
+      evidenceMode: "PHOTO_BEFORE_AFTER",
+      evidenceLabel: "Before & after photos",
+      gardenerRequirement: "Gardener must submit before and after photos only.",
+    };
+  }
+
+  if (rawName.includes("fertil")) {
+    return {
+      missionKey: "FERTILIZER",
+      label: "Fertilizer",
+      group: "Maintenance",
+      evidenceMode: "PHOTO_BEFORE_AFTER",
+      evidenceLabel: "Before & after photos",
+      gardenerRequirement: "Gardener must submit before and after photos only.",
+    };
+  }
+
+  if (rawName.includes("health") || rawName.includes("inspection")) {
+    return {
+      missionKey: "HEALTH_CHECK",
+      label: "Health Check",
+      group: "Inspection",
+      evidenceMode: "HEALTH_ONLY",
+      evidenceLabel: "Health status only",
+      gardenerRequirement: "Gardener must submit health status only.",
+    };
+  }
+
+  if (rawName.includes("qr")) {
+    return {
+      missionKey: "QR_TAGGING",
+      label: "QR Tag Installation",
+      group: "Verification",
+      evidenceMode: "PHOTO_CURRENT_ONLY",
+      evidenceLabel: "QR install proof photo",
+      gardenerRequirement: "Gardener must submit QR install proof photo only.",
+    };
+  }
 
   return {
-    missionKey: key,
-    label: rule.label,
-    group: rule.category as MissionGroup,
-    evidenceMode: rule.evidenceMode,
-    evidenceLabel: rule.evidenceLabel,
-    gardenerRequirement: rule.gardenerInstruction,
+    missionKey: "CARE_PROGRAM",
+    label: item?.name || "Care Mission",
+    group: item?.missionGroup || "Maintenance",
+    evidenceMode: item?.evidenceMode || "PHOTO_BEFORE_AFTER",
+    evidenceLabel: item?.evidenceLabel || "Before & after photos",
+    gardenerRequirement:
+      item?.gardenerRequirement || "Gardener must submit the required mission proof only.",
   };
+}
+
+function requiredInventoryItemUnit(value: string | null | undefined) {
+  const text = String(value || "").toLowerCase();
+
+  if (text.includes("fertilizer")) return "Bag";
+  if (text.includes("pesticide") || text.includes("fungicide")) return "Bottle";
+
+  return "Unit";
 }
 
 function getHistoryBucket(status: string | null | undefined) {
@@ -575,12 +645,12 @@ export default function TreeOperationsPage() {
         name: program.name || "Tree Care Program",
         category: "Care Program",
         price: Number(program.price || 0),
-        icon: program.icon || "🛡️",
+        icon: "CARE_PROGRAM",
         missionGroup: "Protection Plan",
         evidenceMode: "PHOTO_BEFORE_AFTER",
         evidenceLabel: "Before & after photos",
         gardenerRequirement:
-          "Subscription creates a paid care request. Admin/Gardener workflow activates after approval.",
+          "Automatic Mission Workflow: Customer → Admin → Gardener → Customer.",
         description: program.note || "Marketplace Tree Care Program.",
         duration: getProgramDuration(program),
         coverage: getProgramCoverage(program),
@@ -636,30 +706,52 @@ export default function TreeOperationsPage() {
     }));
   }, [operations]);
 
+  const missionKey = useMemo(() => {
+    return getMissionKeyFromText(operation?.name || "");
+  }, [operation]);
+
+  const requiresInventory = missionNeedsInventory(missionKey);
+  const missionInventoryItems = getMissionInventoryItems(missionKey);
+  const requiredInventoryLabel =
+    operation?.requiredInventoryCategory || missionInventoryItems[0] || "Required Supply";
+  const requiredInventoryQty = Number(operation?.requiredQty || 1);
+  const requiredInventoryUnit = requiredInventoryItemUnit(operation?.requiredInventoryCategory || requiredInventoryLabel);
+
   const requiredInventoryItem = useMemo(() => {
-    if (!operation?.requiredInventoryCategory) return null;
+    if (!requiresInventory) return null;
+
+    const requiredItems = missionInventoryItems.length
+      ? missionInventoryItems
+      : operation?.requiredInventoryCategory
+        ? [operation.requiredInventoryCategory]
+        : [];
+
+    if (requiredItems.length === 0) return null;
 
     return (
       inventory.find((item) => {
         const category = String(item.category || "").toLowerCase();
         const name = String(item.item_name || "").toLowerCase();
-        const required = String(
-          operation.requiredInventoryCategory || "",
-        ).toLowerCase();
 
         return (
           Number(item.remaining_qty || 0) > 0 &&
-          (category.includes(required) || name.includes(required))
+          requiredItems.some((requiredItem) => {
+            const required = String(requiredItem || "").toLowerCase();
+            return category.includes(required) || name.includes(required);
+          })
         );
       }) || null
     );
-  }, [inventory, operation]);
+  }, [inventory, missionInventoryItems, operation, requiresInventory]);
 
   const hasRequiredInventory =
-    operation?.category !== "Inventory Use" ||
-    (requiredInventoryItem &&
-      Number(requiredInventoryItem.remaining_qty || 0) >=
-        Number(operation.requiredQty || 1));
+    !requiresInventory ||
+    Boolean(
+      requiredInventoryItem &&
+        Number(requiredInventoryItem.remaining_qty || 0) >= requiredInventoryQty,
+    );
+  const inventoryRemaining = Number(requiredInventoryItem?.remaining_qty || 0);
+  const inventoryRemainingAfterMission = Math.max(inventoryRemaining - requiredInventoryQty, 0);
 
   const walletBalance = Number(wallet?.balance || 0);
   const membershipActive = normalize(profile?.membership_status) === "ACTIVE";
@@ -893,9 +985,9 @@ export default function TreeOperationsPage() {
       return;
     }
 
-    if (operation.category === "Inventory Use" && !hasRequiredInventory) {
+    if (requiresInventory && !hasRequiredInventory) {
       setMessage(
-        `inventory missing: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`,
+        `inventory missing: ${requiredInventoryLabel} is missing or low. Buy supplies from Marketplace first.`,
       );
       return;
     }
@@ -1130,9 +1222,9 @@ export default function TreeOperationsPage() {
     if (!operation)
       return setMessage("operation missing: Please choose a care service.");
 
-    if (operation.category === "Inventory Use" && !hasRequiredInventory) {
+    if (requiresInventory && !hasRequiredInventory) {
       setMessage(
-        `Preview blocked: ${operation.requiredInventoryCategory} is missing or low. Buy supplies from Marketplace first.`,
+        `Preview blocked: ${requiredInventoryLabel} is missing or low. Buy supplies from Marketplace first.`,
       );
       return;
     }
@@ -1170,7 +1262,7 @@ export default function TreeOperationsPage() {
         <div className="empty">Loading Tree Missions...</div>
       ) : forests.length === 0 ? (
         <section className="emptyState">
-          <div className="emptyIcon">🌳</div>
+          <div className="emptyIcon"><span /></div>
           <h2>No forest yet</h2>
           <p>
             Buy trees from Marketplace first. Your new forest will appear here
@@ -1205,7 +1297,7 @@ export default function TreeOperationsPage() {
                       onClick={() => handleSelectForest(forest.group_id)}
                     >
                       <div>
-                        <small>🌳 Forest</small>
+                        <small>Forest</small>
                         <b>{getForestName(forest)}</b>
                       </div>
                       <span>{Number(forest.total_trees || 0)} Trees</span>
@@ -1251,7 +1343,7 @@ export default function TreeOperationsPage() {
                   className={scope === "FOREST" ? "active" : ""}
                   onClick={() => setScope("FOREST")}
                 >
-                  <strong>🌳 Entire Forest</strong>
+                  <strong>Entire Forest</strong>
                   <span>
                     Best for protection plans and forest-wide maintenance.
                   </span>
@@ -1262,7 +1354,7 @@ export default function TreeOperationsPage() {
                   disabled={selectedForestTrees.length === 0}
                   onClick={() => setScope("TREE")}
                 >
-                  <strong>🌱 Single Seedling</strong>
+                  <strong>Single Seedling</strong>
                   <span>
                     Best for photo, GPS, health, or specific care requests.
                   </span>
@@ -1286,7 +1378,7 @@ export default function TreeOperationsPage() {
                         }
                         onClick={() => setSelectedTreeId(tree.tree_id)}
                       >
-                        <span>{alertIcon(tree.alert_status)}</span>
+                        <span className={`alertBadge ${alertClass(tree.alert_status)}`}>{alertLabel(tree.alert_status)}</span>
                         <div>
                           <b>{getTreeName(tree)}</b>
                           <small>
@@ -1348,9 +1440,6 @@ export default function TreeOperationsPage() {
 
                                 <div className="missionMetaGrid">
                                   <em>Required: {mission.evidenceLabel}</em>
-                                  {missionNeedsInventory(item.name) && (
-                                    <em>Inventory: {getMissionInventoryItems(item.name).join(" / ")}</em>
-                                  )}
                                   <em>
                                     Target: {scope === "FOREST" ? "Whole forest" : "Single tree"}
                                   </em>
@@ -1425,14 +1514,6 @@ export default function TreeOperationsPage() {
                     <Mini label="Category" value={selectedMissionInfo.group} />
                     <Mini label="Evidence" value={selectedMissionInfo.evidenceLabel} />
                     <Mini
-                      label="Inventory"
-                      value={
-                        missionNeedsInventory(operation?.name || selectedMissionInfo.label)
-                          ? getMissionInventoryItems(operation?.name || selectedMissionInfo.label).join(" / ")
-                          : "No inventory"
-                      }
-                    />
-                    <Mini
                       label="Target"
                       value={scope === "FOREST" ? "Entire Forest" : "Single Tree"}
                     />
@@ -1448,37 +1529,61 @@ export default function TreeOperationsPage() {
               </div>
             )}
 
-            {(operation?.category === "Inventory Use" || missionNeedsInventory(operation?.name || "")) && (
-              <div
-                className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}
-              >
-                <strong>Inventory Preview</strong>
-                {hasRequiredInventory && requiredInventoryItem ? (
+            <div
+              className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}
+            >
+              <strong>Inventory Status</strong>
+              {!requiresInventory ? (
+                <div className="miniGrid">
+                  <Mini label="Inventory" value="None required" />
+                  <Mini label="Status" value="Available" />
+                  <Mini label="Required" value="0" />
+                  <Mini label="Remaining After Mission" value="No inventory use" />
+                </div>
+              ) : hasRequiredInventory && requiredInventoryItem ? (
+                <div className="miniGrid">
+                  <Mini label="Status" value="Available" />
+                  <Mini label="Supply" value={requiredInventoryItem.item_name || requiredInventoryLabel} />
+                  <Mini
+                    label="Remaining"
+                    value={`${inventoryRemaining} ${requiredInventoryItem.unit || requiredInventoryUnit}`}
+                  />
+                  <Mini
+                    label="Required"
+                    value={`${requiredInventoryQty} ${requiredInventoryItem.unit || requiredInventoryUnit}`}
+                  />
+                  <Mini
+                    label="Remaining After Mission"
+                    value={`${inventoryRemainingAfterMission} ${requiredInventoryItem.unit || requiredInventoryUnit}`}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="miniGrid">
+                    <Mini label="Status" value="Out of Stock" />
+                    <Mini label="Required Supply" value={requiredInventoryLabel} />
+                    <Mini label="Required" value={`${requiredInventoryQty} ${requiredInventoryUnit}`} />
+                    <Mini label="Action" value="Buy from Marketplace" />
+                  </div>
                   <p>
-                    Available: {requiredInventoryItem.item_name} —{" "}
-                    {Number(requiredInventoryItem.remaining_qty || 0)}{" "}
-                    {requiredInventoryItem.unit || ""}
+                    {operation?.requiredInventoryCategory
+                      ? `No ${operation.requiredInventoryCategory} in inventory.`
+                      : "Required inventory item is missing."}{" "}
+                    Buy from Marketplace first.
                   </p>
-                ) : (
-                  <p>
-                   {operation?.requiredInventoryCategory
-  ? `No ${operation.requiredInventoryCategory} in inventory.`
-  : "Required inventory item is missing."}
-                    Please buy from Marketplace first.
-                  </p>
-                )}
+                </>
+              )}
 
-                {!hasRequiredInventory && (
-                  <Link className="buyMissing" href="/dashboard/marketplace">
-                    Buy Missing Supplies
-                  </Link>
-                )}
-              </div>
-            )}
+              {requiresInventory && !hasRequiredInventory && (
+                <Link className="buyMissing" href="/dashboard/marketplace">
+                  Buy from Marketplace
+                </Link>
+              )}
+            </div>
 
             {operation?.category === "Care Program" && (
               <div className="careSyncBox">
-                <strong>Protection Plan</strong>
+                <strong>Subscription Plan</strong>
                 <div className="miniGrid">
                   <Mini label="Plan" value={operation.name} />
                   <Mini label="Price" value={peso(operation.price)} />
@@ -1494,7 +1599,7 @@ export default function TreeOperationsPage() {
                   />
                 </div>
                 <p>
-                  Subscription creates a paid care request. Admin/Gardener workflow activates after approval, and no mission is completed without real field evidence.
+                  Automatic Mission Workflow: Customer → Admin → Gardener → Customer. No mission is completed without real field evidence and Admin approval.
                 </p>
               </div>
             )}
@@ -1561,7 +1666,7 @@ export default function TreeOperationsPage() {
 
                 <button
                   className="submitButton"
-                  disabled={processing}
+                  disabled={processing || !operation || (requiresInventory && !hasRequiredInventory)}
                   onClick={submitServiceRequest}
                 >
                   {processing
@@ -2502,6 +2607,76 @@ export default function TreeOperationsPage() {
           font-size: 12px;
         }
 
+
+
+        .alertBadge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: auto;
+          min-width: 96px;
+          height: 34px;
+          border-radius: 999px;
+          padding: 0 12px;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+          background: rgba(244,213,139,.14);
+          color: #f4d58b;
+          border: 1px solid rgba(244,213,139,.22);
+        }
+
+        .alertBadge.protected {
+          color: #8df0a4;
+          background: rgba(121,225,146,.12);
+          border-color: rgba(121,225,146,.20);
+        }
+
+        .alertBadge.critical {
+          color: #ffb08e;
+          background: rgba(255,120,96,.12);
+          border-color: rgba(255,120,96,.22);
+        }
+
+        .opIcon {
+          width: 48px;
+          height: 48px;
+          border-radius: 18px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(255,255,255,.10);
+          background: rgba(255,255,255,.08);
+          color: #f4d58b;
+        }
+
+        .opIcon svg {
+          width: 25px;
+          height: 25px;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 2;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+
+        .opIcon.blue { color: #9fd8ff; background: rgba(76,151,217,.14); }
+        .opIcon.green { color: #8df0a4; background: rgba(121,225,146,.12); }
+        .opIcon.orange { color: #f4d58b; background: rgba(244,213,139,.12); }
+        .opIcon.purple { color: #d8c1ff; background: rgba(151,112,214,.13); }
+        .opIcon.cyan { color: #a9fff3; background: rgba(77,209,197,.12); }
+        .opIcon.gold { color: #f4d58b; background: rgba(244,213,139,.12); }
+
+        .emptyIcon span {
+          display: inline-block;
+          width: 74px;
+          height: 74px;
+          border-radius: 999px;
+          background:
+            radial-gradient(circle at 50% 25%, rgba(244,213,139,.38), transparent 38%),
+            linear-gradient(135deg, rgba(244,213,139,.26), rgba(114,181,127,.18));
+          border: 1px solid rgba(244,213,139,.30);
+        }
         @media (max-width: 1260px) {
           .hero,
           .careLayout,
@@ -2546,6 +2721,57 @@ export default function TreeOperationsPage() {
       `}</style>
     </main>
   );
+}
+
+
+function OperationIcon({ type }: { type: string }) {
+  const key = normalize(type);
+
+  if (key.includes("WATER")) return <IconWrap tone="blue"><WaterIcon /></IconWrap>;
+  if (key.includes("FERTILIZER")) return <IconWrap tone="green"><LeafIcon /></IconWrap>;
+  if (key.includes("PHOTO")) return <IconWrap tone="orange"><CameraIcon /></IconWrap>;
+  if (key.includes("HEALTH")) return <IconWrap tone="purple"><HeartPulseIcon /></IconWrap>;
+  if (key.includes("GPS")) return <IconWrap tone="purple"><PinIcon /></IconWrap>;
+  if (key.includes("QR")) return <IconWrap tone="cyan"><QrIcon /></IconWrap>;
+  if (key.includes("CARE") || key.includes("PROGRAM") || key.includes("SUBSCRIPTION")) return <IconWrap tone="green"><RefreshIcon /></IconWrap>;
+
+  return <IconWrap tone="gold"><TaskIcon /></IconWrap>;
+}
+
+function IconWrap({ children, tone }: { children: ReactNode; tone: string }) {
+  return <span className={`opIcon ${tone}`}>{children}</span>;
+}
+
+function WaterIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M12 2S5.5 9.2 5.5 15a6.5 6.5 0 0 0 13 0C18.5 9.2 12 2 12 2Z" /><path d="M9 16.2c.7 1.4 1.8 2.1 3.3 2.1" /></svg>;
+}
+
+function LeafIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M21 4s-8.2-.8-13 4c-3.9 3.9-3 9-3 9s5.1.9 9-3c4.8-4.8 7-10 7-10Z" /><path d="M5 19c4-5 8-7 14-10" /></svg>;
+}
+
+function CameraIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M4 7h4l1.5-2h5L16 7h4v12H4V7Z" /><circle cx="12" cy="13" r="3.5" /></svg>;
+}
+
+function HeartPulseIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M20.5 5.8c-2-2-5.2-1.7-6.9.6L12 8.2l-1.6-1.8C8.7 4.1 5.5 3.8 3.5 5.8c-2.1 2.1-2 5.5.2 7.6L12 21l8.3-7.6c2.2-2.1 2.3-5.5.2-7.6Z" /><path d="M7 13h3l1.2-2.6L13.5 16l1.4-3H17" /></svg>;
+}
+
+function PinIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M12 21s7-6.1 7-12A7 7 0 0 0 5 9c0 5.9 7 12 7 12Z" /><circle cx="12" cy="9" r="2.4" /></svg>;
+}
+
+function QrIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Z" /><path d="M14 14h2v2h-2v-2Zm4 0h2v6h-2v-6Zm-4 4h2v2h-2v-2Z" /></svg>;
+}
+
+function RefreshIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.7 6.7L4 9.4" /><path d="M5.8 15A7 7 0 0 0 17.3 17.3L20 14.6" /></svg>;
+}
+
+function TaskIcon() {
+  return <svg viewBox="0 0 24 24"><path d="M7 3h10l3 3v15H4V3h3Z" /><path d="M8 12h8M8 16h6" /></svg>;
 }
 
 function PanelHead({ title, text }: { title: string; text: string }) {
