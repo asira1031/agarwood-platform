@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  getMissionInventoryItems,
+  getMissionKeyFromText,
+  getMissionRule,
+  missionNeedsInventory,
+} from "@/lib/tree-mission-engine";
 
 type CareScope = "FOREST" | "TREE";
 
@@ -127,12 +133,42 @@ type MarketplaceProduct = {
   created_at: string | null;
 };
 
+type MissionGroup = "Verification" | "Maintenance" | "Inspection" | "Protection Plan";
+type EvidenceMode =
+  | "GPS_ONLY"
+  | "PHOTO_CURRENT_ONLY"
+  | "PHOTO_BEFORE_AFTER"
+  | "HEALTH_ONLY";
+
+type MissionInfo = {
+  missionKey:
+    | "GPS_VERIFICATION"
+    | "PHOTO_UPDATE"
+    | "WATERING"
+    | "FERTILIZER"
+    | "HEALTH_CHECK"
+    | "QR_TAGGING"
+    | "CARE_PROGRAM"
+    | "PEST_CONTROL"
+    | "PRUNING"
+    | "TREE_OPERATION";
+  label: string;
+  group: MissionGroup;
+  evidenceMode: EvidenceMode;
+  evidenceLabel: string;
+  gardenerRequirement: string;
+};
+
 type OperationItem = {
   name: string;
   category: "Service" | "Inventory Use" | "Care Program";
   price: number;
   description: string;
   icon: string;
+  missionGroup?: MissionGroup;
+  evidenceMode?: EvidenceMode;
+  evidenceLabel?: string;
+  gardenerRequirement?: string;
   requiredInventoryCategory?: string;
   requiredQty?: number;
   duration?: string;
@@ -143,57 +179,78 @@ type OperationItem = {
 
 const BASE_OPERATIONS: OperationItem[] = [
   {
-    name: "Photo Update",
-    category: "Service",
-    price: 100,
-    icon: "📸",
-    description:
-      "Request a real caretaker photo update for the selected seedling or forest.",
-  },
-  {
     name: "GPS Verification",
     category: "Service",
     price: 80,
     icon: "📍",
+    missionGroup: "Verification",
+    evidenceMode: "GPS_ONLY",
+    evidenceLabel: "GPS only",
+    gardenerRequirement: "Gardener must submit GPS location only.",
     description:
-      "Request QR tag and plantation GPS verification from the field team.",
+      "Verify the exact plantation location and QR/tree identity from the field.",
   },
   {
-    name: "Watering Service",
+    name: "Photo Update",
+    category: "Service",
+    price: 100,
+    icon: "📸",
+    missionGroup: "Verification",
+    evidenceMode: "PHOTO_CURRENT_ONLY",
+    evidenceLabel: "Current photo only",
+    gardenerRequirement: "Gardener must submit one current proof photo only.",
+    description:
+      "Request a current caretaker photo update for the selected seedling or forest.",
+  },
+  {
+    name: "Watering",
     category: "Service",
     price: 150,
     icon: "💧",
+    missionGroup: "Maintenance",
+    evidenceMode: "PHOTO_BEFORE_AFTER",
+    evidenceLabel: "Before & after photos",
+    gardenerRequirement: "Gardener must submit before and after photos only.",
     description: "Request watering support from the plantation operation team.",
   },
   {
-    name: "Apply Fertilizer",
+    name: "Fertilizer",
     category: "Inventory Use",
     price: 45,
     icon: "🌿",
+    missionGroup: "Maintenance",
+    evidenceMode: "PHOTO_BEFORE_AFTER",
+    evidenceLabel: "Before & after photos",
+    gardenerRequirement: "Gardener must submit before and after photos only.",
     description:
       "Request fertilizer application using your available inventory.",
     requiredInventoryCategory: "Fertilizer",
     requiredQty: 1,
   },
   {
-    name: "Apply Fungicide",
+    name: "Pest Control",
     category: "Inventory Use",
-    price: 45,
+    price: 90,
     icon: "🛡️",
-    description:
-      "Request fungicide application for fungal prevention or treatment.",
-    requiredInventoryCategory: "Fungicide",
+    missionGroup: "Maintenance",
+    evidenceMode: "PHOTO_BEFORE_AFTER",
+    evidenceLabel: "Before & after photos",
+    gardenerRequirement: "Gardener must confirm pesticide/fungicide supply used and submit before and after photos only.",
+    description: "Request pest or fungal protection treatment for the selected target.",
+    requiredInventoryCategory: "Pesticide",
     requiredQty: 1,
   },
   {
-    name: "Apply Insecticide",
-    category: "Inventory Use",
-    price: 45,
-    icon: "🐞",
+    name: "Health Check",
+    category: "Service",
+    price: 120,
+    icon: "🩺",
+    missionGroup: "Inspection",
+    evidenceMode: "HEALTH_ONLY",
+    evidenceLabel: "Health status only",
+    gardenerRequirement: "Gardener must submit health status only.",
     description:
-      "Request insecticide application when field team confirms need.",
-    requiredInventoryCategory: "Insecticide",
-    requiredQty: 1,
+      "Request a field health inspection and status report for the selected target.",
   },
 ];
 
@@ -298,6 +355,36 @@ function getNextRenewalDate(duration: string) {
 
 function getOperationIcon(item: OperationItem) {
   return item.icon || (item.category === "Care Program" ? "🛡️" : "🌿");
+}
+
+function getMissionInfo(item: OperationItem | undefined): MissionInfo {
+  const missionText = `${item?.name || ""} ${item?.category || ""}`;
+  const rule = getMissionRule(missionText);
+  const key = getMissionKeyFromText(missionText);
+
+  return {
+    missionKey: key,
+    label: rule.label,
+    group: rule.category as MissionGroup,
+    evidenceMode: rule.evidenceMode,
+    evidenceLabel: rule.evidenceLabel,
+    gardenerRequirement: rule.gardenerInstruction,
+  };
+}
+
+function getHistoryBucket(status: string | null | undefined) {
+  const value = normalize(status || "PENDING");
+
+  if (["PENDING", "REQUESTED", "PAID", "PROCESSING", "NOT_ASSIGNED", ""].includes(value)) {
+    return "Waiting for Admin";
+  }
+
+  if (value === "ASSIGNED") return "Assigned to Gardener";
+  if (value === "IN_PROGRESS") return "In Progress";
+  if (value === "SUBMITTED") return "Submitted for Review";
+  if (value === "COMPLETED" || value === "APPROVED") return "Completed";
+
+  return "Waiting for Admin";
 }
 
 export default function TreeOperationsPage() {
@@ -489,6 +576,11 @@ export default function TreeOperationsPage() {
         category: "Care Program",
         price: Number(program.price || 0),
         icon: program.icon || "🛡️",
+        missionGroup: "Protection Plan",
+        evidenceMode: "PHOTO_BEFORE_AFTER",
+        evidenceLabel: "Before & after photos",
+        gardenerRequirement:
+          "Subscription creates a paid care request. Admin/Gardener workflow activates after approval.",
         description: program.note || "Marketplace Tree Care Program.",
         duration: getProgramDuration(program),
         coverage: getProgramCoverage(program),
@@ -525,6 +617,24 @@ export default function TreeOperationsPage() {
       operations[0]
     );
   }, [operations, selectedOperation]);
+
+  const selectedMissionInfo = useMemo(() => {
+    return getMissionInfo(operation);
+  }, [operation]);
+
+  const groupedOperations = useMemo(() => {
+    const order: MissionGroup[] = [
+      "Verification",
+      "Maintenance",
+      "Inspection",
+      "Protection Plan",
+    ];
+
+    return order.map((group) => ({
+      group,
+      items: operations.filter((item) => getMissionInfo(item).group === group),
+    }));
+  }, [operations]);
 
   const requiredInventoryItem = useMemo(() => {
     if (!operation?.requiredInventoryCategory) return null;
@@ -637,6 +747,23 @@ export default function TreeOperationsPage() {
       totalSpent,
     };
   }, [forests, trees, requests]);
+
+  const missionHistoryGroups = useMemo(() => {
+    const labels = [
+      "Waiting for Admin",
+      "Assigned to Gardener",
+      "In Progress",
+      "Submitted for Review",
+      "Completed",
+    ];
+
+    return labels.map((label) => ({
+      label,
+      items: requests.filter((request) =>
+        getHistoryBucket(request.care_program_status || request.status) === label,
+      ),
+    }));
+  }, [requests]);
 
   function handleSelectForest(forestId: string) {
     const forestTrees = trees.filter((tree) => tree.group_id === forestId);
@@ -1023,26 +1150,24 @@ export default function TreeOperationsPage() {
             ← Back to Dashboard
           </Link>
 
-          <p className="eyebrow">Arganwood Forest Care</p>
-          <h1>Forest Care Center</h1>
+          <p className="eyebrow">Arganwood Tree Missions</p>
+          <h1>Tree Mission Center</h1>
           <span>
-            Protect your forest with care services, field verification, and
-            protection plans. Choose an entire forest or one seedling, then send
-            the request to Admin for gardener assignment.
+            Choose a tree or forest mission. Subscribed care plans can be handled automatically through Admin and Gardener workflow.
           </span>
         </div>
 
         <div className="walletCard">
           <p>Wallet Balance</p>
           <strong>{peso(walletBalance)}</strong>
-          <small>Care requests and protection plans</small>
+          <small>Tree missions and protection plans</small>
         </div>
       </section>
 
       {message && <div className="message">{message}</div>}
 
       {loading ? (
-        <div className="empty">Loading Forest Care...</div>
+        <div className="empty">Loading Tree Missions...</div>
       ) : forests.length === 0 ? (
         <section className="emptyState">
           <div className="emptyIcon">🌳</div>
@@ -1104,8 +1229,8 @@ export default function TreeOperationsPage() {
 
             <section className="panel targetPanel">
               <PanelHead
-                title="2. Select Coverage"
-                text="Care can apply to the whole forest or one seedling."
+                title="2. Choose Tree / Forest Scope"
+                text="Pick whether this mission covers the whole forest or one seedling."
               />
 
               {selectedForest && (
@@ -1179,46 +1304,71 @@ export default function TreeOperationsPage() {
 
             <section className="panel actionPanel">
               <PanelHead
-                title="3. Choose Care"
-                text="Pick a care service or protection plan."
+                title="3. Choose Mission"
+                text="Mission cards are grouped by verification, maintenance, inspection, and protection plan."
               />
 
               <div className="operationPreview">
-                <small>Care Target</small>
+                <small>Mission Target</small>
                 <b>{targetLabel}</b>
                 <p>
                   {scope === "FOREST"
-                    ? "This request will include group_id."
-                    : "This request will include group_id and tree_id."}
+                    ? "This mission will include group_id."
+                    : "This mission will include group_id and tree_id."}
                 </p>
               </div>
 
-              <div className="serviceList">
-                {operations.map((item) => (
-                  <button
-                    key={`${item.category}-${item.name}`}
-                    className={`serviceCard ${selectedOperation === item.name ? "active" : ""} ${
-                      item.category === "Care Program" ? "program" : ""
-                    }`}
-                    onClick={() => handleChooseOperation(item)}
-                  >
-                    <div className="serviceIcon">{getOperationIcon(item)}</div>
-                    <div>
-                      <span>
-                        {item.category === "Care Program"
-                          ? "Protection Plan"
-                          : item.category}
-                      </span>
-                      <strong>{item.name}</strong>
-                      <p>{item.description}</p>
-                      <b>
-                        {item.category === "Care Program"
-                          ? `${peso(item.price)} • ${item.duration || "Program"}`
-                          : peso(item.price)}
-                      </b>
+              <div className="missionGroups">
+                {groupedOperations.map((group) =>
+                  group.items.length === 0 ? null : (
+                    <div className="missionGroup" key={group.group}>
+                      <div className="missionGroupHead">
+                        <span>{group.group}</span>
+                      </div>
+
+                      <div className="serviceList compact">
+                        {group.items.map((item) => {
+                          const mission = getMissionInfo(item);
+
+                          return (
+                            <button
+                              key={`${item.category}-${item.name}`}
+                              className={`serviceCard ${selectedOperation === item.name ? "active" : ""} ${
+                                item.category === "Care Program" ? "program" : ""
+                              }`}
+                              onClick={() => handleChooseOperation(item)}
+                            >
+                              <div className="serviceIcon">
+                                {getOperationIcon(item)}
+                              </div>
+                              <div>
+                                <span>{mission.group}</span>
+                                <strong>{mission.label}</strong>
+                                <p>{item.description}</p>
+
+                                <div className="missionMetaGrid">
+                                  <em>Required: {mission.evidenceLabel}</em>
+                                  {missionNeedsInventory(item.name) && (
+                                    <em>Inventory: {getMissionInventoryItems(item.name).join(" / ")}</em>
+                                  )}
+                                  <em>
+                                    Target: {scope === "FOREST" ? "Whole forest" : "Single tree"}
+                                  </em>
+                                </div>
+
+                                <b>
+                                  {item.category === "Care Program"
+                                    ? `${peso(item.price)} • ${item.duration || "Program"}`
+                                    : peso(item.price)}
+                                </b>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </button>
-                ))}
+                  ),
+                )}
               </div>
             </section>
           </section>
@@ -1256,14 +1406,36 @@ export default function TreeOperationsPage() {
               <>
                 <div className="checkoutHead">
                   <div>
-                    <p className="eyebrow">Confirm Care Request</p>
+                    <p className="eyebrow">Confirm Mission</p>
                     <h2>{operation?.name || "Forest Care"}</h2>
-                    <span>{operation?.description || "Operation preview."}</span>
+                    <span>{operation?.description || "Mission preview."}</span>
                   </div>
 
                   <div className="checkoutTarget">
                     <small>Target</small>
                     <b>{targetLabel}</b>
+                  </div>
+                </div>
+
+                <div className="missionRequirementBox">
+                  <strong>Mission Requirement</strong>
+                  <p>{selectedMissionInfo.gardenerRequirement}</p>
+                  <div className="miniGrid">
+                    <Mini label="Mission" value={selectedMissionInfo.label} />
+                    <Mini label="Category" value={selectedMissionInfo.group} />
+                    <Mini label="Evidence" value={selectedMissionInfo.evidenceLabel} />
+                    <Mini
+                      label="Inventory"
+                      value={
+                        missionNeedsInventory(operation?.name || selectedMissionInfo.label)
+                          ? getMissionInventoryItems(operation?.name || selectedMissionInfo.label).join(" / ")
+                          : "No inventory"
+                      }
+                    />
+                    <Mini
+                      label="Target"
+                      value={scope === "FOREST" ? "Entire Forest" : "Single Tree"}
+                    />
                   </div>
                 </div>
 
@@ -1276,7 +1448,7 @@ export default function TreeOperationsPage() {
               </div>
             )}
 
-            {operation?.category === "Inventory Use" && (
+            {(operation?.category === "Inventory Use" || missionNeedsInventory(operation?.name || "")) && (
               <div
                 className={`inventoryCheck ${hasRequiredInventory ? "ok" : "bad"}`}
               >
@@ -1289,7 +1461,9 @@ export default function TreeOperationsPage() {
                   </p>
                 ) : (
                   <p>
-                    No {operation.requiredInventoryCategory} in inventory.
+                   {operation?.requiredInventoryCategory
+  ? `No ${operation.requiredInventoryCategory} in inventory.`
+  : "Required inventory item is missing."}
                     Please buy from Marketplace first.
                   </p>
                 )}
@@ -1320,9 +1494,7 @@ export default function TreeOperationsPage() {
                   />
                 </div>
                 <p>
-                  Forest Care creates a paid pending request first. The tree
-                  stays pending activation until Admin assigns the field team,
-                  gardener evidence is submitted, and Admin approves activation.
+                  Subscription creates a paid care request. Admin/Gardener workflow activates after approval, and no mission is completed without real field evidence.
                 </p>
               </div>
             )}
@@ -1396,7 +1568,7 @@ export default function TreeOperationsPage() {
                     ? "Processing..."
                     : hasActiveSameRequest
                       ? "Already Requested"
-                      : "Submit Care Request"}
+                      : "Submit Mission Request"}
                 </button>
               </div>
             )}
@@ -1416,65 +1588,95 @@ export default function TreeOperationsPage() {
 
           <section className="history panel">
             <PanelHead
-              title="Recent Care Activity"
-              text="Read-only records from tree_operation_requests."
+              title="Mission History"
+              text="Grouped read-only records from tree_operation_requests."
             />
 
             {requests.length === 0 ? (
-              <div className="softEmpty">No care requests yet.</div>
+              <div className="softEmpty">
+                No mission record yet. Request a care mission or subscribe to a protection plan.
+              </div>
             ) : (
-              <div className="requestList">
-                {requests.map((request) => {
-                  const requestTree = trees.find(
-                    (item) => item.tree_id === request.tree_id,
-                  );
-                  const requestForest = forests.find(
-                    (item) => item.group_id === request.group_id,
-                  );
-                  const target =
-                    request.tree_id && requestTree
-                      ? getTreeName(requestTree)
-                      : requestForest
-                        ? getForestName(requestForest)
-                        : request.tree_id || request.group_id || "Forest Care";
+              <div className="historyGroups">
+                {missionHistoryGroups.map((group) => (
+                  <div className="historyGroup" key={group.label}>
+                    <div className="historyGroupHead">
+                      <strong>{group.label}</strong>
+                      <span>{group.items.length}</span>
+                    </div>
 
-                  return (
-                    <div className="requestRow" key={request.id}>
-                      <div>
-                        <strong>
-                          {request.service_name ||
-                            request.care_program_name ||
-                            request.operation_type ||
-                            "Forest Care"}
-                        </strong>
-                        <p>
-                          {target} • {formatDate(request.created_at)}
-                        </p>
-                        {request.notes && <small>{request.notes}</small>}
-                      </div>
-
-                      <div className="requestRight">
-                        <span
-                          className={`status ${statusClass(request.care_program_status || request.status)}`}
-                        >
-                          {request.care_program_status ||
-                            request.status ||
-                            "PENDING"}
-                        </span>
-                        <b>
-                          {peso(
-                            Number(
+                    {group.items.length === 0 ? (
+                      <div className="softEmpty small">No mission in this stage.</div>
+                    ) : (
+                      <div className="requestList">
+                        {group.items.map((request) => {
+                          const requestTree = trees.find(
+                            (item) => item.tree_id === request.tree_id,
+                          );
+                          const requestForest = forests.find(
+                            (item) => item.group_id === request.group_id,
+                          );
+                          const target =
+                            request.tree_id && requestTree
+                              ? getTreeName(requestTree)
+                              : requestForest
+                                ? getForestName(requestForest)
+                                : request.tree_id || request.group_id || "Tree Mission";
+                          const mission = getMissionInfo({
+                            name:
+                              request.service_name ||
+                              request.care_program_name ||
+                              request.operation_type ||
+                              "Care Mission",
+                            category: request.care_program_name
+                              ? "Care Program"
+                              : "Service",
+                            price: Number(
                               request.care_program_price ||
                                 request.total_amount ||
                                 request.operation_fee ||
                                 0,
                             ),
-                          )}
-                        </b>
+                            description: "",
+                            icon: "",
+                          });
+
+                          return (
+                            <div className="requestRow" key={request.id}>
+                              <div>
+                                <strong>{mission.label}</strong>
+                                <p>
+                                  {target} • {mission.evidenceLabel} • {formatDate(request.created_at)}
+                                </p>
+                                {request.notes && <small>{request.notes}</small>}
+                              </div>
+
+                              <div className="requestRight">
+                                <span
+                                  className={`status ${statusClass(request.care_program_status || request.status)}`}
+                                >
+                                  {request.care_program_status ||
+                                    request.status ||
+                                    "PENDING"}
+                                </span>
+                                <b>
+                                  {peso(
+                                    Number(
+                                      request.care_program_price ||
+                                        request.total_amount ||
+                                        request.operation_fee ||
+                                        0,
+                                    ),
+                                  )}
+                                </b>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    </div>
-                  );
-                })}
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </section>
@@ -2208,6 +2410,96 @@ export default function TreeOperationsPage() {
           font-weight: 900;
           text-align: center;
           margin-top: 14px;
+        }
+
+
+
+        .missionGroups,
+        .historyGroups {
+          display: grid;
+          gap: 14px;
+          margin-top: 18px;
+        }
+
+        .missionGroup,
+        .historyGroup,
+        .missionRequirementBox {
+          border-radius: 22px;
+          padding: 14px;
+          background: rgba(255,255,255,.055);
+          border: 1px solid rgba(255,255,255,.08);
+        }
+
+        .missionRequirementBox {
+          margin-top: 18px;
+        }
+
+        .missionRequirementBox strong,
+        .missionGroupHead span,
+        .historyGroupHead strong {
+          display: block;
+          color: #fff7df;
+          font-size: 14px;
+          text-transform: uppercase;
+          letter-spacing: .10em;
+        }
+
+        .missionRequirementBox p {
+          margin: 8px 0 0;
+          color: rgba(255,247,223,.66);
+          line-height: 1.5;
+          font-weight: 800;
+        }
+
+        .missionGroupHead,
+        .historyGroupHead {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 10px;
+        }
+
+        .historyGroupHead span {
+          display: inline-flex;
+          min-width: 34px;
+          height: 34px;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          color: #08120d;
+          background: #f4d58b;
+          font-weight: 900;
+        }
+
+        .serviceList.compact {
+          margin-top: 0;
+          max-height: none;
+        }
+
+        .missionMetaGrid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 6px;
+          margin-top: 10px;
+        }
+
+        .missionMetaGrid em {
+          display: inline-flex;
+          width: fit-content;
+          border-radius: 999px;
+          padding: 7px 10px;
+          color: rgba(255,247,223,.86);
+          background: rgba(255,255,255,.08);
+          font-style: normal;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .softEmpty.small {
+          margin-top: 0;
+          padding: 11px;
+          font-size: 12px;
         }
 
         @media (max-width: 1260px) {

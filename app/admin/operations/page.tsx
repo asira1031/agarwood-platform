@@ -1,19 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  getMissionInventoryItems,
+  getMissionKeyFromText,
+  getMissionRule,
+  hasRequiredEvidenceForMission,
+  missionNeedsInventory,
+} from "@/lib/tree-mission-engine";
 
 type Row = Record<string, any>;
 
-type TabKey =
-  | "PENDING"
-  | "ASSIGNED"
-  | "IN_PROGRESS"
-  | "SUBMITTED"
-  | "COMPLETED"
-  | "REWORK"
-  | "REJECTED"
-  | "ALL";
+type TabKey = "NEEDS_ASSIGNMENT" | "IN_FIELD" | "WAITING_REVIEW" | "COMPLETED" | "ALL";
 
 type EvidenceBundle = {
   photos: Row[];
@@ -38,8 +37,7 @@ type OperationItem = {
 };
 
 const TERMINAL_STATUSES = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"];
-const ACTIVE_PENDING_STATUSES = ["PENDING", "REQUESTED", "PAID", "PROCESSING"];
-const REWORK_STATUSES = ["REWORK", "REWORK_REQUESTED", "NEEDS_REWORK"];
+const ACTIVE_PENDING_STATUSES = ["PENDING", "REQUESTED", "PAID", "PROCESSING", "NOT_ASSIGNED", ""];
 
 export default function AdminOperationsPage() {
   const [requests, setRequests] = useState<Row[]>([]);
@@ -52,9 +50,12 @@ export default function AdminOperationsPage() {
   const [photoRows, setPhotoRows] = useState<Row[]>([]);
   const [gpsRows, setGpsRows] = useState<Row[]>([]);
   const [healthRows, setHealthRows] = useState<Row[]>([]);
+
   const [selectedCaretaker, setSelectedCaretaker] = useState<Record<string, string>>({});
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<TabKey>("PENDING");
+  const [tab, setTab] = useState<TabKey>("NEEDS_ASSIGNMENT");
+  const [selectedId, setSelectedId] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [processingId, setProcessingId] = useState("");
@@ -99,7 +100,6 @@ export default function AdminOperationsPage() {
     if (profileByEmailError) return fail(profileByEmailError.message);
 
     const profile = profileById || profileByEmail;
-
     if (!profile) return fail("Admin profile not found.");
 
     const { data: adminRow, error: adminError } = await supabase
@@ -111,7 +111,6 @@ export default function AdminOperationsPage() {
     if (adminError) return fail(adminError.message);
 
     const fallbackAdmin = String(profile.email || "").toLowerCase() === "admin@test.com";
-
     if (!adminRow && !fallbackAdmin) return fail("Admin access not found.");
 
     setAdminProfileId(profile.id);
@@ -134,47 +133,54 @@ export default function AdminOperationsPage() {
           "id, profile_id, customer_profile_id, tree_id, group_id, operation_type, request_type, service_name, care_program_name, care_program_status, status, assignment_status, caretaker_id, operation_fee, platform_fee, total_amount, amount, notes, admin_notes, created_at, requested_at, assigned_at, completed_at, updated_at"
         )
         .order("created_at", { ascending: false }),
+
       supabase
         .from("caretakers")
         .select("id, caretaker_profile_id, full_name, email, phone, status, assigned_area")
         .order("full_name", { ascending: true }),
+
       supabase
         .from("caretaker_assignments")
         .select(
           "id, caretaker_id, caretaker_profile_id, admin_profile_id, customer_profile_id, tree_id, group_id, operation_request_id, assignment_type, source_type, status, assigned_at, started_at, submitted_at, completed_at, notes, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
+
       supabase
         .from("caretaker_task_logs")
         .select(
           "id, caretaker_id, caretaker_profile_id, customer_profile_id, tree_id, group_id, operation_request_id, assignment_id, task_type, source_type, evidence_status, status, notes, created_at, started_at, submitted_at, completed_at, updated_at"
         )
         .order("created_at", { ascending: false }),
-      supabase
-        .from("profiles")
-        .select("id, full_name, email, phone, membership_status, kyc_status"),
+
+      supabase.from("profiles").select("id, full_name, email, phone, membership_status, kyc_status"),
+
       supabase
         .from("trees")
         .select(
           "id, profile_id, customer_profile_id, group_id, display_name, custom_name, tree_code, tree_qr_url, tree_group_name, stage, health_status, care_status, care_expires_at, valuation_status, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
+
       supabase
         .from("tree_groups")
         .select("id, profile_id, customer_profile_id, group_name, forest_name, farm_location, block_name, total_trees, status")
         .order("created_at", { ascending: false }),
+
       supabase
         .from("tree_photo_updates")
         .select(
           "id, assignment_id, operation_request_id, tree_id, group_id, customer_profile_id, caretaker_id, caretaker_profile_id, photo_url, image_url, before_photo_url, after_photo_url, caption, notes, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
+
       supabase
         .from("tree_gps_logs")
         .select(
           "id, assignment_id, operation_request_id, tree_id, group_id, customer_profile_id, caretaker_id, caretaker_profile_id, latitude, longitude, map_url, gps_url, location_note, notes, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
+
       supabase
         .from("tree_health_reports")
         .select(
@@ -229,6 +235,7 @@ export default function AdminOperationsPage() {
         null;
 
       const tree = request.tree_id ? treeMap.get(String(request.tree_id)) || null : null;
+
       const group = request.group_id
         ? groupMap.get(String(request.group_id)) || null
         : tree?.group_id
@@ -251,7 +258,8 @@ export default function AdminOperationsPage() {
       const caretaker = caretakerId ? caretakerMap.get(String(caretakerId)) || null : null;
       const evidence = collectEvidence(request, assignment, task, photoRows, gpsRows, healthRows);
       const sourceType = getSourceType(request);
-      const status = normalizeStatus(task?.status || assignment?.status || request.assignment_status || request.status);
+      const rawStatus = task?.status || assignment?.status || request.assignment_status || request.status;
+      const status = normalizeStatus(rawStatus);
       const evidenceStatus = normalizeStatus(task?.evidence_status || getEvidenceStatus(evidence) || status);
       const assignmentMode = request.tree_id || tree?.id ? "TREE" : "FOREST";
 
@@ -273,24 +281,59 @@ export default function AdminOperationsPage() {
     });
   }, [requests, assignments, tasks, treeMap, groupMap, profileMap, caretakerMap, photoRows, gpsRows, healthRows]);
 
-  const filteredItems = useMemo(() => {
-    if (tab === "ALL") return operationItems;
-    if (tab === "PENDING") return operationItems.filter((item) => ACTIVE_PENDING_STATUSES.includes(item.status));
-    if (tab === "REWORK") return operationItems.filter((item) => REWORK_STATUSES.includes(item.status));
-    return operationItems.filter((item) => item.status === tab);
-  }, [operationItems, tab]);
-
   const stats = useMemo(() => {
     return {
-      pending: operationItems.filter((item) => ACTIVE_PENDING_STATUSES.includes(item.status)).length,
+      total: operationItems.length,
+      pending: operationItems.filter((item) => isPendingItem(item)).length,
       assigned: operationItems.filter((item) => item.status === "ASSIGNED").length,
       inProgress: operationItems.filter((item) => item.status === "IN_PROGRESS").length,
-      submitted: operationItems.filter((item) => item.status === "SUBMITTED").length,
+      inField: operationItems.filter((item) => isInFieldItem(item)).length,
+      submitted: operationItems.filter((item) => isWaitingReviewItem(item)).length,
       completed: operationItems.filter((item) => item.status === "COMPLETED").length,
-      rework: operationItems.filter((item) => REWORK_STATUSES.includes(item.status)).length,
-      rejected: operationItems.filter((item) => item.status === "REJECTED").length,
     };
   }, [operationItems]);
+
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return operationItems.filter((item) => {
+      const matchesTab =
+        tab === "ALL" ||
+        (tab === "NEEDS_ASSIGNMENT" && isPendingItem(item)) ||
+        (tab === "IN_FIELD" && isInFieldItem(item)) ||
+        (tab === "WAITING_REVIEW" && isWaitingReviewItem(item)) ||
+        (tab === "COMPLETED" && item.status === "COMPLETED");
+
+      if (!matchesTab) return false;
+      if (!q) return true;
+
+      const text = [
+        item.operationType,
+        item.sourceType,
+        item.status,
+        item.tree?.tree_code,
+        treeName(item.tree),
+        forestName(item.group, item.tree),
+        customerName(item.customer),
+        item.customer?.email,
+        item.caretaker?.full_name,
+        item.caretaker?.email,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return text.includes(q);
+    });
+  }, [operationItems, tab, search]);
+
+  const selectedItem = useMemo(() => {
+    return (
+      filteredItems.find((item) => String(item.request.id) === String(selectedId)) ||
+      filteredItems[0] ||
+      operationItems[0] ||
+      null
+    );
+  }, [filteredItems, operationItems, selectedId]);
 
   async function rollbackAssignment(assignmentId: string) {
     await supabase.from("caretaker_task_logs").delete().eq("assignment_id", assignmentId);
@@ -313,7 +356,10 @@ export default function AdminOperationsPage() {
     const now = new Date().toISOString();
     const customerProfileId = resolveCustomerProfileId(item);
     const groupId = item.request.group_id || item.group?.id || item.tree?.group_id || null;
-    const treeId = item.assignmentMode === "TREE" ? item.request.tree_id || item.tree?.id || null : item.request.tree_id || null;
+    const treeId =
+      item.assignmentMode === "TREE"
+        ? item.request.tree_id || item.tree?.id || null
+        : item.request.tree_id || null;
     const sourceType = item.sourceType;
 
     if (!customerProfileId) return fail("Customer profile is required before assignment.");
@@ -343,7 +389,9 @@ export default function AdminOperationsPage() {
       .select("id")
       .single();
 
-    if (assignmentError || !createdAssignment) return fail(assignmentError?.message || "Assignment creation failed.");
+    if (assignmentError || !createdAssignment) {
+      return fail(assignmentError?.message || "Assignment creation failed.");
+    }
 
     const taskPayload = {
       assignment_id: createdAssignment.id,
@@ -356,7 +404,7 @@ export default function AdminOperationsPage() {
       task_type: sourceType,
       source_type: sourceType,
       evidence_status: "PENDING",
-      notes: `${item.assignmentMode} assignment created from Admin Forest Operations Center.`,
+      notes: `${item.assignmentMode} assignment created from Admin Operations Queue.`,
       status: "ASSIGNED",
       created_at: now,
       updated_at: now,
@@ -389,9 +437,9 @@ export default function AdminOperationsPage() {
       return fail(`Request sync failed. Assignment was rolled back: ${requestError.message}`);
     }
 
-    setMessage(`${item.assignmentMode === "FOREST" ? "Forest" : "Tree"} assigned to gardener successfully.`);
+    setMessage("Request assigned to gardener successfully.");
     setProcessingId("");
-    setTab("ASSIGNED");
+    setTab("IN_FIELD");
     await loadData();
   }
 
@@ -402,8 +450,9 @@ export default function AdminOperationsPage() {
     if (!item.task?.id) return setMessage("Task log is required before review.");
     if (!hasAnyEvidence(item.evidence)) return setMessage("Gardener evidence is required before Admin review.");
 
-    if (action === "APPROVE" && !hasCompleteEvidence(item.evidence)) {
-      return setMessage("Photo, GPS, and Health evidence are required before approving completion.");
+    if (action === "APPROVE" && !hasRequiredEvidence(item)) {
+      setMessage("Required mission evidence is missing.");
+      return;
     }
 
     const submittedEnough = item.status === "SUBMITTED" || item.evidenceStatus === "SUBMITTED";
@@ -420,8 +469,8 @@ export default function AdminOperationsPage() {
       action === "APPROVE"
         ? "Approve completion? Customer will now see this operation as completed."
         : action === "REJECT"
-        ? "Reject this submitted evidence? Customer will not see this as completed."
-        : "Request gardener rework? Customer will not see this as completed.";
+        ? "Reject this submitted evidence?"
+        : "Request gardener rework?";
 
     if (!window.confirm(confirmedText)) return;
 
@@ -473,14 +522,12 @@ export default function AdminOperationsPage() {
 
     if (action === "APPROVE") {
       await activateCareAfterApproval(item, now);
-      setMessage("Completion approved. Customer timeline can now show this operation as COMPLETED.");
+      setMessage("Completion approved. Customer can now see this operation as completed.");
       setTab("COMPLETED");
     } else if (action === "REJECT") {
-      setMessage("Evidence rejected and synced. Customer completion remains blocked.");
-      setTab("REJECTED");
+      setMessage("Evidence rejected and synced.");
     } else {
-      setMessage("Rework requested and synced back to Gardener. Customer completion remains blocked.");
-      setTab("REWORK");
+      setMessage("Rework requested and synced back to Gardener.");
     }
 
     setProcessingId("");
@@ -500,8 +547,11 @@ export default function AdminOperationsPage() {
   }
 
   async function activateCareAfterApproval(item: OperationItem, now: string) {
-    const serviceName = `${item.request.request_type || ""} ${item.request.operation_type || ""} ${item.request.service_name || ""} ${item.request.care_program_name || ""}`.toUpperCase();
-    const shouldActivateProtection = serviceName.includes("CARE_PROGRAM") || Boolean(item.request.care_program_name);
+    const missionKey = getMissionKey(
+      `${item.sourceType || ""} ${item.operationType || ""} ${item.request.request_type || ""} ${item.request.operation_type || ""} ${item.request.service_name || ""} ${item.request.care_program_name || ""}`,
+    );
+    const shouldActivateProtection =
+      missionKey === "CARE_PROGRAM" || Boolean(item.request.care_program_name);
 
     if (!shouldActivateProtection) return;
 
@@ -570,107 +620,157 @@ export default function AdminOperationsPage() {
     await loadData();
   }
 
+  const activeCaretakers = caretakers.filter((caretaker) => normalizeStatus(caretaker.status) === "ACTIVE");
+
   return (
-    <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
-      <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.28),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
+    <main className="operationsPage">
+      <div className="topBar">
+        <div>
+          <p>ARGANWOOD ADMIN</p>
+          <h1>Mission Queue</h1>
+          <span>Map every tree or forest request into clear gardener missions and evidence review.</span>
+        </div>
 
-      <div className="mx-auto max-w-7xl space-y-8">
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl md:p-9">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">Admin Operations</p>
-              <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">Forest Operations Center</h1>
-              <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-                Assign work to gardeners, review submitted evidence, and only mark customer operations completed after Admin approval.
-              </p>
-            </div>
-
-            <button
-              onClick={loadData}
-              disabled={loading}
-              className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-6 py-4 font-black text-[#f7d774] transition hover:bg-[#d9b45f]/25 disabled:opacity-50"
-            >
-              {loading ? "Refreshing..." : "Refresh Operations"}
-            </button>
-          </div>
-
-          {message && (
-            <div className="mt-6 rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-4 text-sm font-bold text-[#ffe49a]">
-              {message}
-            </div>
-          )}
-
-          <div className="mt-8 grid gap-4 md:grid-cols-4 xl:grid-cols-7">
-            <HeroStat label="Pending" value={stats.pending} />
-            <HeroStat label="Assigned" value={stats.assigned} tone="blue" />
-            <HeroStat label="In Progress" value={stats.inProgress} tone="yellow" />
-            <HeroStat label="Submitted" value={stats.submitted} tone="purple" />
-            <HeroStat label="Completed" value={stats.completed} tone="green" />
-            <HeroStat label="Rework" value={stats.rework} tone="orange" />
-            <HeroStat label="Rejected" value={stats.rejected} tone="red" />
-          </div>
-        </section>
-
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl backdrop-blur-xl">
-          <div className="flex flex-wrap gap-3">
-            {[
-              ["PENDING", "Pending Requests"],
-              ["ASSIGNED", "Assigned"],
-              ["IN_PROGRESS", "In Progress"],
-              ["SUBMITTED", "Submitted by Gardener"],
-              ["COMPLETED", "Completed"],
-              ["REWORK", "Rework"],
-              ["REJECTED", "Rejected"],
-              ["ALL", "All"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key as TabKey)}
-                className={`rounded-full px-5 py-3 text-sm font-black transition ${
-                  tab === key
-                    ? "bg-[#d9b45f] text-[#071f16]"
-                    : "border border-white/10 bg-white/10 text-white/70 hover:bg-white/15"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="space-y-5">
-          {loading ? (
-            <EmptyCard text="Loading operation requests..." />
-          ) : filteredItems.length === 0 ? (
-            <EmptyCard text="No operation requests in this view." />
-          ) : (
-            filteredItems.map((item) => (
-              <OperationCard
-                key={item.request.id}
-                item={item}
-                caretakers={caretakers.filter((caretaker) => normalizeStatus(caretaker.status) === "ACTIVE")}
-                selectedCaretaker={selectedCaretaker[item.request.id] || ""}
-                setSelectedCaretaker={(caretakerId) =>
-                  setSelectedCaretaker((current) => ({ ...current, [item.request.id]: caretakerId }))
-                }
-                reviewNote={reviewNotes[item.request.id] || ""}
-                setReviewNote={(note) => setReviewNotes((current) => ({ ...current, [item.request.id]: note }))}
-                assignGardener={() => assignGardener(item)}
-                cancelRequest={() => cancelRequest(item)}
-                approveCompletion={() => reviewSubmittedWork(item, "APPROVE")}
-                rejectEvidence={() => reviewSubmittedWork(item, "REJECT")}
-                requestRework={() => reviewSubmittedWork(item, "REWORK")}
-                processing={processingId === item.request.id}
-              />
-            ))
-          )}
-        </section>
+        <button onClick={loadData} disabled={loading}>
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
       </div>
+
+      {message && <div className="message">{message}</div>}
+
+      <section className="layout">
+        <aside className="filtersPanel">
+          <div className="filterHead">
+            <h2>Mission Buckets</h2>
+            <button onClick={() => setTab("ALL")}>Clear</button>
+          </div>
+
+          <FilterButton active={tab === "NEEDS_ASSIGNMENT"} label="Needs Assignment" count={stats.pending} onClick={() => setTab("NEEDS_ASSIGNMENT")} />
+          <FilterButton active={tab === "IN_FIELD"} label="In Field" count={stats.inField} onClick={() => setTab("IN_FIELD")} />
+          <FilterButton active={tab === "WAITING_REVIEW"} label="Waiting Review" count={stats.submitted} onClick={() => setTab("WAITING_REVIEW")} />
+          <FilterButton active={tab === "COMPLETED"} label="Completed" count={stats.completed} onClick={() => setTab("COMPLETED")} />
+          <FilterButton active={tab === "ALL"} label="All Missions" count={stats.total} onClick={() => setTab("ALL")} />
+
+          <div className="filterDivider" />
+
+          <p className="filterTitle">Request Types</p>
+          <Legend label="Watering" type="WATERING" />
+          <Legend label="Fertilizer" type="FERTILIZER" />
+          <Legend label="Photo Update" type="PHOTO_UPDATE" />
+          <Legend label="Health Check" type="HEALTH_CHECK" />
+          <Legend label="GPS Verification" type="GPS_VERIFICATION" />
+          <Legend label="QR Tagging" type="QR_TAGGING" />
+          <Legend label="Care Subscription" type="CARE_PROGRAM" />
+        </aside>
+
+        <section className="queuePanel">
+          <div className="toolbar">
+            <div className="searchBox">
+              <SearchIcon />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by customer, tree code, service..."
+              />
+            </div>
+
+            <button>Sort: Newest</button>
+          </div>
+
+          <div className="statsGrid">
+            <StatCard label="Total Missions" value={stats.total} tone="gold" />
+            <StatCard label="Needs Assignment" value={stats.pending} tone="yellow" />
+            <StatCard label="In Field" value={stats.inField} tone="blue" />
+            <StatCard label="Waiting Review" value={stats.submitted} tone="cyan" />
+            <StatCard label="Completed" value={stats.completed} tone="green" />
+            <StatCard label="Active Load" value={stats.inField + stats.submitted} tone="purple" />
+          </div>
+
+          <div className="requestList">
+            {loading ? (
+              <EmptyCard text="Loading operation requests..." />
+            ) : filteredItems.length === 0 ? (
+              <EmptyCard text="No operation requests in this view." />
+            ) : (
+              filteredItems.map((item) => (
+                <button
+                  type="button"
+                  key={item.request.id}
+                  onClick={() => setSelectedId(item.request.id)}
+                  className={`operationCard ${selectedItem?.request.id === item.request.id ? "selected" : ""}`}
+                >
+                  <OperationIcon type={item.sourceType || item.operationType} />
+
+                  <div className="cardMain">
+                    <div className="cardTitle">
+                      <h3>{item.operationType}</h3>
+                      <StatusBadge status={item.status} />
+                    </div>
+
+                    <p>
+                      <b>{getMissionMeta(item).requirement}</b>
+                      <span>•</span>
+                      {item.assignmentMode === "TREE" ? `${treeName(item.tree)} • ${item.tree?.tree_code || "No code"}` : forestName(item.group, item.tree)}
+                    </p>
+
+                    <div className="cardMeta">
+                      <span>{customerName(item.customer)}</span>
+                      <span>{forestName(item.group, item.tree)}</span>
+                      <span>{formatDate(item.request.created_at || item.request.requested_at)}</span>
+                    </div>
+                  </div>
+
+                  <div className="cardAction">
+                    {item.caretaker ? (
+                      <>
+                        <strong>{item.caretaker.full_name || item.caretaker.email}</strong>
+                        <small>Gardener</small>
+                      </>
+                    ) : (
+                      <>
+                        <strong className="priority">{priorityLabel(item)}</strong>
+                        <small>Needs assignment</small>
+                      </>
+                    )}
+                  </div>
+
+                  <ChevronIcon />
+                </button>
+              ))
+            )}
+          </div>
+        </section>
+
+        <aside className="detailPanel">
+          {selectedItem ? (
+            <OperationDetails
+              item={selectedItem}
+              caretakers={activeCaretakers}
+              selectedCaretaker={selectedCaretaker[selectedItem.request.id] || ""}
+              setSelectedCaretaker={(caretakerId) =>
+                setSelectedCaretaker((current) => ({ ...current, [selectedItem.request.id]: caretakerId }))
+              }
+              reviewNote={reviewNotes[selectedItem.request.id] || ""}
+              setReviewNote={(note) => setReviewNotes((current) => ({ ...current, [selectedItem.request.id]: note }))}
+              assignGardener={() => assignGardener(selectedItem)}
+              cancelRequest={() => cancelRequest(selectedItem)}
+              approveCompletion={() => reviewSubmittedWork(selectedItem, "APPROVE")}
+              rejectEvidence={() => reviewSubmittedWork(selectedItem, "REJECT")}
+              requestRework={() => reviewSubmittedWork(selectedItem, "REWORK")}
+              processing={processingId === selectedItem.request.id}
+            />
+          ) : (
+            <EmptyCard text="Select an operation request." />
+          )}
+        </aside>
+      </section>
+
+      <style>{styles}</style>
     </main>
   );
 }
 
-function OperationCard({
+function OperationDetails({
   item,
   caretakers,
   selectedCaretaker,
@@ -699,295 +799,272 @@ function OperationCard({
 }) {
   const closed = TERMINAL_STATUSES.includes(item.status);
   const canAssign = !item.assignment && !closed;
-  const canReview = Boolean(item.assignment?.id && item.task?.id && hasAnyEvidence(item.evidence));
-  const showReviewActions = canReview && ["SUBMITTED", "REWORK_REQUESTED", "REJECTED"].includes(item.status) === false;
-  const needsReview = canReview && (item.status === "SUBMITTED" || item.evidenceStatus === "SUBMITTED");
-  const assignedCaretaker = item.caretaker;
+  const needsReview = Boolean(
+    item.assignment?.id &&
+      item.task?.id &&
+      hasAnyEvidence(item.evidence) &&
+      (item.status === "SUBMITTED" || item.evidenceStatus === "SUBMITTED")
+  );
 
   return (
-    <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-        <div className="flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="rounded-full border border-[#d9b45f]/30 bg-[#d9b45f]/10 px-3 py-1 text-xs font-black text-[#ffe49a]">
-              {item.assignmentMode} ASSIGNMENT
-            </span>
-            <StatusBadge status={item.status} />
-            <StatusBadge status={`EVIDENCE_${item.evidenceStatus}`} compact />
-            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-black text-white/55">
-              {item.sourceType.replaceAll("_", " ")}
-            </span>
-          </div>
-
-          <h2 className="mt-4 text-3xl font-black text-white">{item.operationType}</h2>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <Info label="Customer" value={customerName(item.customer)} subValue={item.customer?.email || "No email"} />
-            <Info label="Forest" value={`🌳 ${forestName(item.group, item.tree)}`} subValue={item.group ? "Forest group" : "Ungrouped forest"} />
-            <Info label="Seedling" value={treeName(item.tree)} subValue={item.tree?.tree_code ? `Tree Code: ${item.tree.tree_code}` : item.assignmentMode === "FOREST" ? "Forest-level request" : "No tree code"} />
-            <Info label="Requested Service" value={item.operationType} subValue={formatMoney(item.request.total_amount || item.request.amount || 0)} />
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <Info label="Request Status" value={item.request.status || "PENDING"} subValue={formatDate(item.request.created_at || item.request.requested_at)} />
-            <Info label="Assignment Status" value={item.assignment?.status || "Not assigned"} subValue={item.assignment ? "caretaker_assignments synced" : "Waiting for admin"} />
-            <Info label="Assigned Gardener" value={assignedCaretaker?.full_name || assignedCaretaker?.email || "Not assigned"} subValue={assignedCaretaker?.assigned_area || "Select gardener"} />
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <Info label="Photo Evidence" value={`${item.evidence.photos.length} submitted`} subValue={latestDate(item.evidence.photos)} />
-            <Info label="GPS Evidence" value={`${item.evidence.gps.length} submitted`} subValue={latestDate(item.evidence.gps)} />
-            <Info label="Health Evidence" value={`${item.evidence.health.length} submitted`} subValue={latestDate(item.evidence.health)} />
-          </div>
-
-          {item.request.notes && (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/65">
-              <span className="font-black text-[#ffe49a]">Customer Notes:</span> {item.request.notes}
-            </div>
-          )}
-
-          {item.request.admin_notes && (
-            <div className="mt-4 rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm text-[#ffe49a]">
-              <span className="font-black">Admin Notes:</span> {item.request.admin_notes}
-            </div>
-          )}
-
-          <EvidencePanel evidence={item.evidence} />
-        </div>
-
-        <aside className="w-full rounded-3xl border border-white/10 bg-black/20 p-5 xl:w-[360px]">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-white/45">Gardener Assignment</p>
-          <p className="mt-3 text-lg font-black text-[#ffe49a]">
-            {assignedCaretaker?.full_name || assignedCaretaker?.email || "No gardener assigned"}
-          </p>
-
-          {canAssign ? (
-            <div className="mt-5 space-y-3">
-              <select
-                value={selectedCaretaker}
-                onChange={(event) => setSelectedCaretaker(event.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-[#071f16] p-4 text-white outline-none"
-              >
-                <option value="">Select gardener</option>
-                {caretakers.map((caretaker) => (
-                  <option key={caretaker.id} value={caretaker.id}>
-                    {caretaker.full_name || caretaker.email}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                onClick={assignGardener}
-                disabled={processing || caretakers.length === 0}
-                className="w-full rounded-2xl bg-[#d9b45f] px-5 py-4 font-black text-[#071f16] disabled:opacity-50"
-              >
-                {processing ? "Assigning..." : `Assign ${item.assignmentMode === "FOREST" ? "Forest" : "Tree"}`}
-              </button>
-
-              <button
-                onClick={cancelRequest}
-                disabled={processing}
-                className="w-full rounded-2xl border border-red-300/25 bg-red-500/10 px-5 py-4 font-black text-red-100 disabled:opacity-50"
-              >
-                Cancel Request
-              </button>
-            </div>
-          ) : (
-            <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm font-bold text-emerald-100">
-              {item.assignment ? "Synced to Gardener Portal." : "This request is closed."}
-            </div>
-          )}
-
-          <div className="mt-5 rounded-2xl border border-white/10 bg-[#03130d]/70 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">Admin Review</p>
-            <textarea
-              value={reviewNote}
-              onChange={(event) => setReviewNote(event.target.value)}
-              placeholder="Required for rejection or rework. Optional for approval."
-              className="mt-3 min-h-[100px] w-full rounded-2xl border border-white/10 bg-black/30 p-3 text-sm text-white outline-none placeholder:text-white/35"
-            />
-
-            {needsReview ? (
-              <div className="mt-3 grid gap-3">
-                <button
-                  onClick={approveCompletion}
-                  disabled={processing}
-                  className="rounded-2xl bg-emerald-500 px-5 py-4 font-black text-[#03130d] transition hover:bg-emerald-400 disabled:opacity-50"
-                >
-                  {processing ? "Reviewing..." : "Approve Completion"}
-                </button>
-                <button
-                  onClick={requestRework}
-                  disabled={processing}
-                  className="rounded-2xl border border-yellow-300/30 bg-yellow-500/10 px-5 py-4 font-black text-yellow-100 disabled:opacity-50"
-                >
-                  Request Rework
-                </button>
-                <button
-                  onClick={rejectEvidence}
-                  disabled={processing}
-                  className="rounded-2xl border border-red-300/30 bg-red-500/10 px-5 py-4 font-black text-red-100 disabled:opacity-50"
-                >
-                  Reject Evidence
-                </button>
-              </div>
-            ) : showReviewActions ? (
-              <p className="mt-3 text-sm font-bold text-white/55">Waiting for submitted evidence before completion approval.</p>
-            ) : (
-              <p className="mt-3 text-sm font-bold text-white/55">Review actions are locked for this status.</p>
-            )}
-          </div>
-
-          {item.assignment && !closed && (
-            <button
-              onClick={cancelRequest}
-              disabled={processing}
-              className="mt-3 w-full rounded-2xl border border-red-300/25 bg-red-500/10 px-5 py-4 font-black text-red-100 disabled:opacity-50"
-            >
-              Cancel & Sync
-            </button>
-          )}
-        </aside>
+    <>
+      <div className="detailHeader">
+        <h2>Operation Request Details</h2>
+        <StatusBadge status={item.status} />
       </div>
+
+      <div className="detailService">
+        <OperationIcon type={item.sourceType || item.operationType} />
+        <div>
+          <h3>{item.operationType}</h3>
+          <p>{getMissionMeta(item).requirement}</p>
+        </div>
+      </div>
+
+      <DetailBox title="Mission Requirement">
+        <div className="requirementBox">
+          <strong>{getMissionMeta(item).label}</strong>
+          <p>{getMissionMeta(item).reviewRule}</p>
+          <small>Evidence table: {getMissionMeta(item).evidenceTable}</small>
+          {missionNeedsInventory(item.sourceType || item.operationType) && (
+            <small>Inventory Required: {getMissionInventoryItems(item.sourceType || item.operationType).join(" / ")}</small>
+          )}
+        </div>
+      </DetailBox>
+
+      <DetailBox title="Tree Information">
+        <InfoRow label="Tree Code" value={item.tree?.tree_code || "Forest Level"} />
+        <InfoRow label="Seedling Name" value={treeName(item.tree)} />
+        <InfoRow label="Forest" value={forestName(item.group, item.tree)} />
+        <InfoRow label="Assignment Mode" value={item.assignmentMode} />
+      </DetailBox>
+
+      <DetailBox title="Request Information">
+        <InfoRow label="Customer" value={customerName(item.customer)} />
+        <InfoRow label="Requested Date" value={formatDate(item.request.created_at || item.request.requested_at)} />
+        <InfoRow label="Priority" value={priorityLabel(item)} />
+        <InfoRow label="Notes" value={item.request.notes || "No customer notes"} />
+      </DetailBox>
+
+      <DetailBox title="Assignment">
+        <InfoRow label="Status" value={item.assignment?.status || "Not Assigned"} />
+        <InfoRow label="Gardener" value={item.caretaker?.full_name || item.caretaker?.email || "Not Assigned"} />
+
+        {canAssign ? (
+          <div className="assignBox">
+            <select value={selectedCaretaker} onChange={(event) => setSelectedCaretaker(event.target.value)}>
+              <option value="">Select gardener...</option>
+              {caretakers.map((caretaker) => (
+                <option key={caretaker.id} value={caretaker.id}>
+                  {caretaker.full_name || caretaker.email}
+                </option>
+              ))}
+            </select>
+
+            <button onClick={assignGardener} disabled={processing || caretakers.length === 0}>
+              {processing ? "Assigning..." : "Assign Gardener"}
+            </button>
+          </div>
+        ) : (
+          <div className="syncedBox">{item.assignment ? "Synced to Gardener Portal." : "Request is closed."}</div>
+        )}
+      </DetailBox>
+
+      <DetailBox title="Submitted Evidence">
+        <EvidenceMeter item={item} />
+        <InfoRow label="Photos" value={`${item.evidence.photos.length} record(s)`} />
+        <InfoRow label="GPS Logs" value={`${item.evidence.gps.length} record(s)`} />
+        <InfoRow label="Health Reports" value={`${item.evidence.health.length} record(s)`} />
+      </DetailBox>
+
+      <DetailBox title="Admin Review">
+        <textarea
+          value={reviewNote}
+          onChange={(event) => setReviewNote(event.target.value)}
+          placeholder="Required for rejection or rework. Optional for approval."
+        />
+
+        {needsReview ? (
+          <div className="reviewActions">
+            <button onClick={approveCompletion} disabled={processing}>
+              Approve Completion
+            </button>
+            <button onClick={requestRework} disabled={processing}>
+              Request Rework
+            </button>
+            <button onClick={rejectEvidence} disabled={processing}>
+              Reject Evidence
+            </button>
+          </div>
+        ) : (
+          <p className="reviewLocked">Waiting for submitted evidence before review.</p>
+        )}
+
+        {!closed && (
+          <button className="cancelButton" onClick={cancelRequest} disabled={processing}>
+            Cancel Request
+          </button>
+        )}
+      </DetailBox>
+
+      <DetailBox title="Activity Timeline">
+        <Timeline label="Request Created" value={formatDate(item.request.created_at || item.request.requested_at)} />
+        <Timeline label="Assigned" value={formatDate(item.assignment?.assigned_at || item.request.assigned_at)} />
+        <Timeline label="Submitted" value={formatDate(item.task?.submitted_at || item.assignment?.submitted_at)} />
+        <Timeline label="Completed" value={formatDate(item.request.completed_at || item.assignment?.completed_at)} />
+      </DetailBox>
+    </>
+  );
+}
+
+
+function EvidenceMeter({ item }: { item: OperationItem }) {
+  const ready = hasRequiredEvidence(item);
+  const meta = getMissionMeta(item);
+
+  return (
+    <div className={`evidenceMeter ${ready ? "ready" : "missing"}`}>
+      <div>
+        <strong>{ready ? "Ready for approval" : "Evidence incomplete"}</strong>
+        <span>{meta.requirement}</span>
+      </div>
+      <b>{ready ? "100%" : "Pending"}</b>
+    </div>
+  );
+}
+
+function FilterButton({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button className={`filterButton ${active ? "active" : ""}`} onClick={onClick}>
+      <span>{label}</span>
+      <b>{count}</b>
+    </button>
+  );
+}
+
+function Legend({ label, type }: { label: string; type: string }) {
+  return (
+    <div className="legend">
+      <OperationIcon type={type} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function StatCard({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <article className={`statCard ${tone}`}>
+      <p>{label}</p>
+      <h3>{value}</h3>
     </article>
   );
 }
 
-function EvidencePanel({ evidence }: { evidence: EvidenceBundle }) {
-  const allEmpty = !hasAnyEvidence(evidence);
-
-  if (allEmpty) {
-    return (
-      <div className="mt-5 rounded-2xl border border-white/10 bg-black/20 p-5 text-sm font-bold text-white/55">
-        No gardener evidence submitted yet.
-      </div>
-    );
-  }
-
+function DetailBox({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mt-5 rounded-3xl border border-white/10 bg-black/20 p-5">
-      <p className="text-xs font-black uppercase tracking-[0.2em] text-[#d9b45f]">Submitted Evidence</p>
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <EvidenceColumn title="Photo Updates" rows={evidence.photos} type="PHOTO" />
-        <EvidenceColumn title="GPS Logs" rows={evidence.gps} type="GPS" />
-        <EvidenceColumn title="Health Reports" rows={evidence.health} type="HEALTH" />
-      </div>
+    <section className="detailBox">
+      <h3>{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: any }) {
+  return (
+    <div className="infoRow">
+      <span>{label}</span>
+      <b>{value || "—"}</b>
     </div>
   );
 }
 
-function EvidenceColumn({ title, rows, type }: { title: string; rows: Row[]; type: "PHOTO" | "GPS" | "HEALTH" }) {
+function Timeline({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-[#03130d]/70 p-4">
-      <p className="font-black text-white">{title}</p>
-      <div className="mt-3 space-y-3">
-        {rows.length === 0 ? (
-          <p className="text-sm font-bold text-white/45">No records.</p>
-        ) : (
-          rows.map((row) => <EvidenceItem key={`${type}-${row.id}`} row={row} type={type} />)
-        )}
+    <div className="timelineRow">
+      <span />
+      <div>
+        <strong>{label}</strong>
+        <p>{value}</p>
       </div>
     </div>
   );
 }
 
-function EvidenceItem({ row, type }: { row: Row; type: "PHOTO" | "GPS" | "HEALTH" }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/25 p-3 text-sm text-white/65">
-      <div className="flex items-center justify-between gap-3">
-        <StatusBadge status={row.status || "SUBMITTED"} compact />
-        <span className="text-xs font-bold text-white/40">{formatDate(row.created_at)}</span>
-      </div>
-
-      {type === "PHOTO" && (
-        <div className="mt-3 grid gap-2">
-          {row.photo_url && <ImageLink label="Current Photo" href={row.photo_url} />}
-          {row.before_photo_url && <ImageLink label="Before Photo" href={row.before_photo_url} />}
-          {row.after_photo_url && <ImageLink label="After Photo" href={row.after_photo_url} />}
-        </div>
-      )}
-
-      {type === "GPS" && (
-        <p className="mt-3 font-bold text-white/70">
-          📍 {row.latitude || "—"}, {row.longitude || "—"}
-        </p>
-      )}
-
-      {type === "HEALTH" && <p className="mt-3 font-bold text-white/70">Health: {row.health_status || "—"}</p>}
-
-      {row.notes && <p className="mt-2 leading-relaxed">{row.notes}</p>}
-    </div>
-  );
-}
-
-function ImageLink({ label, href }: { label: string; href: string }) {
-  return (
-    <a href={href} target="_blank" rel="noreferrer" className="rounded-xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 px-3 py-2 text-xs font-black text-[#ffe49a] hover:bg-[#d9b45f]/20">
-      Open {label}
-    </a>
-  );
-}
-
-function HeroStat({ label, value, tone }: { label: string; value: number; tone?: "green" | "yellow" | "blue" | "purple" | "gold" | "orange" | "red" }) {
-  const color =
-    tone === "green"
-      ? "text-emerald-200"
-      : tone === "yellow"
-      ? "text-yellow-200"
-      : tone === "blue"
-      ? "text-blue-200"
-      : tone === "purple"
-      ? "text-purple-200"
-      : tone === "orange"
-      ? "text-orange-200"
-      : tone === "red"
-      ? "text-red-200"
-      : "text-[#d9b45f]";
-
-  return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">{label}</p>
-      <p className={`mt-3 text-3xl font-black ${color}`}>{value}</p>
-    </div>
-  );
-}
-
-function Info({ label, value, subValue }: { label: string; value: string; subValue?: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.14em] text-white/40">{label}</p>
-      <p className="mt-2 break-words text-lg font-black text-white">{value || "—"}</p>
-      {subValue ? <p className="mt-1 break-words text-xs font-semibold text-white/45">{subValue}</p> : null}
-    </div>
-  );
-}
-
-function StatusBadge({ status, compact }: { status: string; compact?: boolean }) {
+function StatusBadge({ status }: { status: string }) {
   const normalized = normalizeStatus(status);
-  const color =
-    normalized.includes("COMPLETED") || normalized.includes("APPROVED")
-      ? "border-emerald-300/30 bg-emerald-500/20 text-emerald-100"
-      : normalized.includes("SUBMITTED")
-      ? "border-purple-300/30 bg-purple-500/20 text-purple-100"
-      : normalized.includes("IN_PROGRESS")
-      ? "border-yellow-300/30 bg-yellow-500/20 text-yellow-100"
-      : normalized.includes("ASSIGNED")
-      ? "border-blue-300/30 bg-blue-500/20 text-blue-100"
-      : normalized.includes("REWORK")
-      ? "border-orange-300/30 bg-orange-500/20 text-orange-100"
-      : ["CANCELLED", "REJECTED", "FAILED"].some((item) => normalized.includes(item))
-      ? "border-red-300/30 bg-red-500/20 text-red-100"
-      : "border-[#d9b45f]/30 bg-[#d9b45f]/10 text-[#ffe49a]";
-
-  return (
-    <span className={`rounded-full border ${compact ? "px-2 py-1 text-[10px]" : "px-3 py-1 text-xs"} font-black ${color}`}>
-      {normalized.replaceAll("_", " ")}
-    </span>
-  );
+  return <span className={`statusBadge ${normalized.toLowerCase()}`}>{normalized.replaceAll("_", " ")}</span>;
 }
 
 function EmptyCard({ text }: { text: string }) {
-  return <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-8 text-sm font-bold text-white/60 shadow-2xl backdrop-blur-xl">{text}</div>;
+  return <div className="emptyCard">{text}</div>;
+}
+
+function OperationIcon({ type }: { type: string }) {
+  const key = normalizeStatus(type);
+
+  if (key.includes("WATER")) return <IconWrap tone="blue"><WaterSvg /></IconWrap>;
+  if (key.includes("FERTILIZER")) return <IconWrap tone="green"><LeafSvg /></IconWrap>;
+  if (key.includes("PHOTO")) return <IconWrap tone="orange"><CameraSvg /></IconWrap>;
+  if (key.includes("HEALTH")) return <IconWrap tone="purple"><HeartSvg /></IconWrap>;
+  if (key.includes("GPS")) return <IconWrap tone="purple"><PinSvg /></IconWrap>;
+  if (key.includes("QR")) return <IconWrap tone="cyan"><QrSvg /></IconWrap>;
+  if (key.includes("CARE")) return <IconWrap tone="green"><RefreshSvg /></IconWrap>;
+
+  return <IconWrap tone="gold"><TaskSvg /></IconWrap>;
+}
+
+function IconWrap({ children, tone }: { children: ReactNode; tone: string }) {
+  return <span className={`opIcon ${tone}`}>{children}</span>;
+}
+
+function WaterSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M12 2S5.5 9.2 5.5 15a6.5 6.5 0 0 0 13 0C18.5 9.2 12 2 12 2Z" /><path d="M9 16.2c.7 1.4 1.8 2.1 3.3 2.1" /></svg>;
+}
+
+function LeafSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M21 4s-8.2-.8-13 4c-3.9 3.9-3 9-3 9s5.1.9 9-3c4.8-4.8 7-10 7-10Z" /><path d="M5 19c4-5 8-7 14-10" /></svg>;
+}
+
+function CameraSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M4 7h4l1.5-2h5L16 7h4v12H4V7Z" /><circle cx="12" cy="13" r="3.5" /></svg>;
+}
+
+function HeartSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M20.5 5.8c-2-2-5.2-1.7-6.9.6L12 8.2l-1.6-1.8C8.7 4.1 5.5 3.8 3.5 5.8c-2.1 2.1-2 5.5.2 7.6L12 21l8.3-7.6c2.2-2.1 2.3-5.5.2-7.6Z" /><path d="M7 13h3l1.2-2.6L13.5 16l1.4-3H17" /></svg>;
+}
+
+function PinSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M12 21s7-6.1 7-12A7 7 0 0 0 5 9c0 5.9 7 12 7 12Z" /><circle cx="12" cy="9" r="2.4" /></svg>;
+}
+
+function QrSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Z" /><path d="M14 14h2v2h-2v-2Zm4 0h2v6h-2v-6Zm-4 4h2v2h-2v-2Z" /></svg>;
+}
+
+function RefreshSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.7 6.7L4 9.4" /><path d="M5.8 15A7 7 0 0 0 17.3 17.3L20 14.6" /></svg>;
+}
+
+function TaskSvg() {
+  return <svg viewBox="0 0 24 24"><path d="M7 3h10l3 3v15H4V3h3Z" /><path d="M8 12h8M8 16h6" /></svg>;
+}
+
+function SearchIcon() {
+  return <svg className="searchIcon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>;
+}
+
+function ChevronIcon() {
+  return <svg className="chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>;
 }
 
 function makeMap(rows: Row[]) {
@@ -1000,6 +1077,10 @@ function makeMap(rows: Row[]) {
 
 function normalizeStatus(value: any) {
   return String(value || "PENDING").trim().replace(/\s+/g, "_").toUpperCase();
+}
+
+function isPendingItem(item: OperationItem) {
+  return ACTIVE_PENDING_STATUSES.includes(item.status) || ACTIVE_PENDING_STATUSES.includes(normalizeStatus(item.request.assignment_status));
 }
 
 function collectEvidence(request: Row, assignment: Row | null, task: Row | null, photos: Row[], gps: Row[], health: Row[]): EvidenceBundle {
@@ -1028,12 +1109,13 @@ function getEvidenceStatus(evidence: EvidenceBundle) {
 }
 
 function hasAnyEvidence(evidence: EvidenceBundle) {
-  return evidence.photos.length + evidence.gps.length + evidence.health.length > 0;
+  return (
+    evidence.photos.length > 0 ||
+    evidence.gps.length > 0 ||
+    evidence.health.length > 0
+  );
 }
 
-function hasCompleteEvidence(evidence: EvidenceBundle) {
-  return evidence.photos.length > 0 && evidence.gps.length > 0 && evidence.health.length > 0;
-}
 
 function resolveCustomerProfileId(item: OperationItem) {
   return (
@@ -1060,14 +1142,54 @@ function getSourceType(request: Row) {
   if (text.includes("HEALTH")) return "HEALTH_CHECK";
   if (text.includes("WATER")) return "WATERING_SERVICE";
   if (text.includes("FERTILIZER")) return "FERTILIZER";
-  if (text.includes("FUNGICIDE")) return "FUNGICIDE";
-  if (text.includes("INSECTICIDE")) return "INSECTICIDE";
+  if (text.includes("PEST") || text.includes("FUNGICIDE") || text.includes("INSECT")) return "PEST_CONTROL";
   if (text.includes("PRUN")) return "PRUNING";
-  if (text.includes("PEST")) return "PEST_CONTROL";
-  if (text.includes("VALUATION")) return "TREE_VALUATION_INSPECTION";
+  if (text.includes("QR")) return "QR_TAGGING";
   if (text.includes("CARE_PROGRAM")) return "CARE_PROGRAM";
   return "TREE_OPERATION";
 }
+
+
+function isInFieldItem(item: OperationItem) {
+  return item.status === "ASSIGNED" || item.status === "IN_PROGRESS";
+}
+
+function isWaitingReviewItem(item: OperationItem) {
+  return item.status === "SUBMITTED" || item.evidenceStatus === "SUBMITTED";
+}
+
+type MissionMeta = {
+  key: string;
+  label: string;
+  requirement: string;
+  reviewRule: string;
+  evidenceTable: string;
+};
+
+function getMissionMeta(item: OperationItem): MissionMeta {
+  const key = getMissionKey(item.sourceType || item.operationType);
+  const rule = getMissionRule(key);
+
+  return {
+    key,
+    label: rule.label,
+    requirement: rule.evidenceLabel,
+    reviewRule: rule.adminReviewRule,
+    evidenceTable: rule.evidenceTable,
+  };
+}
+
+function getMissionKey(value: string) {
+  return getMissionKeyFromText(value);
+}
+
+function hasRequiredEvidence(item: OperationItem) {
+  return hasRequiredEvidenceForMission(
+    getMissionKey(`${item.sourceType || ""} ${item.operationType || ""}`),
+    item.evidence,
+  );
+}
+
 
 function customerName(customer: Row | null) {
   if (!customer) return "Customer";
@@ -1084,13 +1206,10 @@ function treeName(tree: Row | null) {
   return tree.custom_name || tree.display_name || tree.tree_code || "Seedling";
 }
 
-function latestDate(rows: Row[]) {
-  if (rows.length === 0) return "No evidence";
-  return formatDate(rows[0]?.created_at || rows[0]?.updated_at);
-}
-
-function formatMoney(value: any) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function priorityLabel(item: OperationItem) {
+  const text = `${item.request.notes || ""} ${item.operationType || ""}`.toUpperCase();
+  if (text.includes("URGENT") || text.includes("HIGH")) return "High Priority";
+  return "Normal Priority";
 }
 
 function formatDate(value: any) {
@@ -1099,3 +1218,662 @@ function formatDate(value: any) {
   if (Number.isNaN(date.getTime())) return "No date";
   return date.toLocaleString("en-PH", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
+
+const styles = `
+  * { box-sizing: border-box; }
+
+  .operationsPage {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, rgba(217,180,95,.18), transparent 30%),
+      radial-gradient(circle at top right, rgba(49,120,78,.22), transparent 32%),
+      linear-gradient(180deg, #02140f, #03130d 45%, #010806);
+    color: #fff;
+    padding: 18px;
+    font-family: Arial, Helvetica, sans-serif;
+    overflow-x: hidden;
+  }
+
+  .topBar {
+    max-width: 1600px;
+    margin: 0 auto 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .topBar p {
+    margin: 0 0 6px;
+    color: #d9b45f;
+    font-size: 12px;
+    font-weight: 950;
+    letter-spacing: .22em;
+  }
+
+  .topBar h1 {
+    margin: 0;
+    font-size: 32px;
+    font-weight: 950;
+  }
+
+  .topBar span {
+    display: block;
+    margin-top: 5px;
+    color: rgba(255,255,255,.68);
+  }
+
+  .topBar button,
+  .toolbar button,
+  .assignBox button,
+  .reviewActions button,
+  .cancelButton {
+    border: 0;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #d9b45f, #9d7428);
+    color: #071a12;
+    padding: 12px 16px;
+    font-weight: 950;
+    cursor: pointer;
+  }
+
+  .layout {
+    max-width: 1600px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr) 390px;
+    gap: 18px;
+    align-items: start;
+  }
+
+  .filtersPanel,
+  .queuePanel,
+  .detailPanel,
+  .message,
+  .emptyCard {
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.055);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 25px 70px rgba(0,0,0,.25);
+  }
+
+  .filtersPanel,
+  .detailPanel {
+    border-radius: 22px;
+    padding: 18px;
+    position: sticky;
+    top: 18px;
+  }
+
+  .queuePanel {
+    border-radius: 22px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .message {
+    max-width: 1600px;
+    margin: 0 auto 14px;
+    border-radius: 16px;
+    padding: 14px 16px;
+    color: #ffe49a;
+    font-weight: 900;
+  }
+
+  .filterHead {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+
+  .filterHead h2 {
+    margin: 0;
+    font-size: 18px;
+    text-transform: uppercase;
+  }
+
+  .filterHead button {
+    border: 0;
+    background: transparent;
+    color: #92dc63;
+    cursor: pointer;
+    font-weight: 800;
+  }
+
+  .filterButton {
+    width: 100%;
+    margin-bottom: 8px;
+    border: 0;
+    border-radius: 13px;
+    background: transparent;
+    color: rgba(255,255,255,.82);
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 12px;
+    cursor: pointer;
+    font-weight: 800;
+  }
+
+  .filterButton.active,
+  .filterButton:hover {
+    background: rgba(255,255,255,.08);
+  }
+
+  .filterButton b {
+    background: rgba(255,255,255,.10);
+    border-radius: 999px;
+    padding: 2px 10px;
+    color: #fff;
+  }
+
+  .filterDivider {
+    height: 1px;
+    background: rgba(255,255,255,.10);
+    margin: 16px -18px;
+  }
+
+  .filterTitle {
+    color: rgba(255,255,255,.7);
+    font-weight: 950;
+    margin: 0 0 10px;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: rgba(255,255,255,.78);
+    padding: 8px 0;
+    font-weight: 800;
+  }
+
+  .legend .opIcon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .legend .opIcon svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .searchBox {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.055);
+    padding: 0 14px;
+  }
+
+  .searchBox input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: #fff;
+    padding: 15px 0;
+  }
+
+  .searchIcon,
+  .chevron {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+  }
+
+  .statsGrid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .statCard {
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.055);
+    border-radius: 16px;
+    padding: 16px;
+  }
+
+  .statCard p {
+    margin: 0;
+    font-size: 11px;
+    color: rgba(255,255,255,.65);
+    font-weight: 900;
+  }
+
+  .statCard h3 {
+    margin: 8px 0 0;
+    font-size: 28px;
+  }
+
+  .statCard.gold h3 { color: #d9b45f; }
+  .statCard.yellow h3 { color: #ffc849; }
+  .statCard.blue h3 { color: #5da8ff; }
+  .statCard.purple h3 { color: #b18cff; }
+  .statCard.cyan h3 { color: #22d6d1; }
+  .statCard.green h3 { color: #84db61; }
+
+  .requestList {
+    display: grid;
+    gap: 10px;
+  }
+
+  .operationCard {
+    width: 100%;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,60,42,.42);
+    border-radius: 16px;
+    padding: 16px;
+    display: grid;
+    grid-template-columns: 70px minmax(0, 1fr) auto 24px;
+    gap: 14px;
+    align-items: center;
+    color: #fff;
+    text-align: left;
+    cursor: pointer;
+    transition: .18s ease;
+  }
+
+  .operationCard:hover,
+  .operationCard.selected {
+    border-color: rgba(217,180,95,.95);
+    background: rgba(0,76,51,.56);
+  }
+
+  .cardTitle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .cardTitle h3 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .cardMain p {
+    margin: 7px 0;
+    color: rgba(255,255,255,.68);
+  }
+
+  .cardMain b {
+    color: #8fe55e;
+  }
+
+  .cardMain p span {
+    margin: 0 8px;
+    color: rgba(255,255,255,.35);
+  }
+
+  .cardMeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    color: rgba(255,255,255,.62);
+    font-size: 13px;
+  }
+
+  .cardAction {
+    min-width: 145px;
+    text-align: right;
+  }
+
+  .cardAction strong {
+    display: block;
+    color: #fff;
+  }
+
+  .cardAction .priority {
+    color: #8fe55e;
+  }
+
+  .cardAction small {
+    color: rgba(255,255,255,.55);
+  }
+
+  .detailHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .detailHeader h2 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .detailService {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.18);
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+
+  .detailService h3 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .detailService p {
+    margin: 4px 0 0;
+    color: rgba(255,255,255,.62);
+  }
+
+  .detailBox {
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(0,0,0,.18);
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  .detailBox h3 {
+    margin: 0 0 12px;
+    font-size: 15px;
+  }
+
+  .infoRow {
+    display: grid;
+    grid-template-columns: 125px 1fr;
+    gap: 12px;
+    margin: 9px 0;
+  }
+
+  .infoRow span {
+    color: rgba(255,255,255,.52);
+    font-size: 13px;
+  }
+
+  .infoRow b {
+    color: #fff;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .assignBox {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .assignBox select,
+  .detailBox textarea {
+    width: 100%;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 12px;
+    background: rgba(0,0,0,.30);
+    color: #fff;
+    padding: 12px;
+    outline: none;
+  }
+
+  .detailBox textarea {
+    min-height: 90px;
+    resize: vertical;
+  }
+
+
+  .requirementBox {
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(217,180,95,.16), rgba(25,130,80,.12));
+    border: 1px solid rgba(217,180,95,.20);
+    padding: 13px;
+  }
+
+  .requirementBox strong {
+    display: block;
+    color: #ffe49a;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+
+  .requirementBox p {
+    margin: 0 0 7px;
+    color: rgba(255,255,255,.82);
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .requirementBox small {
+    color: rgba(255,255,255,.52);
+    font-weight: 800;
+  }
+
+  .evidenceMeter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 12px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.06);
+  }
+
+  .evidenceMeter strong,
+  .evidenceMeter span {
+    display: block;
+  }
+
+  .evidenceMeter strong {
+    color: #fff;
+    font-size: 13px;
+  }
+
+  .evidenceMeter span {
+    color: rgba(255,255,255,.58);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .evidenceMeter b {
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .evidenceMeter.ready b {
+    color: #071a12;
+    background: #84db61;
+  }
+
+  .evidenceMeter.missing b {
+    color: #ffe49a;
+    background: rgba(217,180,95,.14);
+  }
+
+  .syncedBox,
+  .reviewLocked {
+    border-radius: 12px;
+    background: rgba(132,219,97,.10);
+    border: 1px solid rgba(132,219,97,.18);
+    color: #caffe0;
+    padding: 12px;
+    font-weight: 800;
+    font-size: 13px;
+  }
+
+  .reviewActions {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .reviewActions button:nth-child(1) {
+    background: #65d66d;
+  }
+
+  .reviewActions button:nth-child(2) {
+    background: #d9b45f;
+  }
+
+  .reviewActions button:nth-child(3),
+  .cancelButton {
+    background: rgba(220,70,70,.18);
+    color: #ffd7d7;
+    border: 1px solid rgba(255,120,120,.24);
+  }
+
+  .cancelButton {
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .timelineRow {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 10px;
+    margin: 10px 0;
+  }
+
+  .timelineRow > span {
+    width: 10px;
+    height: 10px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: #d9b45f;
+    box-shadow: 0 0 0 4px rgba(217,180,95,.14);
+  }
+
+  .timelineRow strong {
+    color: #fff;
+    font-size: 13px;
+  }
+
+  .timelineRow p {
+    margin: 3px 0 0;
+    color: rgba(255,255,255,.55);
+    font-size: 12px;
+  }
+
+  .statusBadge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 950;
+    color: #ffe49a;
+    background: rgba(217,180,95,.14);
+    border: 1px solid rgba(217,180,95,.22);
+  }
+
+  .statusBadge.assigned { color: #bcdcff; background: rgba(70,130,220,.16); border-color: rgba(70,130,220,.24); }
+  .statusBadge.in_progress { color: #d8c1ff; background: rgba(140,90,220,.16); border-color: rgba(140,90,220,.24); }
+  .statusBadge.submitted { color: #b8ffff; background: rgba(20,190,190,.15); border-color: rgba(20,190,190,.22); }
+  .statusBadge.completed { color: #caffe0; background: rgba(90,210,100,.15); border-color: rgba(90,210,100,.22); }
+  .statusBadge.rejected,
+  .statusBadge.cancelled { color: #ffd0d0; background: rgba(220,70,70,.15); border-color: rgba(220,70,70,.22); }
+
+  .opIcon {
+    width: 58px;
+    height: 58px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255,255,255,.10);
+    flex: 0 0 auto;
+  }
+
+  .opIcon svg {
+    width: 29px;
+    height: 29px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .opIcon.blue { color: #5cc8ff; background: rgba(56,150,220,.16); }
+  .opIcon.green { color: #83d65d; background: rgba(82,170,67,.16); }
+  .opIcon.orange { color: #ffb14a; background: rgba(220,130,30,.16); }
+  .opIcon.purple { color: #b28cff; background: rgba(130,90,220,.16); }
+  .opIcon.cyan { color: #29d7d4; background: rgba(20,180,175,.16); }
+  .opIcon.gold { color: #d6b25e; background: rgba(214,178,94,.14); }
+
+  .emptyCard {
+    border-radius: 18px;
+    padding: 24px;
+    color: rgba(255,255,255,.62);
+    font-weight: 800;
+  }
+
+  @media (max-width: 1250px) {
+    .layout {
+      grid-template-columns: 240px minmax(0, 1fr);
+    }
+
+    .detailPanel {
+      grid-column: 1 / -1;
+      position: static;
+    }
+
+    .statsGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 850px) {
+    .operationsPage {
+      padding: 12px;
+    }
+
+    .topBar,
+    .toolbar {
+      grid-template-columns: 1fr;
+      display: grid;
+    }
+
+    .layout {
+      grid-template-columns: 1fr;
+    }
+
+    .filtersPanel {
+      position: static;
+    }
+
+    .operationCard {
+      grid-template-columns: 58px minmax(0, 1fr);
+    }
+
+    .cardAction,
+    .chevron {
+      display: none;
+    }
+
+    .statsGrid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .infoRow {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+  }
+`;

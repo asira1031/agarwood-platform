@@ -3,8 +3,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  getMissionEvidenceMode,
+  getMissionInventoryItems,
+  getMissionKeyFromText,
+  getMissionLabel,
+  getMissionRequirement,
+  getMissionRule,
+  missionNeedsInventory,
+} from "@/lib/tree-mission-engine";
 
 type Row = Record<string, any>;
+
+type TaskTab = "ASSIGNED" | "IN_PROGRESS";
+
+type EvidenceMode =
+  | "GPS_ONLY"
+  | "PHOTO_CURRENT_ONLY"
+  | "PHOTO_BEFORE_AFTER"
+  | "HEALTH_ONLY";
+
+type VerifiedTree = {
+  treeId: string;
+  treeCode: string;
+  treeName: string;
+  groupId: string | null;
+};
 
 type WorkItem = {
   key: string;
@@ -16,14 +40,8 @@ type WorkItem = {
   customer: Row | null;
   status: string;
   evidenceStatus: string;
-  service: string;
-};
-
-type VerifiedTree = {
-  treeId: string;
-  treeCode: string;
-  treeName: string;
-  groupId: string | null;
+  serviceKey: string;
+  evidenceMode: EvidenceMode;
 };
 
 type InsertedEvidenceIds = {
@@ -32,34 +50,7 @@ type InsertedEvidenceIds = {
   healthIds: string[];
 };
 
-type ExistingEvidenceCounts = {
-  photos: number;
-  gps: number;
-  health: number;
-  total: number;
-};
-
-const CLOSED_STATUSES = ["COMPLETED", "CANCELLED", "REJECTED", "FAILED"];
-const SUBMIT_LOCK_STATUSES = ["SUBMITTED", "COMPLETED", "CANCELLED", "REJECTED", "FAILED"];
-
-const SERVICE_LABELS: Record<string, string> = {
-  PHOTO_UPDATE: "Photo Update",
-  GPS_VERIFICATION: "GPS Verification",
-  GPS_UPDATE: "GPS Verification",
-  HEALTH_CHECK: "Health Check",
-  HEALTH_REPORT: "Health Report",
-  WATERING_SERVICE: "Watering Service",
-  FERTILIZER: "Apply Fertilizer",
-  APPLY_FERTILIZER: "Apply Fertilizer",
-  FUNGICIDE: "Apply Fungicide",
-  APPLY_FUNGICIDE: "Apply Fungicide",
-  INSECTICIDE: "Apply Insecticide",
-  APPLY_INSECTICIDE: "Apply Insecticide",
-  PRUNING: "Pruning",
-  PEST_CONTROL: "Pest Control",
-  CARE_PROGRAM: "Care Program",
-  TREE_OPERATION: "Tree Operation",
-};
+const TERMINAL_STATUSES = ["COMPLETED", "CANCELLED", "CANCELED", "REJECTED", "FAILED"];
 
 function normalize(value: any) {
   return String(value || "")
@@ -69,7 +60,26 @@ function normalize(value: any) {
 }
 
 function statusOf(value: any) {
-  return normalize(value || "ASSIGNED");
+  const status = normalize(value || "ASSIGNED");
+
+  if (status === "STARTED") return "IN_PROGRESS";
+  if (status === "REWORK" || status === "NEEDS_REWORK") return "REWORK_REQUESTED";
+
+  return status;
+}
+
+function mergeStatus(...values: any[]) {
+  const statuses = values.map(statusOf).filter(Boolean);
+
+  if (statuses.some((status) => status === "COMPLETED")) return "COMPLETED";
+  if (statuses.some((status) => status === "REJECTED")) return "REJECTED";
+  if (statuses.some((status) => status === "CANCELLED" || status === "CANCELED")) return "CANCELLED";
+  if (statuses.some((status) => status === "SUBMITTED")) return "SUBMITTED";
+  if (statuses.some((status) => status === "IN_PROGRESS")) return "IN_PROGRESS";
+  if (statuses.some((status) => status === "REWORK_REQUESTED")) return "REWORK_REQUESTED";
+  if (statuses.some((status) => status === "ASSIGNED")) return "ASSIGNED";
+
+  return statuses[0] || "ASSIGNED";
 }
 
 function unique(values: any[]) {
@@ -78,15 +88,19 @@ function unique(values: any[]) {
 
 function makeMap(rows: Row[]) {
   const map = new Map<string, Row>();
+
   rows.forEach((row) => {
     if (row?.id) map.set(String(row.id), row);
   });
+
   return map;
 }
 
 function formatDate(value: any) {
   if (!value) return "—";
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return "—";
 
   return date.toLocaleString("en-PH", {
@@ -98,77 +112,141 @@ function formatDate(value: any) {
   });
 }
 
-function mergeStatuses(...values: any[]) {
-  const statuses = values.map(statusOf).filter(Boolean);
-
-  if (statuses.some((status) => status === "COMPLETED")) return "COMPLETED";
-  if (statuses.some((status) => status === "REJECTED")) return "REJECTED";
-  if (statuses.some((status) => status === "REWORK" || status === "REWORK_REQUESTED")) return "REWORK_REQUESTED";
-  if (statuses.some((status) => status === "SUBMITTED")) return "SUBMITTED";
-  if (statuses.some((status) => status === "IN_PROGRESS" || status === "STARTED")) return "IN_PROGRESS";
-  if (statuses.some((status) => status === "ASSIGNED")) return "ASSIGNED";
-  if (statuses.some((status) => status === "PENDING" || status === "REQUESTED" || status === "PAID")) return "PENDING";
-
-  return statuses[0] || "ASSIGNED";
+function getTreeName(tree: Row | null | undefined) {
+  return (
+    tree?.custom_name ||
+    tree?.display_name ||
+    tree?.tree_name ||
+    tree?.name ||
+    tree?.tree_code ||
+    "Assigned Tree"
+  );
 }
 
-function serviceOfRaw(...values: any[]) {
-  const joined = values
+function getForestName(group: Row | null | undefined, tree?: Row | null) {
+  return (
+    group?.forest_name ||
+    group?.group_name ||
+    tree?.tree_group_name ||
+    tree?.forest_name ||
+    "Assigned Forest"
+  );
+}
+
+function getOwnerName(customer: Row | null | undefined) {
+  return customer?.full_name || customer?.display_name || customer?.email || "Customer";
+}
+
+function rawServiceText(assignment: Row | null, task: Row | null, request: Row | null) {
+  return [
+    task?.source_type,
+    task?.task_type,
+    assignment?.source_type,
+    assignment?.assignment_type,
+    request?.service_name,
+    request?.operation_type,
+    request?.request_type,
+    request?.care_program_name,
+  ]
     .map((value) => String(value || ""))
     .filter(Boolean)
     .join(" ")
     .toUpperCase();
+}
 
-  if (joined.includes("PHOTO")) return "PHOTO_UPDATE";
-  if (joined.includes("GPS")) return "GPS_VERIFICATION";
-  if (joined.includes("HEALTH")) return "HEALTH_CHECK";
-  if (joined.includes("WATER")) return "WATERING_SERVICE";
-  if (joined.includes("FERTILIZER")) return "FERTILIZER";
-  if (joined.includes("FUNGICIDE")) return "FUNGICIDE";
-  if (joined.includes("INSECT")) return "INSECTICIDE";
-  if (joined.includes("PRUN")) return "PRUNING";
-  if (joined.includes("PEST")) return "PEST_CONTROL";
-  if (joined.includes("CARE_PROGRAM") || joined.includes("CARE PROGRAM") || joined.includes("MONTHLY") || joined.includes("WEEK")) {
-    return "CARE_PROGRAM";
+function getServiceKey(assignment: Row | null, task: Row | null, request: Row | null) {
+  return getMissionKeyFromText(rawServiceText(assignment, task, request));
+}
+
+function getEvidenceMode(serviceKey: string): EvidenceMode {
+  return getMissionEvidenceMode(serviceKey);
+}
+
+function getServiceLabel(serviceKey: string) {
+  return getMissionLabel(serviceKey);
+}
+
+function getServiceIcon(evidenceMode: EvidenceMode, serviceKey: string) {
+  if (serviceKey.includes("QR")) return "▦";
+  if (serviceKey.includes("CARE_PROGRAM")) return "🛡️";
+  if (evidenceMode === "GPS_ONLY") return "📍";
+  if (evidenceMode === "HEALTH_ONLY") return "🌿";
+  if (serviceKey.includes("WATER")) return "💧";
+  if (serviceKey.includes("FERTILIZER")) return "🌱";
+  if (
+    serviceKey.includes("FUNGICIDE") ||
+    serviceKey.includes("PEST") ||
+    serviceKey.includes("INSECT")
+  ) {
+    return "🛡️";
   }
 
-  return normalize(values.find(Boolean) || "TREE_OPERATION") || "TREE_OPERATION";
+  return "📸";
 }
 
-function serviceLabel(service: string) {
-  return SERVICE_LABELS[service] || service.replaceAll("_", " ");
+function getEvidenceTitle(evidenceMode: EvidenceMode, serviceKey: string) {
+  if (evidenceMode === "GPS_ONLY") return "Evidence — GPS Verification";
+  if (evidenceMode === "HEALTH_ONLY") return "Evidence — Health Check";
+  if (evidenceMode === "PHOTO_BEFORE_AFTER") return `Evidence — ${getServiceLabel(serviceKey)}`;
+
+  return "Evidence — Photo Update";
 }
 
-function requiresBeforeAfter(service: string) {
-  return [
-    "WATERING_SERVICE",
-    "FERTILIZER",
-    "FUNGICIDE",
-    "INSECTICIDE",
-    "PRUNING",
-    "PEST_CONTROL",
-    "CARE_PROGRAM",
-  ].includes(service);
+function getEvidenceHelper(evidenceMode: EvidenceMode, serviceKey: string) {
+  if (evidenceMode === "GPS_ONLY") {
+    return "Capture your current location at the assigned tree.";
+  }
+
+  if (evidenceMode === "HEALTH_ONLY") {
+    return "Assess the tree health and provide optional notes.";
+  }
+
+  if (evidenceMode === "PHOTO_BEFORE_AFTER") {
+    return `Upload before and after photos for ${getServiceLabel(serviceKey).toLowerCase()}.`;
+  }
+
+  return "Upload the current tree photo. Notes are optional.";
+}
+function getEvidenceRequirementLabel(evidenceMode: EvidenceMode, serviceKey?: string) {
+  return getMissionRequirement(serviceKey || evidenceMode);
 }
 
-function parseScannedTreeValue(raw: string) {
+function getEvidenceRequirementDetail(evidenceMode: EvidenceMode, serviceKey: string) {
+  return getMissionRule(serviceKey).gardenerInstruction;
+}
+
+function getRequiredSupplyLabel(serviceKey: string) {
+  const items = getMissionInventoryItems(serviceKey);
+  return items.length > 0 ? items.join(" / ") : "No supply required";
+}
+
+function parseQrValue(raw: string) {
   const value = raw.trim();
-  if (!value) return { treeId: "", treeCode: "" };
+
+  if (!value) {
+    return {
+      treeId: "",
+      treeCode: "",
+    };
+  }
 
   try {
     const url = new URL(value);
     const pathMatch = url.pathname.match(/\/tree\/verify\/([^/?#]+)/i);
+
     const treeId =
       url.searchParams.get("tree_id") ||
       url.searchParams.get("treeId") ||
       url.searchParams.get("id") ||
       pathMatch?.[1] ||
       "";
+
     const treeCode =
       url.searchParams.get("tree_code") ||
       url.searchParams.get("treeCode") ||
       url.searchParams.get("code") ||
       "";
+
     const fallback = treeCode || treeId || value;
 
     return {
@@ -186,48 +264,41 @@ function parseScannedTreeValue(raw: string) {
   }
 }
 
-function treeDisplayName(tree: Row | null | undefined) {
-  return tree?.custom_name || tree?.display_name || tree?.tree_name || tree?.name || tree?.tree_code || "Assigned Tree";
-}
-
-function groupDisplayName(group: Row | null | undefined, tree?: Row | null) {
-  return group?.forest_name || group?.group_name || tree?.tree_group_name || "Single Tree";
-}
-
-function customerDisplayName(customer: Row | null | undefined) {
-  return customer?.full_name || customer?.display_name || customer?.email || "Customer";
-}
-
 export default function GardenerTasksPage() {
   const searchParams = useSearchParams();
   const requestedAssignmentId = searchParams.get("assignment_id") || "";
   const requestedTreeId = searchParams.get("tree_id") || "";
+  const scannerRef = useRef<any>(null);
 
   const [profile, setProfile] = useState<Row | null>(null);
   const [caretaker, setCaretaker] = useState<Row | null>(null);
+
   const [assignments, setAssignments] = useState<Row[]>([]);
-  const [tasks, setTasks] = useState<Row[]>([]);
+  const [taskLogs, setTaskLogs] = useState<Row[]>([]);
   const [requests, setRequests] = useState<Row[]>([]);
   const [trees, setTrees] = useState<Row[]>([]);
   const [groups, setGroups] = useState<Row[]>([]);
   const [customers, setCustomers] = useState<Row[]>([]);
-  const [photoEvidence, setPhotoEvidence] = useState<Row[]>([]);
-  const [gpsEvidence, setGpsEvidence] = useState<Row[]>([]);
-  const [healthEvidence, setHealthEvidence] = useState<Row[]>([]);
+
+  const [tab, setTab] = useState<TaskTab>("ASSIGNED");
   const [selectedKey, setSelectedKey] = useState("");
+
   const [scanValue, setScanValue] = useState("");
   const [verifiedMap, setVerifiedMap] = useState<Record<string, VerifiedTree>>({});
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerRunning, setScannerRunning] = useState(false);
-  const scannerRef = useRef<any>(null);
+
   const [currentPhoto, setCurrentPhoto] = useState<File | null>(null);
   const [beforePhoto, setBeforePhoto] = useState<File | null>(null);
   const [afterPhoto, setAfterPhoto] = useState<File | null>(null);
+
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+
   const [healthStatus, setHealthStatus] = useState("HEALTHY");
   const [notes, setNotes] = useState("");
-  const [filter, setFilter] = useState("ACTIVE");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -245,236 +316,201 @@ export default function GardenerTasksPage() {
 
     const email = user.email?.trim().toLowerCase() || "";
 
-    const { data: byId } = await supabase
+    const { data: profileById, error: profileByIdError } = await supabase
       .from("profiles")
       .select("id, full_name, display_name, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    const { data: byEmail } = await supabase
+    if (profileByIdError) throw profileByIdError;
+
+    const { data: profileByEmail, error: profileByEmailError } = await supabase
       .from("profiles")
       .select("id, full_name, display_name, email")
       .eq("email", email)
       .maybeSingle();
 
-    return byId || byEmail || null;
+    if (profileByEmailError) throw profileByEmailError;
+
+    return profileById || profileByEmail || null;
   }
 
-  async function loadData() {
+  async function loadData(keepSelectedKey?: string) {
     setLoading(true);
     setMessage("");
 
-    const currentProfile = await resolveProfile();
+    try {
+      const currentProfile = await resolveProfile();
 
-    if (!currentProfile) {
-      setMessage("Profile not found.");
-      setLoading(false);
-      return;
-    }
-
-    setProfile(currentProfile);
-
-    const { data: caretakerByProfile, error: caretakerByProfileError } = await supabase
-      .from("caretakers")
-      .select("*")
-      .eq("caretaker_profile_id", currentProfile.id)
-      .maybeSingle();
-
-    if (caretakerByProfileError) {
-      setMessage(caretakerByProfileError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { data: caretakerByEmail, error: caretakerByEmailError } = await supabase
-      .from("caretakers")
-      .select("*")
-      .ilike("email", String(currentProfile.email || ""))
-      .maybeSingle();
-
-    if (caretakerByEmailError) {
-      setMessage(caretakerByEmailError.message);
-      setLoading(false);
-      return;
-    }
-
-    const caretakerRow = caretakerByProfile || caretakerByEmail;
-
-    if (!caretakerRow) {
-      setMessage("Gardener profile not found.");
-      setLoading(false);
-      return;
-    }
-
-    if (statusOf(caretakerRow.status) !== "ACTIVE") {
-      setMessage("Your gardener account is not ACTIVE.");
-      setLoading(false);
-      return;
-    }
-
-    setCaretaker(caretakerRow);
-
-    const filters = [
-      `caretaker_id.eq.${caretakerRow.id}`,
-      caretakerRow.caretaker_profile_id ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}` : "",
-    ].filter(Boolean);
-
-    const [assignmentResult, taskResult] = await Promise.all([
-      supabase
-        .from("caretaker_assignments")
-        .select("*")
-        .or(filters.join(","))
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("caretaker_task_logs")
-        .select("*")
-        .or(filters.join(","))
-        .order("created_at", { ascending: false }),
-    ]);
-
-    if (assignmentResult.error) {
-      setMessage(assignmentResult.error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (taskResult.error) {
-      setMessage(taskResult.error.message);
-      setLoading(false);
-      return;
-    }
-
-    const assignmentRows = assignmentResult.data || [];
-    const taskRows = taskResult.data || [];
-
-    const requestIds = unique([
-      ...assignmentRows.map((row) => row.operation_request_id),
-      ...taskRows.map((row) => row.operation_request_id),
-    ]);
-
-    let requestRows: Row[] = [];
-    if (requestIds.length > 0) {
-      const { data, error } = await supabase
-        .from("tree_operation_requests")
-        .select("*")
-        .in("id", requestIds);
-
-      if (error) {
-        setMessage(error.message);
+      if (!currentProfile) {
+        setMessage("Profile not found.");
         setLoading(false);
         return;
       }
 
-      requestRows = data || [];
-    }
+      setProfile(currentProfile);
 
-    const directTreeIds = unique([
-      ...assignmentRows.map((row) => row.tree_id),
-      ...taskRows.map((row) => row.tree_id),
-      ...requestRows.map((row) => row.tree_id),
-      requestedTreeId,
-    ]);
+      const email = String(currentProfile.email || "").trim().toLowerCase();
 
-    const groupIds = unique([
-      ...assignmentRows.map((row) => row.group_id),
-      ...taskRows.map((row) => row.group_id),
-      ...requestRows.map((row) => row.group_id),
-    ]);
+      const { data: caretakerByProfile, error: caretakerByProfileError } =
+        await supabase
+          .from("caretakers")
+          .select("*")
+          .eq("caretaker_profile_id", currentProfile.id)
+          .maybeSingle();
 
-    const [directTreeResult, groupTreeResult, groupResult] = await Promise.all([
-      directTreeIds.length > 0
-        ? supabase.from("trees").select("*").in("id", directTreeIds)
-        : Promise.resolve({ data: [], error: null }),
-      groupIds.length > 0
-        ? supabase.from("trees").select("*").in("group_id", groupIds)
-        : Promise.resolve({ data: [], error: null }),
-      groupIds.length > 0
-        ? supabase.from("tree_groups").select("*").in("id", groupIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
+      if (caretakerByProfileError) throw caretakerByProfileError;
 
-    if (directTreeResult.error) {
-      setMessage(directTreeResult.error.message);
-      setLoading(false);
-      return;
-    }
+      const { data: caretakerByEmail, error: caretakerByEmailError } =
+        await supabase
+          .from("caretakers")
+          .select("*")
+          .ilike("email", email)
+          .maybeSingle();
 
-    if (groupTreeResult.error) {
-      setMessage(groupTreeResult.error.message);
-      setLoading(false);
-      return;
-    }
+      if (caretakerByEmailError) throw caretakerByEmailError;
 
-    if (groupResult.error) {
-      setMessage(groupResult.error.message);
-      setLoading(false);
-      return;
-    }
+      const caretakerRow = caretakerByProfile || caretakerByEmail;
 
-    const combinedTrees = Array.from(
-      new Map([...(directTreeResult.data || []), ...(groupTreeResult.data || [])].map((tree) => [String(tree.id), tree])).values(),
-    );
-
-    const groupRows = groupResult.data || [];
-
-    const customerIds = unique([
-      ...assignmentRows.map((row) => row.customer_profile_id),
-      ...taskRows.map((row) => row.customer_profile_id),
-      ...requestRows.map((row) => row.customer_profile_id),
-      ...requestRows.map((row) => row.profile_id),
-      ...combinedTrees.map((row) => row.customer_profile_id),
-      ...combinedTrees.map((row) => row.profile_id),
-      ...groupRows.map((row) => row.customer_profile_id),
-      ...groupRows.map((row) => row.profile_id),
-    ]);
-
-    let customerRows: Row[] = [];
-    if (customerIds.length > 0) {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, display_name, email, phone")
-        .in("id", customerIds);
-
-      if (!error) customerRows = data || [];
-    }
-
-    const assignmentIds = unique(assignmentRows.map((row) => row.id));
-
-    const [photoResult, gpsResult, healthResult] = await Promise.all([
-      assignmentIds.length > 0
-        ? supabase.from("tree_photo_updates").select("*").in("assignment_id", assignmentIds)
-        : Promise.resolve({ data: [], error: null }),
-      assignmentIds.length > 0
-        ? supabase.from("tree_gps_logs").select("*").in("assignment_id", assignmentIds)
-        : Promise.resolve({ data: [], error: null }),
-      assignmentIds.length > 0
-        ? supabase.from("tree_health_reports").select("*").in("assignment_id", assignmentIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    setAssignments(assignmentRows);
-    setTasks(taskRows);
-    setRequests(requestRows);
-    setTrees(combinedTrees);
-    setGroups(groupRows);
-    setCustomers(customerRows);
-    setPhotoEvidence(photoResult.data || []);
-    setGpsEvidence(gpsResult.data || []);
-    setHealthEvidence(healthResult.data || []);
-
-    setSelectedKey((current) => {
-      if (requestedAssignmentId && assignmentRows.some((row) => String(row.id) === requestedAssignmentId)) {
-        return requestedAssignmentId;
+      if (!caretakerRow) {
+        setMessage("Gardener profile not found.");
+        setLoading(false);
+        return;
       }
 
-      if (current && assignmentRows.some((row) => String(row.id) === current)) {
-        return current;
+      if (statusOf(caretakerRow.status) !== "ACTIVE") {
+        setMessage("Your gardener account is not ACTIVE.");
+        setLoading(false);
+        return;
       }
 
-      return String(assignmentRows[0]?.id || "");
-    });
+      setCaretaker(caretakerRow);
 
-    setLoading(false);
+      const filters = [
+        `caretaker_id.eq.${caretakerRow.id}`,
+        caretakerRow.caretaker_profile_id
+          ? `caretaker_profile_id.eq.${caretakerRow.caretaker_profile_id}`
+          : "",
+      ].filter(Boolean);
+
+      const [assignmentResult, taskResult] = await Promise.all([
+        supabase
+          .from("caretaker_assignments")
+          .select("*")
+          .or(filters.join(","))
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("caretaker_task_logs")
+          .select("*")
+          .or(filters.join(","))
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (assignmentResult.error) throw assignmentResult.error;
+      if (taskResult.error) throw taskResult.error;
+
+      const assignmentRows = assignmentResult.data || [];
+      const taskRows = taskResult.data || [];
+
+      const operationRequestIds = unique([
+        ...assignmentRows.map((row) => row.operation_request_id),
+        ...taskRows.map((row) => row.operation_request_id),
+      ]);
+
+      let requestRows: Row[] = [];
+
+      if (operationRequestIds.length > 0) {
+        const { data, error } = await supabase
+          .from("tree_operation_requests")
+          .select("*")
+          .in("id", operationRequestIds);
+
+        if (error) throw error;
+        requestRows = data || [];
+      }
+
+      const directTreeIds = unique([
+        ...assignmentRows.map((row) => row.tree_id),
+        ...taskRows.map((row) => row.tree_id),
+        ...requestRows.map((row) => row.tree_id),
+        requestedTreeId,
+      ]);
+
+      const groupIds = unique([
+        ...assignmentRows.map((row) => row.group_id),
+        ...taskRows.map((row) => row.group_id),
+        ...requestRows.map((row) => row.group_id),
+      ]);
+
+      const [directTreeResult, groupTreeResult, groupResult] = await Promise.all([
+        directTreeIds.length > 0
+          ? supabase.from("trees").select("*").in("id", directTreeIds)
+          : Promise.resolve({ data: [], error: null }),
+        groupIds.length > 0
+          ? supabase.from("trees").select("*").in("group_id", groupIds)
+          : Promise.resolve({ data: [], error: null }),
+        groupIds.length > 0
+          ? supabase.from("tree_groups").select("*").in("id", groupIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (directTreeResult.error) throw directTreeResult.error;
+      if (groupTreeResult.error) throw groupTreeResult.error;
+      if (groupResult.error) throw groupResult.error;
+
+      const allTrees = Array.from(
+        new Map(
+          [...(directTreeResult.data || []), ...(groupTreeResult.data || [])].map(
+            (tree) => [String(tree.id), tree],
+          ),
+        ).values(),
+      );
+
+      const groupRows = groupResult.data || [];
+
+      const customerIds = unique([
+        ...assignmentRows.map((row) => row.customer_profile_id),
+        ...taskRows.map((row) => row.customer_profile_id),
+        ...requestRows.map((row) => row.customer_profile_id),
+        ...requestRows.map((row) => row.profile_id),
+        ...allTrees.map((row) => row.customer_profile_id),
+        ...allTrees.map((row) => row.profile_id),
+        ...groupRows.map((row) => row.customer_profile_id),
+        ...groupRows.map((row) => row.profile_id),
+      ]);
+
+      let customerRows: Row[] = [];
+
+      if (customerIds.length > 0) {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, full_name, display_name, email, phone")
+          .in("id", customerIds);
+
+        if (!error) customerRows = data || [];
+      }
+
+      setAssignments(assignmentRows);
+      setTaskLogs(taskRows);
+      setRequests(requestRows);
+      setTrees(allTrees);
+      setGroups(groupRows);
+      setCustomers(customerRows);
+
+      const nextSelected =
+        keepSelectedKey ||
+        requestedAssignmentId ||
+        selectedKey ||
+        assignmentRows[0]?.id ||
+        "";
+
+      if (nextSelected) setSelectedKey(String(nextSelected));
+
+      setLoading(false);
+    } catch (error: any) {
+      setMessage(error?.message || "Failed to load gardener tasks.");
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -483,6 +519,7 @@ export default function GardenerTasksPage() {
     return () => {
       stopCameraScanner();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const requestMap = useMemo(() => makeMap(requests), [requests]);
@@ -491,140 +528,314 @@ export default function GardenerTasksPage() {
   const customerMap = useMemo(() => makeMap(customers), [customers]);
 
   const workItems = useMemo<WorkItem[]>(() => {
-    return assignments.map((assignment) => {
-      const task =
-        tasks.find((row) => String(row.assignment_id || "") === String(assignment.id)) ||
-        tasks.find((row) => String(row.operation_request_id || "") === String(assignment.operation_request_id || "")) ||
-        null;
+    return assignments
+      .map((assignment) => {
+        const task =
+          taskLogs.find(
+            (row) => String(row.assignment_id || "") === String(assignment.id),
+          ) ||
+          taskLogs.find(
+            (row) =>
+              String(row.operation_request_id || "") ===
+              String(assignment.operation_request_id || ""),
+          ) ||
+          null;
 
-      const request = assignment.operation_request_id
-        ? requestMap.get(String(assignment.operation_request_id)) || null
-        : null;
+        const request = assignment.operation_request_id
+          ? requestMap.get(String(assignment.operation_request_id)) || null
+          : null;
 
-      const treeId = assignment.tree_id || task?.tree_id || request?.tree_id || null;
-      const tree = treeId ? treeMap.get(String(treeId)) || null : null;
+        const treeId = task?.tree_id || assignment.tree_id || request?.tree_id || null;
+        const tree = treeId ? treeMap.get(String(treeId)) || null : null;
 
-      const groupId = assignment.group_id || task?.group_id || request?.group_id || tree?.group_id || null;
-      const group = groupId ? groupMap.get(String(groupId)) || null : null;
+        const groupId =
+          task?.group_id ||
+          assignment.group_id ||
+          request?.group_id ||
+          tree?.group_id ||
+          null;
+        const group = groupId ? groupMap.get(String(groupId)) || null : null;
 
-      const customerId =
-        assignment.customer_profile_id ||
-        task?.customer_profile_id ||
-        request?.customer_profile_id ||
-        request?.profile_id ||
-        tree?.customer_profile_id ||
-        tree?.profile_id ||
-        group?.customer_profile_id ||
-        group?.profile_id ||
-        null;
+        const customerId =
+          task?.customer_profile_id ||
+          assignment.customer_profile_id ||
+          request?.customer_profile_id ||
+          request?.profile_id ||
+          tree?.customer_profile_id ||
+          tree?.profile_id ||
+          group?.customer_profile_id ||
+          group?.profile_id ||
+          null;
 
-      const customer = customerId ? customerMap.get(String(customerId)) || null : null;
-      const status = mergeStatuses(task?.status, assignment.status, request?.assignment_status, request?.status);
-      const evidenceStatus = mergeStatuses(task?.evidence_status, task?.status, assignment.status, request?.assignment_status);
-      const service = serviceOfRaw(
-        task?.source_type,
-        task?.task_type,
-        assignment.source_type,
-        assignment.assignment_type,
-        request?.service_name,
-        request?.operation_type,
-        request?.request_type,
-        request?.care_program_name,
-      );
+        const customer = customerId ? customerMap.get(String(customerId)) || null : null;
 
-      return {
-        key: String(assignment.id),
-        assignment,
-        task,
-        request,
-        tree,
-        group,
-        customer,
-        status,
-        evidenceStatus,
-        service,
-      };
-    });
-  }, [assignments, tasks, requestMap, treeMap, groupMap, customerMap]);
+        const status = mergeStatus(
+          task?.status,
+          assignment.status,
+          request?.assignment_status,
+          request?.status,
+        );
 
-  const selected = useMemo(() => {
-    return workItems.find((item) => item.key === selectedKey) || workItems[0] || null;
-  }, [workItems, selectedKey]);
+        const evidenceStatus = mergeStatus(
+          task?.evidence_status,
+          task?.status,
+          assignment.status,
+          request?.assignment_status,
+        );
 
-  useEffect(() => {
-    if (!selectedKey && workItems[0]) setSelectedKey(workItems[0].key);
-  }, [workItems, selectedKey]);
+        const serviceKey = getServiceKey(assignment, task, request);
+        const evidenceMode = getEvidenceMode(serviceKey);
 
-  const selectedEvidence = useMemo(() => {
-    if (!selected) return { photos: [], gps: [], health: [] };
+        return {
+          key: String(assignment.id),
+          assignment,
+          task,
+          request,
+          tree,
+          group,
+          customer,
+          status,
+          evidenceStatus,
+          serviceKey,
+          evidenceMode,
+        };
+      })
+      .sort((a, b) => {
+        const aDate = new Date(a.task?.created_at || a.assignment.created_at || 0).getTime();
+        const bDate = new Date(b.task?.created_at || b.assignment.created_at || 0).getTime();
 
-    return {
-      photos: photoEvidence.filter((row) => String(row.assignment_id || "") === selected.key),
-      gps: gpsEvidence.filter((row) => String(row.assignment_id || "") === selected.key),
-      health: healthEvidence.filter((row) => String(row.assignment_id || "") === selected.key),
-    };
-  }, [selected, photoEvidence, gpsEvidence, healthEvidence]);
+        return bDate - aDate;
+      });
+  }, [assignments, taskLogs, requestMap, treeMap, groupMap, customerMap]);
+
+  const activeTask = useMemo(() => {
+    return workItems.find((item) => item.status === "IN_PROGRESS") || null;
+  }, [workItems]);
 
   const visibleItems = useMemo(() => {
-    if (filter === "ALL") return workItems;
-    if (filter === "ACTIVE") return workItems.filter((item) => !CLOSED_STATUSES.includes(item.status));
-    return workItems.filter((item) => item.status === filter);
-  }, [workItems, filter]);
+    return workItems.filter((item) => item.status === tab);
+  }, [workItems, tab]);
+
+  const selected = useMemo(() => {
+    return (
+      workItems.find((item) => item.key === selectedKey) ||
+      visibleItems[0] ||
+      activeTask ||
+      workItems[0] ||
+      null
+    );
+  }, [workItems, selectedKey, visibleItems, activeTask]);
+
+  useEffect(() => {
+    if (activeTask && tab !== "IN_PROGRESS") {
+      setTab("IN_PROGRESS");
+    }
+  }, [activeTask?.key]);
+
+  useEffect(() => {
+    if (!selectedKey && selected?.key) {
+      setSelectedKey(selected.key);
+    }
+  }, [selected, selectedKey]);
+
+  const verifiedTree = selected ? verifiedMap[selected.key] || null : null;
+  const isVerified = !!verifiedTree;
+
+  const activeTaskBlocksStart =
+    !!activeTask && !!selected && activeTask.key !== selected.key;
 
   const stats = useMemo(() => {
     return {
       assigned: workItems.filter((item) => item.status === "ASSIGNED").length,
       inProgress: workItems.filter((item) => item.status === "IN_PROGRESS").length,
-      submitted: workItems.filter((item) => item.status === "SUBMITTED").length,
-      completed: workItems.filter((item) => item.status === "COMPLETED").length,
     };
   }, [workItems]);
 
-  const isVerified = Boolean(selected && verifiedMap[selected.key]);
-  const verifiedTree = selected ? verifiedMap[selected.key] || null : null;
-  const needBeforeAfter = selected ? requiresBeforeAfter(selected.service) : false;
+  function resetEvidenceForm() {
+    setCurrentPhoto(null);
+    setBeforePhoto(null);
+    setAfterPhoto(null);
+    setLatitude("");
+    setLongitude("");
+    setGpsAccuracy(null);
+    setHealthStatus("HEALTHY");
+    setNotes("");
+  }
 
-  function findTreeByScan(item: WorkItem, parsed: { treeId: string; treeCode: string }) {
+  function resolveCustomerProfileId(item: WorkItem) {
+    return (
+      item.assignment.customer_profile_id ||
+      item.task?.customer_profile_id ||
+      item.request?.customer_profile_id ||
+      item.request?.profile_id ||
+      item.tree?.customer_profile_id ||
+      item.tree?.profile_id ||
+      item.group?.customer_profile_id ||
+      item.group?.profile_id ||
+      null
+    );
+  }
+
+  function resolveGroupId(item: WorkItem, matchedTree?: VerifiedTree | null) {
+    return (
+      item.assignment.group_id ||
+      item.task?.group_id ||
+      item.request?.group_id ||
+      matchedTree?.groupId ||
+      item.tree?.group_id ||
+      item.group?.id ||
+      null
+    );
+  }
+
+  function findTreeByScan(item: WorkItem, raw: string): VerifiedTree | null {
+    const parsed = parseQrValue(raw);
     const scannedId = parsed.treeId.trim().toLowerCase();
     const scannedCode = parsed.treeCode.trim().toLowerCase();
-    const assignedTreeId = String(item.tree?.id || item.assignment.tree_id || item.request?.tree_id || "").trim().toLowerCase();
-    const assignedTreeCode = String(item.tree?.tree_code || item.assignment.tree_code || item.request?.tree_code || "").trim().toLowerCase();
 
-    if (assignedTreeId || assignedTreeCode) {
+    const expectedTreeId = String(
+      item.tree?.id || item.assignment.tree_id || item.request?.tree_id || "",
+    )
+      .trim()
+      .toLowerCase();
+
+    const expectedTreeCode = String(
+      item.tree?.tree_code ||
+        item.assignment.tree_code ||
+        item.request?.tree_code ||
+        "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (expectedTreeId || expectedTreeCode) {
       const matched =
-        Boolean(scannedId && assignedTreeId && scannedId === assignedTreeId) ||
-        Boolean(scannedCode && assignedTreeCode && scannedCode === assignedTreeCode);
+        Boolean(scannedId && expectedTreeId && scannedId === expectedTreeId) ||
+        Boolean(scannedCode && expectedTreeCode && scannedCode === expectedTreeCode);
 
-      return matched
-        ? {
-            treeId: String(item.tree?.id || item.assignment.tree_id || item.request?.tree_id),
-            treeCode: String(item.tree?.tree_code || item.assignment.tree_code || item.request?.tree_code || parsed.treeCode),
-            treeName: treeDisplayName(item.tree),
-            groupId: item.tree?.group_id || item.assignment.group_id || item.request?.group_id || null,
-          }
-        : null;
+      if (!matched) return null;
+
+      return {
+        treeId: String(item.tree?.id || item.assignment.tree_id || item.request?.tree_id),
+        treeCode: String(
+          item.tree?.tree_code ||
+            item.assignment.tree_code ||
+            item.request?.tree_code ||
+            parsed.treeCode,
+        ),
+        treeName: getTreeName(item.tree),
+        groupId: item.tree?.group_id || item.assignment.group_id || item.request?.group_id || null,
+      };
     }
 
-    const groupId = String(item.assignment.group_id || item.task?.group_id || item.request?.group_id || item.group?.id || "");
+    const assignedGroupId = String(
+      item.assignment.group_id || item.task?.group_id || item.request?.group_id || item.group?.id || "",
+    );
 
-    if (!groupId) return null;
+    if (!assignedGroupId) return null;
 
-    const matchedTree = trees.find((tree) => {
-      const treeId = String(tree.id || "").toLowerCase();
-      const treeCode = String(tree.tree_code || "").toLowerCase();
-      const sameGroup = String(tree.group_id || "") === groupId;
+    const matchedGroupTree = trees.find((tree) => {
+      const treeId = String(tree.id || "").trim().toLowerCase();
+      const treeCode = String(tree.tree_code || "").trim().toLowerCase();
+      const sameGroup = String(tree.group_id || "") === assignedGroupId;
 
-      return sameGroup && ((scannedId && treeId === scannedId) || (scannedCode && treeCode === scannedCode));
+      return (
+        sameGroup &&
+        ((scannedId && scannedId === treeId) ||
+          (scannedCode && scannedCode === treeCode))
+      );
     });
 
-    if (!matchedTree) return null;
+    if (!matchedGroupTree) return null;
 
     return {
-      treeId: String(matchedTree.id),
-      treeCode: String(matchedTree.tree_code || parsed.treeCode || matchedTree.id),
-      treeName: treeDisplayName(matchedTree),
-      groupId: matchedTree.group_id || groupId,
+      treeId: String(matchedGroupTree.id),
+      treeCode: String(matchedGroupTree.tree_code || parsed.treeCode || matchedGroupTree.id),
+      treeName: getTreeName(matchedGroupTree),
+      groupId: matchedGroupTree.group_id || assignedGroupId,
     };
+  }
+
+  async function saveQrAudit(item: WorkItem, matchedTree: VerifiedTree) {
+    if (!caretaker) return;
+
+    try {
+      await supabase.from("tree_verifications").insert({
+        assignment_id: item.assignment.id,
+        operation_request_id: item.assignment.operation_request_id || item.request?.id || null,
+        tree_id: matchedTree.treeId,
+        customer_profile_id: resolveCustomerProfileId(item),
+        caretaker_id: caretaker.id,
+        verified_tree_code: matchedTree.treeCode,
+        verification_method: "QR_CAMERA",
+        status: "VERIFIED",
+        created_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.warn("Optional tree_verifications audit skipped", error);
+    }
+  }
+
+  async function verifyTree(raw?: string) {
+    if (!selected) return;
+
+    const value = String(raw || scanValue || "").trim();
+
+    if (!value) {
+      setMessage("Scan or enter tree QR / tree code first.");
+      return;
+    }
+
+    const matchedTree = findTreeByScan(selected, value);
+
+    if (!matchedTree) {
+      setVerifiedMap((current) => {
+        const next = { ...current };
+        delete next[selected.key];
+        return next;
+      });
+      setMessage("Wrong Tree / Tree mismatch. Evidence upload is blocked for this task.");
+      return;
+    }
+
+    setVerifiedMap((current) => ({
+      ...current,
+      [selected.key]: matchedTree,
+    }));
+
+    setMessage(`Tree Verified: ${matchedTree.treeName}.`);
+    await saveQrAudit(selected, matchedTree);
+  }
+
+  async function startCameraScanner() {
+    if (!selected) return;
+
+    setMessage("");
+
+    try {
+      setScannerOpen(true);
+      setScannerRunning(true);
+
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const scannerId = `gardener-task-scanner-${selected.key}`;
+      const scanner = new Html5Qrcode(scannerId);
+
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 260 } },
+        async (decodedText: string) => {
+          setScanValue(decodedText);
+          await verifyTree(decodedText);
+          await stopCameraScanner();
+        },
+        () => undefined,
+      );
+    } catch (error: any) {
+      setScannerRunning(false);
+      setMessage(error?.message || "Unable to open QR scanner. Use manual input.");
+    }
   }
 
   async function stopCameraScanner() {
@@ -642,150 +853,69 @@ export default function GardenerTasksPage() {
     }
   }
 
-  async function saveQrAuditLog(item: WorkItem, parsed: { treeId: string; treeCode: string }, matchedTree: VerifiedTree) {
-    if (!caretaker) return;
+  async function ensureTaskLogForStart(item: WorkItem, now: string) {
+    if (!caretaker) throw new Error("Caretaker not loaded.");
 
-    try {
-      await supabase.from("tree_verifications").insert({
+    if (item.task?.id) {
+      const { error } = await supabase
+        .from("caretaker_task_logs")
+        .update({
+          status: "IN_PROGRESS",
+          evidence_status: "PENDING",
+          started_at: item.task.started_at || now,
+          updated_at: now,
+        })
+        .eq("id", item.task.id);
+
+      if (error) throw error;
+
+      return item.task.id as string;
+    }
+
+    const { data, error } = await supabase
+      .from("caretaker_task_logs")
+      .insert({
         assignment_id: item.assignment.id,
         operation_request_id: item.assignment.operation_request_id || item.request?.id || null,
-        tree_id: matchedTree.treeId,
-        customer_profile_id:
-          item.assignment.customer_profile_id ||
-          item.task?.customer_profile_id ||
-          item.request?.customer_profile_id ||
-          item.request?.profile_id ||
-          item.tree?.customer_profile_id ||
-          item.tree?.profile_id ||
-          null,
+        tree_id: item.assignment.tree_id || item.request?.tree_id || null,
+        group_id: item.assignment.group_id || item.request?.group_id || item.tree?.group_id || null,
+        customer_profile_id: resolveCustomerProfileId(item),
         caretaker_id: caretaker.id,
-        verified_tree_code: parsed.treeCode || matchedTree.treeCode || matchedTree.treeId,
-        verification_method: "QR_CAMERA",
-        status: "VERIFIED",
-        created_at: new Date().toISOString(),
-      });
-    } catch (error) {
-      console.warn("Optional tree_verifications audit skipped", error);
-    }
-  }
+        caretaker_profile_id: caretaker.caretaker_profile_id || null,
+        task_type: item.serviceKey,
+        source_type: item.serviceKey,
+        status: "IN_PROGRESS",
+        evidence_status: "PENDING",
+        notes: "Gardener started work.",
+        started_at: now,
+        created_at: now,
+        updated_at: now,
+      })
+      .select("id")
+      .single();
 
-  async function verifyTree(raw?: string) {
-    if (!selected) return;
-
-    const value = String(raw || scanValue || "").trim();
-
-    if (!value) {
-      setMessage("Scan or manually enter tree QR / tree code first.");
-      return;
+    if (error || !data?.id) {
+      throw new Error(error?.message || "Failed to create task log.");
     }
 
-    const parsed = parseScannedTreeValue(value);
-    const matchedTree = findTreeByScan(selected, parsed);
-
-    if (!matchedTree) {
-      setVerifiedMap((current) => {
-        const next = { ...current };
-        delete next[selected.key];
-        return next;
-      });
-      setMessage("Wrong Tree / Tree mismatch. Evidence upload blocked.");
-      return;
-    }
-
-    setVerifiedMap((current) => ({
-      ...current,
-      [selected.key]: matchedTree,
-    }));
-    setMessage(`Tree Verified: ${matchedTree.treeName}. Evidence upload is now unlocked.`);
-    await saveQrAuditLog(selected, parsed, matchedTree);
-  }
-
-  async function startCameraScanner() {
-    if (!selected) return;
-
-    setMessage("");
-
-    try {
-      setScannerOpen(true);
-      setScannerRunning(true);
-      const { Html5Qrcode } = await import("html5-qrcode");
-      const scannerId = `tasks-qr-scanner-${selected.key}`;
-      const scanner = new Html5Qrcode(scannerId);
-      scannerRef.current = scanner;
-
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 260 } },
-        async (decodedText: string) => {
-          setScanValue(decodedText);
-          await verifyTree(decodedText);
-          await stopCameraScanner();
-        },
-        () => undefined,
-      );
-    } catch (error: any) {
-      setScannerRunning(false);
-      setMessage(error?.message || "Unable to open camera scanner. Use manual fallback.");
-    }
-  }
-
-  function resetEvidenceForm() {
-    setCurrentPhoto(null);
-    setBeforePhoto(null);
-    setAfterPhoto(null);
-    setLatitude("");
-    setLongitude("");
-    setHealthStatus("HEALTHY");
-    setNotes("");
+    return data.id as string;
   }
 
   async function startWork() {
     if (!selected || !caretaker) return;
+
+    if (activeTaskBlocksStart) {
+      setMessage("You already have one active task. Submit that task before starting another.");
+      return;
+    }
+
     setSaving(true);
     setMessage("");
 
     const now = new Date().toISOString();
 
     try {
-      if (selected.task?.id) {
-        const { error } = await supabase
-          .from("caretaker_task_logs")
-          .update({
-            status: "IN_PROGRESS",
-            evidence_status: "PENDING",
-            started_at: selected.task.started_at || now,
-            updated_at: now,
-          })
-          .eq("id", selected.task.id);
-
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("caretaker_task_logs").insert({
-          assignment_id: selected.assignment.id,
-          operation_request_id: selected.assignment.operation_request_id || selected.request?.id,
-          tree_id: selected.assignment.tree_id || selected.request?.tree_id || null,
-          group_id: selected.assignment.group_id || selected.request?.group_id || selected.group?.id || null,
-          customer_profile_id:
-            selected.assignment.customer_profile_id ||
-            selected.request?.customer_profile_id ||
-            selected.request?.profile_id ||
-            selected.tree?.customer_profile_id ||
-            selected.tree?.profile_id ||
-            null,
-          caretaker_id: caretaker.id,
-          caretaker_profile_id: caretaker.caretaker_profile_id || null,
-          task_type: selected.service,
-          source_type: selected.service,
-          status: "IN_PROGRESS",
-          evidence_status: "PENDING",
-          notes: "Gardener started field work.",
-          started_at: now,
-          created_at: now,
-          updated_at: now,
-        });
-
-        if (error) throw error;
-      }
+      await ensureTaskLogForStart(selected, now);
 
       const { error: assignmentError } = await supabase
         .from("caretaker_assignments")
@@ -813,49 +943,144 @@ export default function GardenerTasksPage() {
         if (requestError) throw requestError;
       }
 
-      setMessage("Work started. Verify tree QR before submitting evidence.");
-      await loadData();
+      setTab("IN_PROGRESS");
+      setSelectedKey(selected.key);
+      setMessage("Work started. Verify tree QR, then submit the required evidence.");
+      await loadData(selected.key);
     } catch (error: any) {
       setMessage(error?.message || "Failed to start work.");
+    } finally {
+      setSaving(false);
     }
-
-    setSaving(false);
   }
 
-  async function uploadEvidenceFile(file: File | null, folder: string) {
-    if (!file || !selected) return null;
+  function useCurrentLocation() {
+    setMessage("");
+
+    if (!navigator.geolocation) {
+      setMessage("GPS is not supported by this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLatitude(String(position.coords.latitude));
+        setLongitude(String(position.coords.longitude));
+        setGpsAccuracy(position.coords.accuracy || null);
+        setMessage("GPS location captured.");
+      },
+      () => {
+        setMessage("Unable to capture GPS location. You may enter it manually.");
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+      },
+    );
+  }
+
+  async function uploadEvidenceFile(file: File, folder: "current" | "before" | "after") {
     if (!caretaker) throw new Error("Caretaker profile not found.");
     if (!profile) throw new Error("Profile not found.");
+    if (!selected) throw new Error("Task not selected.");
 
     const ext = file.name.split(".").pop() || "jpg";
-    const ownerProfileId = caretaker.caretaker_profile_id || profile.id || caretaker.id;
+    const ownerProfileId = caretaker.caretaker_profile_id || profile.id;
 
-    if (!ownerProfileId) throw new Error("Storage owner profile id not found.");
+    if (!ownerProfileId) {
+      throw new Error("Storage owner profile id not found.");
+    }
 
-    const path = `${ownerProfileId}/${folder}/${selected.assignment.id}-${Date.now()}-${Math.random()
+    const filePath = `${ownerProfileId}/${folder}/${selected.assignment.id}/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
 
-    const upload = await supabase.storage.from("tree-evidence").upload(path, file, { upsert: true });
+    const upload = await supabase.storage.from("tree-evidence").upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+    });
 
     if (upload.error) throw upload.error;
 
-    return supabase.storage.from("tree-evidence").getPublicUrl(path).data.publicUrl;
+    const { data } = supabase.storage.from("tree-evidence").getPublicUrl(filePath);
+
+    return data.publicUrl;
   }
 
-  function getSubmissionCore() {
-    if (!selected || !caretaker || !verifiedTree) throw new Error("Work order or verified tree not loaded.");
+  async function ensureTaskLogForSubmit(item: WorkItem, now: string) {
+    if (!caretaker) throw new Error("Caretaker not loaded.");
+
+    if (item.task?.id) return item.task.id as string;
+
+    const { data, error } = await supabase
+      .from("caretaker_task_logs")
+      .insert({
+        assignment_id: item.assignment.id,
+        operation_request_id: item.assignment.operation_request_id || item.request?.id || null,
+        tree_id: item.assignment.tree_id || item.request?.tree_id || null,
+        group_id: item.assignment.group_id || item.request?.group_id || item.tree?.group_id || null,
+        customer_profile_id: resolveCustomerProfileId(item),
+        caretaker_id: caretaker.id,
+        caretaker_profile_id: caretaker.caretaker_profile_id || null,
+        task_type: item.serviceKey,
+        source_type: item.serviceKey,
+        status: "IN_PROGRESS",
+        evidence_status: "PENDING",
+        notes: "Gardener field work in progress.",
+        started_at: now,
+        created_at: now,
+        updated_at: now,
+      })
+      .select("id")
+      .single();
+
+    if (error || !data?.id) {
+      throw new Error(error?.message || "Failed to create task log before evidence submit.");
+    }
+
+    return data.id as string;
+  }
+
+  function validateEvidence() {
+    if (!selected) return "Select a task first.";
+    if (selected.status !== "IN_PROGRESS") return "Start work before submitting evidence.";
+    if (!isVerified) return "Verify tree QR before submitting evidence.";
+    if (selected.evidenceStatus === "SUBMITTED") return "This task already has submitted evidence.";
+
+    if (selected.evidenceMode === "GPS_ONLY") {
+      if (!latitude.trim() || !longitude.trim()) {
+        return "GPS latitude and longitude are required.";
+      }
+
+      if (Number.isNaN(Number(latitude)) || Number.isNaN(Number(longitude))) {
+        return "Latitude and longitude must be valid numbers.";
+      }
+    }
+
+    if (selected.evidenceMode === "PHOTO_CURRENT_ONLY") {
+      if (!currentPhoto) return "Current photo is required.";
+    }
+
+    if (selected.evidenceMode === "PHOTO_BEFORE_AFTER") {
+      if (!beforePhoto) return "Before photo is required.";
+      if (!afterPhoto) return "After photo is required.";
+    }
+
+    if (selected.evidenceMode === "HEALTH_ONLY") {
+      if (!healthStatus.trim()) return "Health status is required.";
+    }
+
+    return "";
+  }
+
+  function getSubmissionCore(taskLogId: string) {
+    if (!selected || !caretaker || !verifiedTree) {
+      throw new Error("Task, caretaker, or verified tree not loaded.");
+    }
 
     const operationRequestId = selected.assignment.operation_request_id || selected.request?.id;
-    const customerProfileId =
-      selected.assignment.customer_profile_id ||
-      selected.task?.customer_profile_id ||
-      selected.request?.customer_profile_id ||
-      selected.request?.profile_id ||
-      selected.tree?.customer_profile_id ||
-      selected.tree?.profile_id ||
-      null;
-    const groupId = selected.assignment.group_id || selected.task?.group_id || selected.request?.group_id || verifiedTree.groupId || selected.group?.id || null;
+    const customerProfileId = resolveCustomerProfileId(selected);
+    const groupId = resolveGroupId(selected, verifiedTree);
 
     if (!selected.assignment.id) throw new Error("Missing assignment_id.");
     if (!operationRequestId) throw new Error("Missing operation_request_id.");
@@ -864,131 +1089,97 @@ export default function GardenerTasksPage() {
     if (!caretaker.id) throw new Error("Missing caretaker_id.");
 
     return {
-      assignmentId: selected.assignment.id,
-      operationRequestId,
-      treeId: verifiedTree.treeId,
-      groupId,
-      customerProfileId,
+      assignment_id: selected.assignment.id,
+      operation_request_id: operationRequestId,
+      tree_id: verifiedTree.treeId,
+      group_id: groupId,
+      customer_profile_id: customerProfileId,
+      caretaker_id: caretaker.id,
+      caretaker_profile_id: caretaker.caretaker_profile_id || null,
+      task_log_id: taskLogId,
     };
   }
 
-  async function getExistingEvidenceCounts(assignmentId: string): Promise<ExistingEvidenceCounts> {
-    const [photoResult, gpsResult, healthResult] = await Promise.all([
-      supabase.from("tree_photo_updates").select("id", { count: "exact" }).eq("assignment_id", assignmentId),
-      supabase.from("tree_gps_logs").select("id", { count: "exact" }).eq("assignment_id", assignmentId),
-      supabase.from("tree_health_reports").select("id", { count: "exact" }).eq("assignment_id", assignmentId),
-    ]);
+  async function getExistingRelevantEvidenceCount() {
+    if (!selected) return 0;
 
-    if (photoResult.error) throw photoResult.error;
-    if (gpsResult.error) throw gpsResult.error;
-    if (healthResult.error) throw healthResult.error;
+    if (selected.evidenceMode === "GPS_ONLY") {
+      const { count, error } = await supabase
+        .from("tree_gps_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("assignment_id", selected.assignment.id);
 
-    return {
-      photos: photoResult.count || 0,
-      gps: gpsResult.count || 0,
-      health: healthResult.count || 0,
-      total: (photoResult.count || 0) + (gpsResult.count || 0) + (healthResult.count || 0),
-    };
-  }
+      if (error) throw error;
 
-  function validateSubmission(existing: ExistingEvidenceCounts) {
-    if (!selected || !caretaker) return "Work order not loaded.";
-    if (!isVerified) return "Tree QR must be verified before evidence upload.";
-    if (SUBMIT_LOCK_STATUSES.includes(selected.status)) {
-      return `This work order is already ${selected.status.replaceAll("_", " ")}. Duplicate submission is blocked.`;
+      return count || 0;
     }
-    if (selected.evidenceStatus === "SUBMITTED") return "Evidence is already submitted for this task.";
-    if (existing.photos === 0 && !currentPhoto) return "Current photo is required.";
-    if (existing.gps === 0 && (!latitude || !longitude)) return "GPS latitude and longitude are required.";
-    if (existing.health === 0 && !healthStatus) return "Health status is required.";
-    if (needBeforeAfter && !beforePhoto && existing.photos === 0) return "Before photo is required for this care service.";
-    if (needBeforeAfter && !afterPhoto && existing.photos === 0) return "After photo is required for this care service.";
 
-    if (latitude && Number.isNaN(Number(latitude))) return "Latitude must be a valid number.";
-    if (longitude && Number.isNaN(Number(longitude))) return "Longitude must be a valid number.";
+    if (selected.evidenceMode === "HEALTH_ONLY") {
+      const { count, error } = await supabase
+        .from("tree_health_reports")
+        .select("id", { count: "exact", head: true })
+        .eq("assignment_id", selected.assignment.id);
 
-    return "";
+      if (error) throw error;
+
+      return count || 0;
+    }
+
+    const { count, error } = await supabase
+      .from("tree_photo_updates")
+      .select("id", { count: "exact", head: true })
+      .eq("assignment_id", selected.assignment.id);
+
+    if (error) throw error;
+
+    return count || 0;
   }
 
-  async function rollbackInsertedEvidence(inserted: InsertedEvidenceIds) {
+  async function rollbackEvidence(inserted: InsertedEvidenceIds) {
     try {
       if (inserted.photoIds.length > 0) {
         await supabase.from("tree_photo_updates").delete().in("id", inserted.photoIds);
       }
+
       if (inserted.gpsIds.length > 0) {
         await supabase.from("tree_gps_logs").delete().in("id", inserted.gpsIds);
       }
+
       if (inserted.healthIds.length > 0) {
         await supabase.from("tree_health_reports").delete().in("id", inserted.healthIds);
       }
     } catch (error) {
-      console.error("Evidence rollback failed:", error);
+      console.error("Evidence rollback skipped or failed:", error);
     }
   }
 
-  async function syncSubmissionStatuses(args: {
-    now: string;
-    operationRequestId: string;
-    treeId: string;
-    groupId: string | null;
-    customerProfileId: string;
-  }) {
-    if (!selected || !caretaker) throw new Error("Work order not loaded.");
+  async function syncSubmitted(now: string, taskLogId: string, treeId: string, groupId: string | null) {
+    if (!selected) throw new Error("Task not selected.");
 
-    const existingTaskId = selected.task?.id;
-    let taskId = existingTaskId || null;
-
-    if (!taskId) {
-      const { data, error } = await supabase
-        .from("caretaker_task_logs")
-        .insert({
-          assignment_id: selected.assignment.id,
-          operation_request_id: args.operationRequestId,
-          tree_id: args.treeId,
-          group_id: args.groupId,
-          customer_profile_id: args.customerProfileId,
-          caretaker_id: caretaker.id,
-          caretaker_profile_id: caretaker.caretaker_profile_id || null,
-          task_type: selected.service,
-          source_type: selected.service,
-          status: "SUBMITTED",
-          evidence_status: "SUBMITTED",
-          notes: notes || "Evidence submitted.",
-          submitted_at: args.now,
-          created_at: args.now,
-          updated_at: args.now,
-        })
-        .select("id")
-        .single();
-
-      if (error || !data?.id) throw new Error(`caretaker_task_logs insert failed: ${error?.message || "No task id returned."}`);
-      taskId = data.id;
-    }
-
-    const { error: taskUpdateError } = await supabase
+    const { error: taskError } = await supabase
       .from("caretaker_task_logs")
       .update({
-        tree_id: args.treeId,
-        group_id: args.groupId,
+        tree_id: treeId,
+        group_id: groupId,
         status: "SUBMITTED",
         evidence_status: "SUBMITTED",
         notes: notes || selected.task?.notes || "Evidence submitted.",
-        submitted_at: args.now,
-        updated_at: args.now,
+        submitted_at: now,
+        updated_at: now,
       })
-      .eq("id", taskId);
+      .eq("id", taskLogId);
 
-    if (taskUpdateError) throw new Error(`caretaker_task_logs sync failed: ${taskUpdateError.message}`);
+    if (taskError) throw new Error(`caretaker_task_logs sync failed: ${taskError.message}`);
 
     const assignmentUpdate: Row = {
-      group_id: selected.assignment.group_id || args.groupId,
+      group_id: selected.assignment.group_id || groupId,
       status: "SUBMITTED",
-      submitted_at: args.now,
-      updated_at: args.now,
+      submitted_at: now,
+      updated_at: now,
     };
 
     if (selected.assignment.tree_id || selected.request?.tree_id) {
-      assignmentUpdate.tree_id = args.treeId;
+      assignmentUpdate.tree_id = treeId;
     }
 
     const { error: assignmentError } = await supabase
@@ -996,98 +1187,75 @@ export default function GardenerTasksPage() {
       .update(assignmentUpdate)
       .eq("id", selected.assignment.id);
 
-    if (assignmentError) throw new Error(`caretaker_assignments sync failed: ${assignmentError.message}`);
+    if (assignmentError) {
+      throw new Error(`caretaker_assignments sync failed: ${assignmentError.message}`);
+    }
 
     const requestUpdate: Row = {
-      group_id: selected.request?.group_id || selected.assignment.group_id || args.groupId,
+      group_id: selected.request?.group_id || selected.assignment.group_id || groupId,
       status: "SUBMITTED",
       assignment_status: "SUBMITTED",
-      updated_at: args.now,
+      updated_at: now,
     };
 
     if (selected.request?.tree_id || selected.assignment.tree_id) {
-      requestUpdate.tree_id = args.treeId;
+      requestUpdate.tree_id = treeId;
+    }
+
+    const operationRequestId = selected.assignment.operation_request_id || selected.request?.id;
+
+    if (!operationRequestId) {
+      throw new Error("Missing operation_request_id during submit sync.");
     }
 
     const { error: requestError } = await supabase
       .from("tree_operation_requests")
       .update(requestUpdate)
-      .eq("id", args.operationRequestId);
+      .eq("id", operationRequestId);
 
-    if (requestError) throw new Error(`tree_operation_requests sync failed: ${requestError.message}`);
-
-    return taskId;
+    if (requestError) {
+      throw new Error(`tree_operation_requests sync failed: ${requestError.message}`);
+    }
   }
 
-  async function submitWork() {
+  async function submitEvidence() {
     if (saving) return;
-
-    if (!selected || !caretaker) {
-      setMessage("Work order not loaded.");
-      return;
-    }
 
     setSaving(true);
     setMessage("");
 
-    const now = new Date().toISOString();
-    const insertedEvidence: InsertedEvidenceIds = { photoIds: [], gpsIds: [], healthIds: [] };
+    const inserted: InsertedEvidenceIds = {
+      photoIds: [],
+      gpsIds: [],
+      healthIds: [],
+    };
 
     try {
-      const core = getSubmissionCore();
-      const existing = await getExistingEvidenceCounts(core.assignmentId);
-      const validationError = validateSubmission(existing);
-
+      const validationError = validateEvidence();
       if (validationError) throw new Error(validationError);
 
-      const currentPhotoUrl = existing.photos === 0 ? await uploadEvidenceFile(currentPhoto, "current") : null;
-      const beforePhotoUrl = existing.photos === 0 ? await uploadEvidenceFile(beforePhoto, "before") : null;
-      const afterPhotoUrl = existing.photos === 0 ? await uploadEvidenceFile(afterPhoto, "after") : null;
+      const duplicateCount = await getExistingRelevantEvidenceCount();
 
-      if (existing.photos === 0) {
-        const { data, error } = await supabase
-          .from("tree_photo_updates")
-          .insert({
-            assignment_id: core.assignmentId,
-            operation_request_id: core.operationRequestId,
-            tree_id: core.treeId,
-            group_id: core.groupId,
-            customer_profile_id: core.customerProfileId,
-            caretaker_id: caretaker.id,
-            caretaker_profile_id: caretaker.caretaker_profile_id || null,
-            photo_url: currentPhotoUrl || beforePhotoUrl || afterPhotoUrl,
-            image_url: currentPhotoUrl || beforePhotoUrl || afterPhotoUrl,
-            before_photo_url: beforePhotoUrl,
-            after_photo_url: afterPhotoUrl,
-            caption: serviceLabel(selected.service),
-            notes: notes || null,
-            status: "SUBMITTED",
-            created_at: now,
-            updated_at: now,
-          })
-          .select("id")
-          .single();
-
-        if (error || !data?.id) throw new Error(`tree_photo_updates insert failed: ${error?.message || "No evidence id returned."}`);
-        insertedEvidence.photoIds.push(data.id);
+      if (duplicateCount > 0) {
+        throw new Error("Evidence for this task was already submitted. Duplicate submission blocked.");
       }
 
-      if (existing.gps === 0) {
+      const now = new Date().toISOString();
+      const taskLogId = await ensureTaskLogForSubmit(selected as WorkItem, now);
+      const core = getSubmissionCore(taskLogId);
+
+      if (selected?.evidenceMode === "GPS_ONLY") {
         const mapUrl = `https://maps.google.com/?q=${Number(latitude)},${Number(longitude)}`;
+
         const { data, error } = await supabase
           .from("tree_gps_logs")
           .insert({
-            assignment_id: core.assignmentId,
-            operation_request_id: core.operationRequestId,
-            tree_id: core.treeId,
-            group_id: core.groupId,
-            customer_profile_id: core.customerProfileId,
-            caretaker_id: caretaker.id,
-            caretaker_profile_id: caretaker.caretaker_profile_id || null,
+            ...core,
             latitude: Number(latitude),
             longitude: Number(longitude),
-            map_url: mapUrl,
+            accuracy_meters: gpsAccuracy,
             gps_url: mapUrl,
+            map_url: mapUrl,
             location_note: notes || null,
             notes: notes || null,
             status: "SUBMITTED",
@@ -1097,24 +1265,87 @@ export default function GardenerTasksPage() {
           .select("id")
           .single();
 
-        if (error || !data?.id) throw new Error(`tree_gps_logs insert failed: ${error?.message || "No evidence id returned."}`);
-        insertedEvidence.gpsIds.push(data.id);
+        if (error || !data?.id) {
+          throw new Error(`tree_gps_logs insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        inserted.gpsIds.push(data.id);
       }
 
-      if (existing.health === 0) {
-        const issueSeverity = healthStatus === "CRITICAL" ? "CRITICAL" : healthStatus === "NEEDS_ATTENTION" ? "ATTENTION" : null;
+      if (selected?.evidenceMode === "PHOTO_CURRENT_ONLY") {
+        if (!currentPhoto) throw new Error("Current photo is required.");
+
+        const currentPhotoUrl = await uploadEvidenceFile(currentPhoto, "current");
+
+        const { data, error } = await supabase
+          .from("tree_photo_updates")
+          .insert({
+            ...core,
+            photo_url: currentPhotoUrl,
+            image_url: currentPhotoUrl,
+            before_photo_url: null,
+            after_photo_url: null,
+            caption: getServiceLabel(selected.serviceKey),
+            notes: notes || null,
+            status: "SUBMITTED",
+            created_at: now,
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+
+        if (error || !data?.id) {
+          throw new Error(`tree_photo_updates insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        inserted.photoIds.push(data.id);
+      }
+
+      if (selected?.evidenceMode === "PHOTO_BEFORE_AFTER") {
+        if (!beforePhoto) throw new Error("Before photo is required.");
+        if (!afterPhoto) throw new Error("After photo is required.");
+
+        const beforePhotoUrl = await uploadEvidenceFile(beforePhoto, "before");
+        const afterPhotoUrl = await uploadEvidenceFile(afterPhoto, "after");
+
+        const { data, error } = await supabase
+          .from("tree_photo_updates")
+          .insert({
+            ...core,
+            photo_url: afterPhotoUrl || beforePhotoUrl,
+            image_url: afterPhotoUrl || beforePhotoUrl,
+            before_photo_url: beforePhotoUrl,
+            after_photo_url: afterPhotoUrl,
+            caption: getServiceLabel(selected.serviceKey),
+            notes: notes || null,
+            status: "SUBMITTED",
+            created_at: now,
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+
+        if (error || !data?.id) {
+          throw new Error(`tree_photo_updates insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        inserted.photoIds.push(data.id);
+      }
+
+      if (selected?.evidenceMode === "HEALTH_ONLY") {
+        const severity =
+          healthStatus === "CRITICAL"
+            ? "CRITICAL"
+            : healthStatus === "TREATMENT_REQUIRED" || healthStatus === "NEEDS_MONITORING"
+              ? "ATTENTION"
+              : null;
+
         const { data, error } = await supabase
           .from("tree_health_reports")
           .insert({
-            assignment_id: core.assignmentId,
-            operation_request_id: core.operationRequestId,
-            tree_id: core.treeId,
-            group_id: core.groupId,
-            customer_profile_id: core.customerProfileId,
-            caretaker_id: caretaker.id,
-            caretaker_profile_id: caretaker.caretaker_profile_id || null,
+            ...core,
             health_status: healthStatus,
-            issue_severity: issueSeverity,
+            issue_severity: severity,
             issue_summary: notes || null,
             report_notes: notes || null,
             notes: notes || null,
@@ -1125,296 +1356,488 @@ export default function GardenerTasksPage() {
           .select("id")
           .single();
 
-        if (error || !data?.id) throw new Error(`tree_health_reports insert failed: ${error?.message || "No evidence id returned."}`);
-        insertedEvidence.healthIds.push(data.id);
+        if (error || !data?.id) {
+          throw new Error(`tree_health_reports insert failed: ${error?.message || "No evidence id returned."}`);
+        }
+
+        inserted.healthIds.push(data.id);
       }
 
-      await syncSubmissionStatuses({
-        now,
-        operationRequestId: core.operationRequestId,
-        treeId: core.treeId,
-        groupId: core.groupId,
-        customerProfileId: core.customerProfileId,
-      });
+      await syncSubmitted(now, taskLogId, core.tree_id, core.group_id);
 
       setMessage("Task Submitted Successfully. Waiting for Admin Review.");
       resetEvidenceForm();
       setVerifiedMap((current) => {
         const next = { ...current };
-        delete next[selected.key];
+        if (selected?.key) delete next[selected.key];
         return next;
       });
       setScanValue("");
-      setFilter("SUBMITTED");
-      await loadData();
+      setTab("IN_PROGRESS");
+      await loadData(selected?.key);
     } catch (error: any) {
-      await rollbackInsertedEvidence(insertedEvidence);
-      setMessage(`${error?.message || "Submit work failed."} Evidence from this failed attempt was rolled back.`);
+      await rollbackEvidence(inserted);
+      setMessage(`${error?.message || "Submit evidence failed."} Evidence from this failed attempt was rolled back.`);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
-      <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.28),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
-
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl">
-          <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">Gardener Field Workflow</p>
-          <h1 className="mt-3 text-4xl font-black tracking-tight">Forest Work Center</h1>
-          <p className="mt-3 max-w-4xl text-sm font-semibold leading-relaxed text-white/65">
-            Start work, verify the physical tree QR, upload Photo + GPS + Health evidence, then submit to Admin Review.
-          </p>
+    <main className="min-h-screen bg-[#03130d] px-4 py-5 text-white">
+      <div className="mx-auto max-w-md space-y-5">
+        <header className="rounded-[28px] border border-white/10 bg-white/[0.07] p-5 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center justify-between gap-3">
+            <button className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl">
+              ☰
+            </button>
+            <div className="text-center">
+              <h1 className="text-lg font-black">Today&apos;s Mission</h1>
+              <p className="text-xs font-semibold text-white/55">Mission Queue</p>
+            </div>
+            <button className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl">
+              🔔
+            </button>
+          </div>
 
           {message && (
-            <div className="mt-6 rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-4 text-sm font-bold text-[#ffe49a]">
+            <div className="mt-4 rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-3 text-sm font-bold text-[#ffe49a]">
               {message}
             </div>
           )}
-        </section>
+        </header>
 
-        <section className="grid gap-6 xl:grid-cols-[380px_1fr]">
-          <div className="space-y-6">
-            <Card title="1. Work Queue">
-              <div className="grid grid-cols-2 gap-3">
-                <MiniStat label="Assigned" value={stats.assigned} />
-                <MiniStat label="In Progress" value={stats.inProgress} />
-                <MiniStat label="Submitted" value={stats.submitted} />
-                <MiniStat label="Completed" value={stats.completed} />
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                {["ACTIVE", "ALL", "ASSIGNED", "IN_PROGRESS", "SUBMITTED", "COMPLETED"].map((item) => (
-                  <button
-                    key={item}
-                    onClick={() => setFilter(item)}
-                    className={`rounded-full px-4 py-2 text-xs font-black ${
-                      filter === item ? "bg-[#d9b45f] text-[#071f16]" : "border border-white/10 bg-white/10 text-white/65"
-                    }`}
-                  >
-                    {item.replaceAll("_", " ")}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-5 space-y-3">
-                {loading ? (
-                  <p className="text-sm font-bold text-white/50">Loading work queue...</p>
-                ) : visibleItems.length === 0 ? (
-                  <p className="text-sm font-bold text-white/50">No work orders found.</p>
-                ) : (
-                  visibleItems.map((item) => (
-                    <button
-                      key={item.key}
-                      onClick={() => {
-                        setSelectedKey(item.key);
-                        stopCameraScanner();
-                        setScanValue("");
-                        resetEvidenceForm();
-                      }}
-                      className={`w-full rounded-2xl border p-4 text-left transition ${
-                        selected?.key === item.key
-                          ? "border-[#d9b45f]/60 bg-[#d9b45f]/15"
-                          : "border-white/10 bg-black/20 hover:bg-white/10"
-                      }`}
-                    >
-                      <p className="text-sm font-black text-[#ffe49a]">{serviceLabel(item.service)}</p>
-                      <p className="mt-1 text-xs font-semibold text-white/55">
-                        {treeDisplayName(item.tree) || groupDisplayName(item.group, item.tree)}
-                      </p>
-                      <p className="mt-2 text-xs font-black text-white/40">{item.status.replaceAll("_", " ")}</p>
-                    </button>
-                  ))
-                )}
-              </div>
-            </Card>
+        <section className="rounded-[28px] border border-white/10 bg-white/[0.06] p-4 shadow-2xl backdrop-blur-xl">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setTab("ASSIGNED")}
+              className={`rounded-xl px-4 py-3 text-sm font-black ${
+                tab === "ASSIGNED" ? "bg-[#5bb64a] text-white" : "bg-white/10 text-white/70"
+              }`}
+            >
+              Assigned ({stats.assigned})
+            </button>
+            <button
+              onClick={() => setTab("IN_PROGRESS")}
+              className={`rounded-xl px-4 py-3 text-sm font-black ${
+                tab === "IN_PROGRESS" ? "bg-[#5bb64a] text-white" : "bg-white/10 text-white/70"
+              }`}
+            >
+              In Progress ({stats.inProgress})
+            </button>
           </div>
 
-          <div className="space-y-6">
-            <Card title="2. Work Order">
-              {!selected ? (
-                <p className="text-sm font-bold text-white/55">Select a work order.</p>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Info label="Tree / Forest" value={verifiedTree?.treeName || treeDisplayName(selected.tree)} />
-                  <Info label="Tree Code" value={verifiedTree?.treeCode || selected.tree?.tree_code || selected.tree?.id || "Scan required"} />
-                  <Info label="Forest / Group" value={groupDisplayName(selected.group, selected.tree)} />
-                  <Info label="Customer" value={customerDisplayName(selected.customer)} />
-                  <Info label="Requested Service" value={serviceLabel(selected.service)} />
-                  <Info label="Admin Notes" value={selected.assignment.admin_notes || selected.request?.admin_notes || selected.request?.notes || "—"} />
-                  <Info label="Assignment Status" value={selected.status.replaceAll("_", " ")} />
-                  <Info label="Evidence Status" value={selected.evidenceStatus.replaceAll("_", " ")} />
-                  <Info label="Photo Evidence" value={`${selectedEvidence.photos.length} row(s)`} />
-                  <Info label="GPS Evidence" value={`${selectedEvidence.gps.length} row(s)`} />
-                  <Info label="Health Evidence" value={`${selectedEvidence.health.length} row(s)`} />
-                  <Info label="Last Submission" value={formatDate(selected.task?.submitted_at || selected.request?.updated_at)} />
-                </div>
-              )}
-
-              {selected && selected.status === "ASSIGNED" && (
-                <button
-                  onClick={startWork}
-                  disabled={saving}
-                  className="mt-5 w-full rounded-2xl bg-[#d9b45f] px-5 py-4 text-sm font-black text-[#071f16] hover:bg-[#f7d774] disabled:opacity-50"
-                >
-                  Start Work
-                </button>
-              )}
-            </Card>
-
-            <Card title="3. Scan Tree QR">
-              <p className="text-sm font-semibold text-white/60">
-                Supports tree_code, tree_id, /tree/verify/tree_id, and full https://domain/tree/verify/tree_id QR values.
-              </p>
-
-              <div className="mt-4 flex flex-col gap-3 md:flex-row">
-                <button
-                  onClick={scannerOpen ? stopCameraScanner : startCameraScanner}
-                  disabled={!selected || (scannerRunning && !scannerOpen)}
-                  className="rounded-2xl bg-emerald-500 px-6 py-4 text-sm font-black text-[#03130d] disabled:opacity-50"
-                >
-                  {scannerOpen ? "Close Camera Scanner" : "Open Camera Scanner"}
-                </button>
-                <input
-                  value={scanValue}
-                  onChange={(event) => setScanValue(event.target.value)}
-                  placeholder="Manual Tree QR / Tree Code Fallback"
-                  className="min-h-[50px] flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
+          <div className="mt-4 space-y-3">
+            {loading ? (
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm font-bold text-white/55">
+                Loading tasks...
+              </div>
+            ) : visibleItems.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm font-bold text-white/55">
+                No {tab.replaceAll("_", " ").toLowerCase()} tasks.
+              </div>
+            ) : (
+              visibleItems.map((item) => (
+                <TaskCard
+                  key={item.key}
+                  item={item}
+                  active={selected?.key === item.key}
+                  onClick={() => {
+                    setSelectedKey(item.key);
+                    stopCameraScanner();
+                    resetEvidenceForm();
+                    setScanValue("");
+                  }}
                 />
-                <button onClick={() => verifyTree()} className="rounded-2xl bg-[#d9b45f] px-6 py-4 text-sm font-black text-[#071f16]">
-                  Verify Tree
-                </button>
-              </div>
-
-              {scannerOpen && selected && (
-                <div className="mt-4 rounded-2xl border border-emerald-400/30 bg-black/30 p-4">
-                  <div id={`tasks-qr-scanner-${selected.key}`} className="min-h-[280px] overflow-hidden rounded-xl" />
-                  <p className="mt-3 text-xs font-bold text-white/50">Point the camera at the physical tree QR sticker.</p>
-                </div>
-              )}
-
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm font-black">
-                {isVerified ? (
-                  <span className="text-emerald-300">Tree Verified: {verifiedTree?.treeName}</span>
-                ) : (
-                  <span className="text-red-200">Not verified — evidence blocked</span>
-                )}
-              </div>
-            </Card>
-
-            <Card title="4. Evidence Center">
-              <p className="text-sm font-bold text-[#ffe49a]">Required before Submit Work: Photo + GPS + Health Report.</p>
-
-              {needBeforeAfter && (
-                <p className="mt-2 rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-3 text-xs font-bold text-[#ffe49a]">
-                  This care service also requires before and after photos.
-                </p>
-              )}
-
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <FileInput label="Current Photo Required" file={currentPhoto} setFile={setCurrentPhoto} />
-                {needBeforeAfter && <FileInput label="Before Photo Required" file={beforePhoto} setFile={setBeforePhoto} />}
-                {needBeforeAfter && <FileInput label="After Photo Required" file={afterPhoto} setFile={setAfterPhoto} />}
-                <TextInput label="Latitude Required" value={latitude} setValue={setLatitude} />
-                <TextInput label="Longitude Required" value={longitude} setValue={setLongitude} />
-                <div>
-                  <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">Health Status Required</p>
-                  <select
-                    value={healthStatus}
-                    onChange={(event) => setHealthStatus(event.target.value)}
-                    className="min-h-[50px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none"
-                  >
-                    <option value="HEALTHY">Healthy</option>
-                    <option value="NEEDS_ATTENTION">Needs Attention</option>
-                    <option value="CRITICAL">Critical</option>
-                  </select>
-                </div>
-
-                <div className="md:col-span-2">
-                  <p className="mb-2 text-xs font-black uppercase tracking-[0.18em] text-white/40">Field Notes Optional</p>
-                  <textarea
-                    value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
-                    rows={4}
-                    className="w-full rounded-2xl border border-white/10 bg-black/30 p-4 text-sm font-bold text-white outline-none placeholder:text-white/30"
-                    placeholder="Field notes / observations"
-                  />
-                </div>
-              </div>
-            </Card>
-
-            <Card title="5. Submit Work">
-              <p className="text-sm font-semibold leading-relaxed text-white/60">
-                Submit changes task, assignment, and operation request to SUBMITTED only. Admin must approve before customer sees COMPLETED.
-              </p>
-
-              <button
-                onClick={submitWork}
-                disabled={saving || !selected || !isVerified}
-                className="mt-5 w-full rounded-2xl bg-emerald-500 px-6 py-4 text-sm font-black text-[#03130d] hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {saving ? "Submitting Work..." : "Submit Work for Admin Review"}
-              </button>
-            </Card>
+              ))
+            )}
           </div>
         </section>
+
+        {selected && (
+          <section className="rounded-[28px] border border-white/10 bg-white/[0.06] p-4 shadow-2xl backdrop-blur-xl">
+            <div className="flex items-center justify-between gap-3">
+              <button className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                ←
+              </button>
+              <h2 className="text-base font-black">Mission Details</h2>
+              <StatusBadge status={selected.status} />
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="text-sm font-black">Tree Identity</p>
+
+              <div className="mt-3 flex gap-3">
+                <div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-xl bg-white/10 text-3xl">
+                  🌳
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-sm font-black text-[#ffe49a]">
+                    {verifiedTree?.treeCode || selected.tree?.tree_code || "Forest-level task"}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-white/75">
+                    {verifiedTree?.treeName || getTreeName(selected.tree)}
+                  </p>
+                  <p className="mt-1 text-xs text-white/50">
+                    {getForestName(selected.group, selected.tree)}
+                  </p>
+                  <p className="mt-1 text-xs text-white/50">
+                    Owner: {getOwnerName(selected.customer)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                <button
+                  type="button"
+                  onClick={scannerOpen ? stopCameraScanner : startCameraScanner}
+                  disabled={scannerRunning && !scannerOpen}
+                  className="w-full rounded-xl border border-[#5bb64a]/50 bg-[#5bb64a]/10 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+                >
+                  {scannerOpen ? "Close QR Scanner" : "▦ Verify Tree (QR)"}
+                </button>
+
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <input
+                    value={scanValue}
+                    onChange={(event) => setScanValue(event.target.value)}
+                    placeholder="Manual tree code / QR URL"
+                    className="min-w-0 rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm font-bold text-white outline-none placeholder:text-white/35"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => verifyTree()}
+                    className="rounded-xl bg-[#d9b45f] px-4 py-3 text-sm font-black text-[#071f16]"
+                  >
+                    Verify
+                  </button>
+                </div>
+
+                {scannerOpen && (
+                  <div className="rounded-2xl border border-emerald-400/30 bg-black/30 p-3">
+                    <div
+                      id={`gardener-task-scanner-${selected.key}`}
+                      className="min-h-[260px] overflow-hidden rounded-xl"
+                    />
+                    <p className="mt-2 text-xs font-bold text-white/45">
+                      Point camera at the physical tree QR tag.
+                    </p>
+                  </div>
+                )}
+
+                <div
+                  className={`rounded-xl border px-3 py-2 text-xs font-black ${
+                    isVerified
+                      ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+                      : "border-red-400/30 bg-red-500/10 text-red-200"
+                  }`}
+                >
+                  {isVerified ? "Tree Verified" : "Tree not verified — evidence blocked"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="flex gap-3">
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white/10 text-2xl">
+                  {getServiceIcon(selected.evidenceMode, selected.serviceKey)}
+                </div>
+
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">
+                    Mission Type
+                  </p>
+                  <p className="mt-1 text-sm font-black text-white">
+                    {getServiceLabel(selected.serviceKey)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-white/55">
+                    {getEvidenceRequirementLabel(selected.evidenceMode, selected.serviceKey)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-3">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffe49a]/75">
+                  Mission Requirement
+                </p>
+                <p className="mt-1 text-sm font-black text-[#ffe49a]">
+                  {getEvidenceRequirementLabel(selected.evidenceMode, selected.serviceKey)}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-white/60">
+                  {getEvidenceRequirementDetail(selected.evidenceMode, selected.serviceKey)}
+                </p>
+              </div>
+
+              {missionNeedsInventory(selected.serviceKey) && (
+                <div className="mt-3 rounded-xl border border-emerald-300/25 bg-emerald-500/10 p-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-100/75">
+                    Required Supply
+                  </p>
+                  <p className="mt-1 text-sm font-black text-emerald-100">
+                    {getRequiredSupplyLabel(selected.serviceKey)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-white/60">
+                    Confirm supply used. No inventory deduction or finance logic is performed here.
+                  </p>
+                </div>
+              )}
+
+              {selected.status === "ASSIGNED" && (
+                <button
+                  type="button"
+                  onClick={startWork}
+                  disabled={saving || activeTaskBlocksStart}
+                  className="mt-4 w-full rounded-xl bg-[#5bb64a] px-4 py-4 text-base font-black text-white disabled:opacity-40"
+                >
+                  {activeTaskBlocksStart
+                    ? "Finish Active Task First"
+                    : saving
+                      ? "Starting..."
+                      : "Start Work"}
+                </button>
+              )}
+            </div>
+
+            {selected.status === "IN_PROGRESS" && (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">
+                  Required Evidence
+                </p>
+                <p className="mt-1 text-sm font-black">
+                  {getEvidenceTitle(selected.evidenceMode, selected.serviceKey)}
+                </p>
+
+                <div className="mt-3 rounded-xl border border-blue-300/25 bg-blue-500/10 p-3 text-xs font-semibold text-blue-100">
+                  {getEvidenceHelper(selected.evidenceMode, selected.serviceKey)}
+                </div>
+
+                {selected.evidenceMode === "GPS_ONLY" && (
+                  <div className="mt-4 space-y-3">
+                    <button
+                      type="button"
+                      onClick={useCurrentLocation}
+                      className="w-full rounded-xl bg-[#5bb64a] px-4 py-3 text-sm font-black text-white"
+                    >
+                      📍 Capture GPS Location
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        value={latitude}
+                        onChange={(event) => setLatitude(event.target.value)}
+                        placeholder="Latitude"
+                        className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                      />
+                      <input
+                        value={longitude}
+                        onChange={(event) => setLongitude(event.target.value)}
+                        placeholder="Longitude"
+                        className="rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                      />
+                    </div>
+
+                    <textarea
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      placeholder="Notes optional..."
+                      className="min-h-[90px] w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                    />
+                  </div>
+                )}
+
+                {selected.evidenceMode === "PHOTO_CURRENT_ONLY" && (
+                  <div className="mt-4 space-y-3">
+                    <label className="block text-sm font-black text-white">
+                      Current Photo *
+                    </label>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => setCurrentPhoto(event.target.files?.[0] || null)}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white"
+                    />
+
+                    <div className="grid h-24 place-items-center rounded-xl border border-dashed border-white/25 bg-black/20 text-2xl">
+                      {currentPhoto ? "✅ Current photo selected" : "📷"}
+                    </div>
+
+                    <textarea
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      placeholder="Notes optional..."
+                      className="min-h-[90px] w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                    />
+                  </div>
+                )}
+
+                {selected.evidenceMode === "PHOTO_BEFORE_AFTER" && (
+                  <div className="mt-4 space-y-3">
+                    <label className="block text-sm font-black text-white">
+                      Before Photo *
+                    </label>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => setBeforePhoto(event.target.files?.[0] || null)}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white"
+                    />
+
+                    <div className="grid h-20 place-items-center rounded-xl border border-dashed border-white/25 bg-black/20 text-sm font-bold text-white/70">
+                      {beforePhoto ? "✅ Before photo selected" : "📷 Before"}
+                    </div>
+
+                    <label className="block text-sm font-black text-white">
+                      After Photo *
+                    </label>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => setAfterPhoto(event.target.files?.[0] || null)}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white"
+                    />
+
+                    <div className="grid h-20 place-items-center rounded-xl border border-dashed border-white/25 bg-black/20 text-sm font-bold text-white/70">
+                      {afterPhoto ? "✅ After photo selected" : "📷 After"}
+                    </div>
+
+                    <textarea
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      placeholder="Notes optional..."
+                      className="min-h-[90px] w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                    />
+                  </div>
+                )}
+
+                {selected.evidenceMode === "HEALTH_ONLY" && (
+                  <div className="mt-4 space-y-3">
+                    <label className="block text-sm font-black text-white">
+                      Health Status *
+                    </label>
+
+                    <select
+                      value={healthStatus}
+                      onChange={(event) => setHealthStatus(event.target.value)}
+                      className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none"
+                    >
+                      <option value="HEALTHY">Healthy</option>
+                      <option value="NEEDS_MONITORING">Needs Monitoring</option>
+                      <option value="TREATMENT_REQUIRED">Treatment Required</option>
+                      <option value="CRITICAL">Critical</option>
+                    </select>
+
+                    <textarea
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      placeholder="Notes optional..."
+                      className="min-h-[100px] w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-sm text-white outline-none placeholder:text-white/35"
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={submitEvidence}
+                  disabled={saving || !isVerified}
+                  className="mt-4 w-full rounded-xl bg-[#5bb64a] px-4 py-4 text-base font-black text-white disabled:opacity-40"
+                >
+                  {saving ? "Submitting..." : "Submit Evidence"}
+                </button>
+              </div>
+            )}
+
+            {selected.status === "SUBMITTED" && (
+              <div className="mt-4 rounded-2xl border border-purple-300/30 bg-purple-500/10 p-4 text-center text-sm font-bold text-purple-100">
+                Task Submitted Successfully.
+                <br />
+                Waiting for Admin Review.
+              </div>
+            )}
+
+            {selected.status === "COMPLETED" && (
+              <div className="mt-4 rounded-2xl border border-emerald-300/30 bg-emerald-500/10 p-4 text-center text-sm font-bold text-emerald-100">
+                Completed by Admin approval.
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </main>
   );
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function TaskCard({
+  item,
+  active,
+  onClick,
+}: {
+  item: WorkItem;
+  active: boolean;
+  onClick: () => void;
+}) {
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <h2 className="mb-5 text-xl font-black text-[#ffe49a]">{title}</h2>
-      {children}
-    </section>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-2xl border p-4 text-left shadow-xl transition ${
+        active
+          ? "border-[#5bb64a]/70 bg-[#5bb64a]/15"
+          : "border-white/10 bg-black/20 hover:bg-white/10"
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white/10 text-2xl">
+          {getServiceIcon(item.evidenceMode, item.serviceKey)}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-black text-white">
+            {getServiceLabel(item.serviceKey)}
+          </p>
+          <p className="mt-1 truncate text-xs font-semibold text-[#ffe49a]">
+            {getEvidenceRequirementLabel(item.evidenceMode, item.serviceKey)}
+          </p>
+          <p className="mt-1 truncate text-xs font-semibold text-white/70">
+            Tree: {item.tree?.tree_code || item.tree?.id || "Forest-level task"}
+          </p>
+          <p className="mt-1 truncate text-xs text-white/50">
+            {getForestName(item.group, item.tree)}
+          </p>
+        </div>
+
+        <span className="text-2xl text-white/60">›</span>
+      </div>
+
+      <span
+        className={`mt-3 inline-flex rounded-md px-2 py-1 text-[10px] font-black ${
+          item.status === "IN_PROGRESS"
+            ? "bg-blue-500/20 text-blue-100"
+            : "bg-yellow-500/20 text-yellow-100"
+        }`}
+      >
+        {item.status.replaceAll("_", " ")}
+      </span>
+    </button>
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.16em] text-white/35">{label}</p>
-      <p className="mt-2 text-2xl font-black text-[#ffe49a]">{value}</p>
-    </div>
-  );
-}
+function StatusBadge({ status }: { status: string }) {
+  let className = "bg-yellow-500/20 text-yellow-100";
 
-function Info({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/35">{label}</p>
-      <p className="mt-2 break-words text-sm font-bold text-white/80">{value || "—"}</p>
-    </div>
-  );
-}
+  if (status === "IN_PROGRESS") className = "bg-blue-500/20 text-blue-100";
+  if (status === "SUBMITTED") className = "bg-purple-500/20 text-purple-100";
+  if (status === "COMPLETED") className = "bg-emerald-500/20 text-emerald-100";
 
-function FileInput({ label, file, setFile }: { label: string; file: File | null; setFile: (file: File | null) => void }) {
   return (
-    <label className="block">
-      <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</span>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={(event) => setFile(event.target.files?.[0] || null)}
-        className="w-full rounded-2xl border border-white/10 bg-black/30 p-3 text-sm font-bold text-white"
-      />
-      {file && <span className="mt-2 block text-xs font-bold text-emerald-200">Selected: {file.name}</span>}
-    </label>
-  );
-}
-
-function TextInput({ label, value, setValue }: { label: string; value: string; setValue: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-white/40">{label}</span>
-      <input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        className="min-h-[50px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-sm font-bold text-white outline-none"
-      />
-    </label>
+    <span className={`rounded-md px-2 py-1 text-[10px] font-black ${className}`}>
+      {status.replaceAll("_", " ")}
+    </span>
   );
 }

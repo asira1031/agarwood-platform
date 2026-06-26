@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+
+type Row = Record<string, any>;
 
 type Profile = {
   id: string;
@@ -11,8 +13,6 @@ type Profile = {
   membership_status: string | null;
   kyc_status: string | null;
   account_status: string | null;
-  care_subscription_status?: string | null;
-  care_status?: string | null;
   [key: string]: any;
 };
 
@@ -23,32 +23,43 @@ type Wallet = {
   created_at: string | null;
 };
 
-type TreeRow = {
+type TreeRow = Row & {
   id: string;
-  profile_id: string;
-  package_id?: string | null;
-  tree_type?: string | null;
-  status?: string | null;
-  species?: string | null;
-  code?: string | null;
+  profile_id?: string | null;
+  customer_profile_id?: string | null;
+  group_id?: string | null;
+  display_name?: string | null;
+  custom_name?: string | null;
   tree_code?: string | null;
-  gps_verified?: boolean | null;
+  tree_qr_url?: string | null;
+  qr_tag_status?: string | null;
+  status?: string | null;
+  stage?: string | null;
+  health_status?: string | null;
+  tree_group_name?: string | null;
+  image_url?: string | null;
+  photo_url?: string | null;
   created_at?: string | null;
-  [key: string]: any;
+  updated_at?: string | null;
 };
 
-type InventoryItem = {
+type TreeOperationRequest = Row & {
   id: string;
-  profile_id: string;
-  tree_id: string | null;
-  item_name: string | null;
-  category: string | null;
-  unit: string | null;
-  starting_qty: number | null;
-  remaining_qty: number | null;
-  low_stock_level: number | null;
-  status: string | null;
-  created_at: string | null;
+  profile_id?: string | null;
+  customer_profile_id?: string | null;
+  tree_id?: string | null;
+  group_id?: string | null;
+  operation_type?: string | null;
+  request_type?: string | null;
+  service_name?: string | null;
+  service_type?: string | null;
+  item_name?: string | null;
+  status?: string | null;
+  assignment_status?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  requested_at?: string | null;
+  completed_at?: string | null;
 };
 
 type WalletTransaction = {
@@ -60,20 +71,27 @@ type WalletTransaction = {
   created_at: string | null;
 };
 
-type TreeOperationRequest = {
+type EvidenceRow = Row & {
   id: string;
-  profile_id?: string | null;
   tree_id?: string | null;
-  operation_type?: string | null;
-  service_type?: string | null;
-  item_name?: string | null;
-  total_amount?: number | null;
-  amount?: number | null;
+  group_id?: string | null;
   status?: string | null;
-  notes?: string | null;
+  photo_url?: string | null;
+  image_url?: string | null;
+  health_status?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   created_at?: string | null;
-  scheduled_date?: string | null;
-  [key: string]: any;
+  updated_at?: string | null;
+};
+
+type TimelineItem = {
+  id: string;
+  title: string;
+  description: string;
+  date: string | null;
+  href: string;
+  type: string;
 };
 
 function peso(value: number) {
@@ -83,41 +101,66 @@ function peso(value: number) {
   })}`;
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString("en-PH", {
+function normalize(value: any) {
+  return String(value || "").trim().replace(/\s+/g, "_").toUpperCase();
+}
+
+function cleanLabel(value: any) {
+  return String(value || "Record")
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatDate(value: any) {
+  if (!value) return "No update yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "No update yet";
+
+  return date.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
 }
 
-function cleanStatus(value: string | null | undefined) {
-  return value ? String(value).toUpperCase() : "PENDING";
+function getHourGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
 }
 
 export default function DashboardPage() {
-  const [stage, setStage] = useState(3);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [trees, setTrees] = useState<TreeRow[]>([]);
-  const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
+  const [groups, setGroups] = useState<Row[]>([]);
   const [operationRequests, setOperationRequests] = useState<TreeOperationRequest[]>([]);
-  const [errorMessage, setErrorMessage] = useState("");
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setStage((s) => (s >= 7 ? 1 : s + 1));
-    }, 2600);
-
-    return () => clearInterval(t);
-  }, []);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
+  const [membershipOrders, setMembershipOrders] = useState<Row[]>([]);
+  const [sellTreeRequests, setSellTreeRequests] = useState<Row[]>([]);
+  const [photoEvidence, setPhotoEvidence] = useState<EvidenceRow[]>([]);
+  const [gpsEvidence, setGpsEvidence] = useState<EvidenceRow[]>([]);
+  const [healthEvidence, setHealthEvidence] = useState<EvidenceRow[]>([]);
 
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  async function safeRows(label: string, query: PromiseLike<any>) {
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn(`${label} dashboard load skipped:`, error.message);
+      return [];
+    }
+
+    return data || [];
+  }
 
   async function loadDashboard() {
     try {
@@ -137,7 +180,6 @@ export default function DashboardPage() {
       }
 
       const email = user.email?.trim().toLowerCase() || "";
-      let activeProfile: Profile | null = null;
 
       const { data: profileById } = await supabase
         .from("profiles")
@@ -146,18 +188,11 @@ export default function DashboardPage() {
         .limit(1)
         .maybeSingle();
 
-      if (profileById) {
-        activeProfile = profileById as Profile;
-      } else if (email) {
-        const { data: profileByEmail } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("email", email)
-          .limit(1)
-          .maybeSingle();
+      const { data: profileByEmail } = email
+        ? await supabase.from("profiles").select("*").eq("email", email).limit(1).maybeSingle()
+        : { data: null };
 
-        activeProfile = (profileByEmail as Profile) || null;
-      }
+      const activeProfile = (profileById || profileByEmail) as Profile | null;
 
       if (!activeProfile) {
         setErrorMessage("Profile not found. Please contact support.");
@@ -166,53 +201,132 @@ export default function DashboardPage() {
 
       setProfile(activeProfile);
 
-      const walletResult = await supabase
-        .from("wallets")
-        .select("id, profile_id, balance, created_at")
-        .eq("profile_id", activeProfile.id)
-        .order("created_at", { ascending: false })
-        .limit(1);
+      const profileFilter = `profile_id.eq.${activeProfile.id},customer_profile_id.eq.${activeProfile.id}`;
 
-      const treesResult = await supabase
-        .from("trees")
-        .select("*")
-        .eq("profile_id", activeProfile.id);
+      const [
+        walletRows,
+        treeRows,
+        groupRows,
+        operationRows,
+        transactionRows,
+        membershipRows,
+        sellRows,
+        photoRows,
+        gpsRows,
+        healthRows,
+      ] = await Promise.all([
+        safeRows(
+          "wallets",
+          supabase
+            .from("wallets")
+            .select("id, profile_id, balance, created_at")
+            .eq("profile_id", activeProfile.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+        ),
 
-      const inventoryResult = await supabase
-        .from("inventory")
-        .select("*")
-        .eq("profile_id", activeProfile.id)
-        .order("created_at", { ascending: false });
+        safeRows(
+          "trees",
+          supabase
+            .from("trees")
+            .select("*")
+            .or(profileFilter)
+            .order("created_at", { ascending: false })
+        ),
 
-      const transactionsResult = await supabase
-        .from("wallet_transactions")
-        .select("id, transaction_type, amount, status, description, created_at")
-        .eq("profile_id", activeProfile.id)
-        .order("created_at", { ascending: false })
-        .limit(6);
+        safeRows(
+          "tree_groups",
+          supabase
+            .from("tree_groups")
+            .select("*")
+            .or(profileFilter)
+            .order("created_at", { ascending: false })
+        ),
 
-      const operationsResult = await supabase
-        .from("tree_operation_requests")
-        .select("*")
-        .eq("profile_id", activeProfile.id)
-        .order("created_at", { ascending: false })
-        .limit(6);
+        safeRows(
+          "tree_operation_requests",
+          supabase
+            .from("tree_operation_requests")
+            .select("*")
+            .or(profileFilter)
+            .order("created_at", { ascending: false })
+            .limit(20)
+        ),
 
-      if (walletResult.error) console.warn("Wallet load error:", walletResult.error.message);
-      if (treesResult.error) console.warn("Trees load error:", treesResult.error.message);
-      if (inventoryResult.error) console.warn("Inventory load error:", inventoryResult.error.message);
-      if (transactionsResult.error) console.warn("Transactions load error:", transactionsResult.error.message);
-      if (operationsResult.error) console.warn("Operations load error:", operationsResult.error.message);
+        safeRows(
+          "wallet_transactions",
+          supabase
+            .from("wallet_transactions")
+            .select("id, transaction_type, amount, status, description, created_at")
+            .eq("profile_id", activeProfile.id)
+            .order("created_at", { ascending: false })
+            .limit(8)
+        ),
 
-      setWallet((walletResult.data?.[0] as Wallet) || null);
-      setTrees(treesResult.error ? [] : ((treesResult.data as TreeRow[]) || []));
-      setInventory(inventoryResult.error ? [] : ((inventoryResult.data as InventoryItem[]) || []));
-      setWalletTransactions(
-        transactionsResult.error ? [] : ((transactionsResult.data as WalletTransaction[]) || [])
-      );
-      setOperationRequests(
-        operationsResult.error ? [] : ((operationsResult.data as TreeOperationRequest[]) || [])
-      );
+        safeRows(
+          "membership_orders",
+          supabase
+            .from("membership_orders")
+            .select("*")
+            .eq("profile_id", activeProfile.id)
+            .order("created_at", { ascending: false })
+            .limit(6)
+        ),
+
+        safeRows(
+          "sell_tree_requests",
+          supabase
+            .from("sell_tree_requests")
+            .select("*")
+            .or(profileFilter)
+            .order("created_at", { ascending: false })
+            .limit(6)
+        ),
+
+        safeRows(
+          "tree_photo_updates",
+          supabase
+            .from("tree_photo_updates")
+            .select("*")
+            .eq("customer_profile_id", activeProfile.id)
+            .in("status", ["APPROVED", "COMPLETED"])
+            .order("created_at", { ascending: false })
+            .limit(10)
+        ),
+
+        safeRows(
+          "tree_gps_logs",
+          supabase
+            .from("tree_gps_logs")
+            .select("*")
+            .eq("customer_profile_id", activeProfile.id)
+            .in("status", ["APPROVED", "COMPLETED"])
+            .order("created_at", { ascending: false })
+            .limit(10)
+        ),
+
+        safeRows(
+          "tree_health_reports",
+          supabase
+            .from("tree_health_reports")
+            .select("*")
+            .eq("customer_profile_id", activeProfile.id)
+            .in("status", ["APPROVED", "COMPLETED"])
+            .order("created_at", { ascending: false })
+            .limit(10)
+        ),
+      ]);
+
+      setWallet((walletRows?.[0] as Wallet) || null);
+      setTrees((treeRows || []) as TreeRow[]);
+      setGroups(groupRows || []);
+      setOperationRequests((operationRows || []) as TreeOperationRequest[]);
+      setWalletTransactions((transactionRows || []) as WalletTransaction[]);
+      setMembershipOrders(membershipRows || []);
+      setSellTreeRequests(sellRows || []);
+      setPhotoEvidence((photoRows || []) as EvidenceRow[]);
+      setGpsEvidence((gpsRows || []) as EvidenceRow[]);
+      setHealthEvidence((healthRows || []) as EvidenceRow[]);
     } catch (error: any) {
       console.error("Dashboard load error:", error);
       setErrorMessage(error?.message || "Unable to load dashboard.");
@@ -226,370 +340,761 @@ export default function DashboardPage() {
     window.location.href = "/login";
   }
 
-  const displayName = profile?.full_name || profile?.email || "Agarwood Investor";
+  const displayName = profile?.full_name || profile?.email || "Arganwood Investor";
+  const firstName = displayName.split(" ").filter(Boolean)[0] || "Investor";
   const initials = getInitials(displayName);
-
-  const individualTrees = useMemo(() => {
-    return trees.filter((tree) => {
-      const hasPackageId = Boolean(tree.package_id);
-      const treeType = String(tree.tree_type || "").toUpperCase();
-      return !hasPackageId && treeType !== "PACKAGE";
-    }).length;
-  }, [trees]);
-
-  const packageTrees = Math.max(trees.length - individualTrees, 0);
-
-  const lowStockItems = useMemo(() => {
-    return inventory.filter((item) => {
-      const remaining = Number(item.remaining_qty || 0);
-      const lowLevel = Number(item.low_stock_level || 0);
-      return remaining <= lowLevel;
-    });
-  }, [inventory]);
-
+  const membershipStatus = normalize(profile?.membership_status || "INACTIVE");
   const walletBalance = Number(wallet?.balance || 0);
-  const membershipStatus = cleanStatus(profile?.membership_status);
-  const kycStatus = cleanStatus(profile?.kyc_status || profile?.account_status);
-  const careSubscription = cleanStatus(profile?.care_subscription_status || profile?.care_status);
 
-  const latestTreeDate = trees
-    .map((tree) => tree.created_at)
-    .filter(Boolean)
-    .sort((a, b) => new Date(String(b)).getTime() - new Date(String(a)).getTime())[0];
+  const groupMap = useMemo(() => {
+    const map = new Map<string, Row>();
+    groups.forEach((group) => {
+      if (group.id) map.set(String(group.id), group);
+    });
+    return map;
+  }, [groups]);
 
-  const gpsVerifiedCount = trees.filter((tree) => tree.gps_verified === true).length;
+  const latestHealth = healthEvidence[0] || null;
+  const latestPhoto = photoEvidence[0] || null;
+  const latestGps = gpsEvidence[0] || null;
+  const latestOperation = operationRequests[0] || null;
 
-  const pendingOperations = operationRequests.filter(
-    (op) => cleanStatus(op.status) === "PENDING" || cleanStatus(op.status) === "ASSIGNED"
-  ).length;
+  const latestEvidenceDate = latestDate([
+    latestHealth?.created_at,
+    latestHealth?.updated_at,
+    latestPhoto?.created_at,
+    latestPhoto?.updated_at,
+    latestGps?.created_at,
+    latestGps?.updated_at,
+    latestOperation?.completed_at,
+    latestOperation?.created_at,
+  ]);
+
+  const overallStatus = useMemo(() => {
+    const hasEvidence = photoEvidence.length > 0 || gpsEvidence.length > 0 || healthEvidence.length > 0;
+    if (!hasEvidence) return "Pending Evidence";
+
+    const health = normalize(latestHealth?.health_status || latestHealth?.issue_severity || latestHealth?.issue_summary);
+    if (
+      health.includes("CRITICAL") ||
+      health.includes("MONITOR") ||
+      health.includes("TREATMENT") ||
+      health.includes("DISEASE") ||
+      health.includes("PEST") ||
+      health.includes("NEEDS")
+    ) {
+      return "Needs Attention";
+    }
+
+    return "Healthy";
+  }, [photoEvidence.length, gpsEvidence.length, healthEvidence.length, latestHealth]);
+
+  const selectedTree = trees[0] || null;
+  const activeOperation = operationRequests.find((operation) =>
+    ["PENDING", "ASSIGNED", "IN_PROGRESS", "REQUESTED", "PAID", "PROCESSING"].includes(
+      normalize(operation.status || operation.assignment_status)
+    )
+  );
+
+  const treeCarePlan = useMemo(() => {
+    if (!selectedTree) {
+      return {
+        stage: "No tree selected yet",
+        condition: "No condition report yet",
+        recommendedAction: "Buy Tree",
+        reason: "Start by buying or selecting a tree to activate its care plan.",
+        hasTree: false,
+      };
+    }
+
+    const stage = selectedTree.stage || "Early Establishment";
+    const condition = latestHealth?.health_status || latestHealth?.issue_summary || "No condition report yet";
+
+    let recommendedAction = "Regular Watering / Care Check";
+
+    if (activeOperation) {
+      recommendedAction =
+        activeOperation.service_name ||
+        activeOperation.operation_type ||
+        activeOperation.service_type ||
+        activeOperation.request_type ||
+        "Track Service";
+    } else if (gpsEvidence.length === 0) {
+      recommendedAction = "GPS Verification";
+    } else if (photoEvidence.length === 0) {
+      recommendedAction = "Photo Update";
+    }
+
+    return {
+      stage,
+      condition,
+      recommendedAction,
+      reason: careReason(recommendedAction),
+      hasTree: true,
+    };
+  }, [selectedTree, latestHealth, activeOperation, gpsEvidence.length, photoEvidence.length]);
+
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    const photos = photoEvidence.map((row) => ({
+      id: `photo-${row.id}`,
+      title: "Photo Update approved",
+      description: treeLabel(findTree(row.tree_id, trees)),
+      date: row.created_at || row.updated_at || null,
+      href: "/dashboard/my-trees",
+      type: "PHOTO",
+    }));
+
+    const gps = gpsEvidence.map((row) => ({
+      id: `gps-${row.id}`,
+      title: "GPS Verification completed",
+      description: treeLabel(findTree(row.tree_id, trees)),
+      date: row.created_at || row.updated_at || null,
+      href: "/dashboard/my-trees",
+      type: "GPS",
+    }));
+
+    const health = healthEvidence.map((row) => ({
+      id: `health-${row.id}`,
+      title: "Health Check completed",
+      description: row.health_status || row.issue_summary || treeLabel(findTree(row.tree_id, trees)),
+      date: row.created_at || row.updated_at || null,
+      href: "/dashboard/my-trees",
+      type: "HEALTH",
+    }));
+
+    const completedOperations = operationRequests
+      .filter((row) => normalize(row.status) === "COMPLETED")
+      .map((row) => ({
+        id: `operation-${row.id}`,
+        title: `${cleanLabel(row.service_name || row.operation_type || row.service_type || row.request_type)} completed`,
+        description: row.notes || "Tree operation approved by Admin",
+        date: row.completed_at || row.created_at || null,
+        href: "/dashboard/tree-operations",
+        type: "OPERATION",
+      }));
+
+    const qrItems = trees
+      .filter((tree) => ["INSTALLED", "VERIFIED"].includes(normalize(tree.qr_tag_status)))
+      .map((tree) => ({
+        id: `qr-${tree.id}`,
+        title: `QR Tag ${cleanLabel(tree.qr_tag_status)}`,
+        description: treeLabel(tree),
+        date: tree.updated_at || tree.created_at || null,
+        href: "/dashboard/my-trees",
+        type: "QR",
+      }));
+
+    return [...photos, ...gps, ...health, ...completedOperations, ...qrItems]
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 7);
+  }, [photoEvidence, gpsEvidence, healthEvidence, operationRequests, trees]);
+
+  const smartActions = useMemo(() => {
+    const actions: {
+      title: string;
+      text: string;
+      href: string;
+      icon: ReactNode;
+      priority: number;
+    }[] = [
+      {
+        title: "View My Trees",
+        text: "Open your owned tree portfolio.",
+        href: "/dashboard/my-trees",
+        icon: <TreeIcon />,
+        priority: 5,
+      },
+      {
+        title: "Request Tree Service",
+        text: "Book care, GPS, photo, or health updates.",
+        href: "/dashboard/tree-operations",
+        icon: <ServiceIcon />,
+        priority: trees.length > 0 && !activeOperation ? 3 : 7,
+      },
+      {
+        title: "Buy More Trees",
+        text: "Expand your Arganwood portfolio.",
+        href: "/dashboard/marketplace",
+        icon: <MarketIcon />,
+        priority: trees.length === 0 ? 1 : 6,
+      },
+      {
+        title: "Sell Tree",
+        text: "Request sale review for eligible trees.",
+        href: "/dashboard/sell-tree",
+        icon: <SellIcon />,
+        priority: 8,
+      },
+      {
+        title: walletBalance <= 0 ? "Add Funds / Wallet" : "Open Wallet",
+        text: "Manage investment balance and wallet records.",
+        href: "/dashboard/wallet",
+        icon: <WalletIcon />,
+        priority: walletBalance <= 0 ? 2 : 9,
+      },
+      {
+        title: "Manage Membership",
+        text: "Keep annual customer access active.",
+        href: "/dashboard/membership",
+        icon: <MembershipIcon />,
+        priority: membershipStatus !== "ACTIVE" ? 0 : 10,
+      },
+      {
+        title: "Contact Support",
+        text: "Get help with your account or plantation records.",
+        href: "/dashboard/support",
+        icon: <SupportIcon />,
+        priority: 11,
+      },
+    ];
+
+    if (activeOperation) {
+      actions.push({
+        title: "Track Service",
+        text: cleanLabel(activeOperation.service_name || activeOperation.operation_type || "Active request"),
+        href: "/dashboard/tree-operations",
+        icon: <TrackIcon />,
+        priority: 1,
+      });
+    } else if (trees.length > 0 && gpsEvidence.length === 0) {
+      actions.push({
+        title: "Request GPS Verification",
+        text: "Protect ownership with verified tree location.",
+        href: "/dashboard/tree-operations",
+        icon: <PinIcon />,
+        priority: 1,
+      });
+    } else if (trees.length > 0 && photoEvidence.length === 0) {
+      actions.push({
+        title: "Request Photo Update",
+        text: "Get visual proof from the plantation.",
+        href: "/dashboard/tree-operations",
+        icon: <CameraIcon />,
+        priority: 1,
+      });
+    }
+
+    return actions.sort((a, b) => a.priority - b.priority).slice(0, 7);
+  }, [trees.length, activeOperation, walletBalance, membershipStatus, gpsEvidence.length, photoEvidence.length]);
 
   const recentActivity = useMemo(() => {
     const walletRows = walletTransactions.map((tx) => ({
       id: `wallet-${tx.id}`,
-      icon: "₱",
       title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
-      description: tx.description || `${peso(Number(tx.amount || 0))} wallet activity`,
-      amount: peso(Number(tx.amount || 0)),
-      date: formatDate(tx.created_at),
-      status: cleanStatus(tx.status),
-      kind: "wallet",
+      detail: `${peso(Number(tx.amount || 0))} • ${normalize(tx.status || "COMPLETED")}`,
+      date: tx.created_at,
+      href: "/dashboard/wallet",
     }));
 
-    const operationRows = operationRequests.map((op) => ({
-      id: `operation-${op.id}`,
-      icon: "🌿",
-      title: cleanLabel(op.operation_type || op.service_type || op.item_name || "Tree Operation"),
-      description: op.notes || `${peso(Number(op.total_amount || op.amount || 0))} operation request`,
-      amount: peso(Number(op.total_amount || op.amount || 0)),
-      date: formatDate(op.created_at),
-      status: cleanStatus(op.status),
-      kind: "operation",
+    const membershipRows = membershipOrders.map((order) => ({
+      id: `membership-${order.id}`,
+      title: "Membership Order",
+      detail: `${peso(Number(order.amount || order.annual_fee || 0))} • ${normalize(order.status || "PENDING")}`,
+      date: order.created_at || order.submitted_at,
+      href: "/dashboard/membership",
     }));
 
-    return [...walletRows, ...operationRows].slice(0, 6);
-  }, [walletTransactions, operationRequests]);
+    const sellRows = sellTreeRequests.map((row) => ({
+      id: `sell-${row.id}`,
+      title: "Sell Tree Request",
+      detail: normalize(row.status || row.offer_status || "PENDING").replaceAll("_", " "),
+      date: row.created_at || row.updated_at,
+      href: "/dashboard/sell-tree",
+    }));
+
+    const operationRows = operationRequests.slice(0, 5).map((row) => ({
+      id: `request-${row.id}`,
+      title: cleanLabel(row.service_name || row.operation_type || row.service_type || row.request_type || "Tree Operation"),
+      detail: normalize(row.status || row.assignment_status || "PENDING").replaceAll("_", " "),
+      date: row.created_at || row.requested_at,
+      href: "/dashboard/tree-operations",
+    }));
+
+    return [...walletRows, ...membershipRows, ...sellRows, ...operationRows]
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 6);
+  }, [walletTransactions, membershipOrders, sellTreeRequests, operationRequests]);
 
   if (loading) {
     return (
       <main className="dashboardPage">
-        <div className="pageShell">
-          <div className="loadingBox">Loading customer dashboard...</div>
-        </div>
-
-        <style>{baseStyles}</style>
+        <div className="loadingBox">Loading customer dashboard...</div>
+        <style>{styles}</style>
       </main>
     );
   }
 
   return (
     <main className="dashboardPage">
-      <div className="pageShell">
-        <header className="hero">
-          <div className="heroText">
-            <p className="eyebrow">Customer Buyer Portal</p>
-            <h1>
-              Welcome back, <span>{displayName}</span>
-            </h1>
-            <p>
-              Your live agarwood investment dashboard. Cash in, activate membership,
-              complete KYC, buy trees, monitor care, and prepare for resale.
-            </p>
-            {errorMessage && <div className="errorBox">{errorMessage}</div>}
+      <aside className="sideNav">
+        <div className="brandBlock">
+          <div className="brandMark">A</div>
+          <div>
+            <strong>Arganwood</strong>
+            <span>Investor Portal</span>
+          </div>
+        </div>
 
-            <div className="heroActions">
-              <Link href="/dashboard/wallet">Cash In</Link>
-              <Link href="/dashboard/marketplace">Buy Tree</Link>
-              <Link href="/dashboard/my-trees">Track Trees</Link>
-            </div>
+        <nav>
+          <SideLink href="/dashboard" icon={<GridIcon />} label="Dashboard" active />
+          <SideLink href="/dashboard/my-trees" icon={<TreeIcon />} label="My Trees" />
+          <SideLink href="/dashboard/marketplace" icon={<MarketIcon />} label="Marketplace" />
+          <SideLink href="/dashboard/tree-operations" icon={<ServiceIcon />} label="Tree Services" />
+          <SideLink href="/dashboard/sell-tree" icon={<SellIcon />} label="Market Listing" />
+          <SideLink href="/dashboard/wallet" icon={<WalletIcon />} label="Investment Balance" />
+          <SideLink href="/dashboard/membership" icon={<MembershipIcon />} label="Membership" />
+          <SideLink href="/dashboard/support" icon={<SupportIcon />} label="Support" />
+          <SideLink href="/dashboard/settings" icon={<SettingsIcon />} label="Settings" />
+        </nav>
+
+        <button className="logoutButton" type="button" onClick={handleLogout}>
+          <LogoutIcon />
+          Logout
+        </button>
+      </aside>
+
+      <section className="contentShell">
+        <header className="hero">
+          <div>
+            <p className="eyebrow">{getHourGreeting()}</p>
+            <h1>
+              Welcome back, <span>{firstName}</span>
+            </h1>
+            <p>Your Arganwood portfolio connects you to the plantation from anywhere.</p>
+            {errorMessage && <div className="errorBox">{errorMessage}</div>}
           </div>
 
-          <div className="accountGlass">
-            <div className="avatar">{initials}</div>
-            <div>
-              <small>Active Account</small>
-              <strong>{profile?.email || "Verified customer"}</strong>
-            </div>
-            <button type="button" onClick={handleLogout}>
-              Logout
-            </button>
+          <div className="heroCards">
+            <MiniCard label="Membership" value={membershipStatus.replaceAll("_", " ")} />
+            <MiniCard label="Investment Balance" value={peso(walletBalance)} />
           </div>
         </header>
 
-        <section className="metricGrid">
-          <MetricCard label="Wallet Balance" value={peso(walletBalance)} note="Available buying power" />
-          <MetricCard label="Membership Status" value={membershipStatus} note="Required before full access" />
-          <MetricCard label="KYC Status" value={kycStatus} note="Required for withdrawals" />
-          <MetricCard label="Owned Trees" value={String(trees.length)} note={`${individualTrees} individual • ${packageTrees} package`} />
-          <MetricCard label="Pending Operations" value={String(pendingOperations)} note="Care requests in progress" />
-          <MetricCard label="Latest Transactions" value={String(walletTransactions.length)} note="Recent wallet movements" />
+        <section className="overviewGrid">
+          <OverviewCard label="Total Trees" value={String(trees.length)} note="Owned seedlings" icon={<TreeIcon />} />
+          <OverviewCard label="Plantations" value={String(groups.length || uniqueGroupCount(trees))} note="Forest groups" icon={<PlantationIcon />} />
+          <OverviewCard label="Overall Status" value={overallStatus} note="Based on approved evidence" icon={<PulseIcon />} />
+          <OverviewCard label="Latest Update" value={formatDate(latestEvidenceDate)} note="Farm proof or operation" icon={<ClockIcon />} />
         </section>
 
         <section className="mainGrid">
-          <div className="plantationPanel">
+          <article className="carePlanPanel">
             <div className="panelTop">
               <div>
-                <p className="eyebrow">Realistic Plantation View</p>
-                <h2>Agarwood Estate Monitor</h2>
-                <span>Live portfolio counts shown over a premium plantation-style field.</span>
+                <p className="eyebrow">Tree Care Plan</p>
+                <h2>Next Care Action</h2>
               </div>
+              <StatusPill value={treeCarePlan.hasTree ? treeCarePlan.recommendedAction : "Portfolio Setup"} />
+            </div>
 
-              <div className="stageBadge">
-                <strong>{stage}/7</strong>
-                <small>Buyer Journey</small>
+            <div className="carePlanBody">
+              <CareInfo label="Current Stage" value={treeCarePlan.stage} />
+              <CareInfo label="Current Condition" value={treeCarePlan.condition} />
+              <CareInfo label="Next Recommended Action" value={treeCarePlan.recommendedAction} highlight />
+            </div>
+
+            <div className="whyBox">
+              <strong>Why this matters</strong>
+              <p>{treeCarePlan.reason}</p>
+            </div>
+
+            <div className="buttonRow">
+              <Link href="/dashboard/my-trees">View Care Plan</Link>
+              <Link href="/dashboard/tree-operations">Request Tree Service</Link>
+            </div>
+          </article>
+
+          <article className="plantationPanel">
+            <div className="panelTop">
+              <div>
+                <p className="eyebrow">Plantation Overview</p>
+                <h2>Remote Forest Connection</h2>
               </div>
             </div>
 
-            <div className="plantationVisual">
-              <div className="moonGlow" />
-              <div className="mountain m1" />
-              <div className="mountain m2" />
-              <div className="mist mist1" />
-              <div className="mist mist2" />
-
-              <div className="treeLine back">
-                {Array.from({ length: 12 }).map((_, index) => (
-                  <i key={`back-${index}`} />
+            <div className="forestVisual">
+              <div className="orb" />
+              <div className="hill h1" />
+              <div className="hill h2" />
+              <div className="forestRows">
+                {Array.from({ length: 18 }).map((_, index) => (
+                  <span key={index} />
                 ))}
               </div>
-
-              <div className="treeLine mid">
-                {Array.from({ length: 10 }).map((_, index) => (
-                  <i key={`mid-${index}`} />
-                ))}
-              </div>
-
-              <div className="fieldRows">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-
-              <div className="treeLine front">
-                {Array.from({ length: 8 }).map((_, index) => (
-                  <i key={`front-${index}`} />
-                ))}
-              </div>
-
-              <div className="estateCard">
+              <div className="visualCard">
                 <small>Owned Trees</small>
                 <strong>{trees.length}</strong>
-                <span>GPS verified: {trees.length === 0 ? "0/0" : `${gpsVerifiedCount}/${trees.length}`}</span>
+                <p>{overallStatus}</p>
               </div>
             </div>
+          </article>
+        </section>
 
-            <div className="plantationStats">
-              <Mini label="Latest Tree Added" value={formatDate(latestTreeDate)} />
-              <Mini label="Care Status" value={careSubscription} />
-              <Mini label="Inventory Alerts" value={String(lowStockItems.length)} />
-            </div>
-          </div>
-
-          <div className="journeyPanel">
-            <div className="panelTop compact">
+        <section className="splitGrid">
+          <article className="panel">
+            <div className="panelTop">
               <div>
-                <p className="eyebrow">Buyer Journey</p>
-                <h2>From Funding to Resale</h2>
+                <p className="eyebrow">Your Trees</p>
+                <h2>Portfolio Preview</h2>
               </div>
+              <Link className="smallLink" href="/dashboard/my-trees">View All Trees</Link>
             </div>
 
-            <div className="journeyList">
-              <JourneyStep number="1" label="Cash-In" href="/dashboard/wallet" done={walletBalance > 0} />
-              <JourneyStep number="2" label="Membership" href="/dashboard/membership" done={membershipStatus === "ACTIVE"} />
-              <JourneyStep number="3" label="KYC" href="/dashboard/profile" done={kycStatus === "APPROVED"} />
-              <JourneyStep number="4" label="Buy Tree" href="/dashboard/marketplace" done={trees.length > 0} />
-              <JourneyStep number="5" label="Track Tree" href="/dashboard/my-trees" done={trees.length > 0} />
-              <JourneyStep number="6" label="Request Care" href="/dashboard/tree-operations" done={operationRequests.length > 0} />
-              <JourneyStep number="7" label="Sell Tree" href="/dashboard/sell-tree" done={false} />
-            </div>
-          </div>
+            {trees.length === 0 ? (
+              <EmptyState text="No trees in your portfolio yet. Start by buying a tree from the marketplace." />
+            ) : (
+              <div className="treeGrid">
+                {trees.slice(0, 4).map((tree) => {
+                  const treeImageUrl = getTreeImageUrl(tree);
 
-          <div className="quickPanel">
-            <div className="panelTop compact">
+                  return (
+                    <Link className="treeCard" href="/dashboard/my-trees" key={tree.id}>
+                      <div className="treeImage">
+                        {treeImageUrl ? (
+                          <img src={treeImageUrl} alt={treeLabel(tree)} />
+                        ) : (
+                          <TreeIcon />
+                        )}
+                      </div>
+                      <div>
+                        <span>{tree.tree_code || "Tree Code Pending"}</span>
+                        <h3>{treeLabel(tree)}</h3>
+                        <p>{forestName(tree, groupMap)}</p>
+                      </div>
+                      <div className="treeMeta">
+                        <b>{treeStatus(tree, healthEvidence)}</b>
+                        <small>{formatDate(latestTreeUpdate(tree, photoEvidence, gpsEvidence, healthEvidence))}</small>
+                        <small>QR: {cleanLabel(tree.qr_tag_status || (tree.tree_qr_url ? "Available" : "Pending"))}</small>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </article>
+
+          <article className="panel">
+            <div className="panelTop">
               <div>
-                <p className="eyebrow">Quick Actions</p>
-                <h2>Next Move</h2>
+                <p className="eyebrow">Plantation Timeline</p>
+                <h2>Latest Farm Proof</h2>
               </div>
             </div>
 
-            <div className="quickGrid">
-              <QuickAction href="/dashboard/wallet" icon="₱" label="Wallet" />
-              <QuickAction href="/dashboard/membership" icon="◆" label="Membership" />
-              <QuickAction href="/dashboard/profile" icon="✓" label="Profile / KYC" />
-              <QuickAction href="/dashboard/marketplace" icon="🌳" label="Marketplace" />
-              <QuickAction href="/dashboard/my-trees" icon="🌿" label="My Trees" />
-              <QuickAction href="/dashboard/tree-operations" icon="🛠" label="Tree Operations" />
-              <QuickAction href="/dashboard/sell-tree" icon="↗" label="Sell Tree" />
-              <QuickAction href="/dashboard/support" icon="?" label="Support" />
-            </div>
-          </div>
-
-          <div className="latestPanel">
-            <div className="panelTop compact">
-              <div>
-                <p className="eyebrow">Activity</p>
-                <h2>Latest Transactions</h2>
-              </div>
-              <Link href="/dashboard/transactions">View all</Link>
-            </div>
-
-            <div className="activityList">
-              {recentActivity.length === 0 ? (
-                <div className="emptyState">No recent wallet or tree-operation activity yet.</div>
-              ) : (
-                recentActivity.map((item) => (
-                  <div className="activityRow" key={item.id}>
-                    <span>{item.icon}</span>
+            {timelineItems.length === 0 ? (
+              <EmptyState text="Your first plantation update will appear here after Admin approval." />
+            ) : (
+              <div className="timelineList">
+                {timelineItems.map((item) => (
+                  <Link className="timelineItem" href={item.href} key={item.id}>
+                    <span><TimelineIcon type={item.type} /></span>
                     <div>
                       <strong>{item.title}</strong>
                       <p>{item.description}</p>
-                      <small>{item.date}</small>
+                      <small>{formatDate(item.date)}</small>
                     </div>
-                    <b>{item.status}</b>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="portfolioPanel">
-            <div className="panelTop compact">
-              <div>
-                <p className="eyebrow">Portfolio Snapshot</p>
-                <h2>Tree Ownership</h2>
+                  </Link>
+                ))}
               </div>
-              <Link href="/dashboard/my-trees">Open</Link>
-            </div>
-
-            <div className="portfolioRows">
-              <OverviewRow label="Individual Trees" value={String(individualTrees)} />
-              <OverviewRow label="Package Trees" value={String(packageTrees)} />
-              <OverviewRow label="GPS Verified" value={trees.length === 0 ? "0/0" : `${gpsVerifiedCount}/${trees.length}`} />
-              <OverviewRow label="Latest Added" value={formatDate(latestTreeDate)} />
-              <OverviewRow label="Care Subscription" value={careSubscription} />
-              <OverviewRow label="Low Stock Items" value={String(lowStockItems.length)} alert={lowStockItems.length > 0} />
-            </div>
-          </div>
-
-          <div className="operationsPanel">
-            <div className="panelTop compact">
-              <div>
-                <p className="eyebrow">Care Requests</p>
-                <h2>Pending Operations</h2>
-              </div>
-              <Link href="/dashboard/tree-operations">Request care</Link>
-            </div>
-
-            <div className="operationList">
-              {operationRequests.length === 0 ? (
-                <div className="emptyState">No tree operation requests yet.</div>
-              ) : (
-                operationRequests.slice(0, 5).map((op) => (
-                  <div className="operationRow" key={op.id}>
-                    <div>
-                      <strong>{cleanLabel(op.operation_type || op.service_type || op.item_name || "Tree Operation")}</strong>
-                      <p>{op.tree_id ? `Tree ${String(op.tree_id).slice(0, 8)}` : "Customer tree"} • {formatDate(op.scheduled_date || op.created_at)}</p>
-                    </div>
-                    <span>{cleanStatus(op.status)}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+            )}
+          </article>
         </section>
 
-        <footer>
-          Sustainable agarwood ownership with real wallet, tree, inventory, and care-operation records.
-        </footer>
-      </div>
+        <section className="splitGrid bottom">
+          <article className="panel">
+            <div className="panelTop">
+              <div>
+                <p className="eyebrow">Recommended Actions</p>
+                <h2>What You Can Do Now</h2>
+              </div>
+            </div>
 
-      <style>{baseStyles}</style>
+            <div className="actionGrid">
+              {smartActions.map((action) => (
+                <Link className="actionCard" href={action.href} key={`${action.title}-${action.href}`}>
+                  <span>{action.icon}</span>
+                  <div>
+                    <strong>{action.title}</strong>
+                    <p>{action.text}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </article>
+
+          <article className="panel">
+            <div className="panelTop">
+              <div>
+                <p className="eyebrow">Recent Activity</p>
+                <h2>Account Updates</h2>
+              </div>
+            </div>
+
+            {recentActivity.length === 0 ? (
+              <EmptyState text="No recent activity yet." />
+            ) : (
+              <div className="recentList">
+                {recentActivity.map((item) => (
+                  <Link href={item.href} className="recentRow" key={item.id}>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.detail}</p>
+                    </div>
+                    <span>{formatDate(item.date)}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </article>
+        </section>
+      </section>
+
+      <style>{styles}</style>
     </main>
   );
 }
 
-function MetricCard({ label, value, note }: { label: string; value: string; note: string }) {
+function SideLink({
+  href,
+  icon,
+  label,
+  active,
+}: {
+  href: string;
+  icon: ReactNode;
+  label: string;
+  active?: boolean;
+}) {
   return (
-    <article className="metricCard">
+    <Link className={`sideLink ${active ? "active" : ""}`} href={href}>
+      {icon}
+      <span>{label}</span>
+    </Link>
+  );
+}
+
+function MiniCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="miniCard">
       <p>{label}</p>
-      <h3>{value}</h3>
-      <span>{note}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function OverviewCard({
+  label,
+  value,
+  note,
+  icon,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  icon: ReactNode;
+}) {
+  return (
+    <article className="overviewCard">
+      <span>{icon}</span>
+      <div>
+        <p>{label}</p>
+        <h3>{value}</h3>
+        <small>{note}</small>
+      </div>
     </article>
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function CareInfo({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div className="mini">
+    <div className={`careInfo ${highlight ? "highlight" : ""}`}>
       <span>{label}</span>
-      <b>{value}</b>
+      <strong>{value}</strong>
     </div>
   );
 }
 
-function JourneyStep({
-  number,
-  label,
-  href,
-  done,
-}: {
-  number: string;
-  label: string;
-  href: string;
-  done: boolean;
-}) {
-  return (
-    <Link className={`journeyStep ${done ? "done" : ""}`} href={href}>
-      <span>{done ? "✓" : number}</span>
-      <strong>{label}</strong>
-      <small>{done ? "Completed" : "Next step"}</small>
-    </Link>
-  );
+function StatusPill({ value }: { value: string }) {
+  return <span className="statusPill">{value}</span>;
 }
 
-function QuickAction({ href, icon, label }: { href: string; icon: string; label: string }) {
-  return (
-    <Link className="quickAction" href={href}>
-      <span>{icon}</span>
-      <strong>{label}</strong>
-    </Link>
-  );
+function EmptyState({ text }: { text: string }) {
+  return <div className="emptyState">{text}</div>;
 }
 
-function OverviewRow({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
-  return (
-    <div className={`overviewRow ${alert ? "alert" : ""}`}>
-      <p>{label}</p>
-      <b>{value}</b>
-    </div>
-  );
+function TimelineIcon({ type }: { type: string }) {
+  if (type === "GPS") return <PinIcon />;
+  if (type === "PHOTO") return <CameraIcon />;
+  if (type === "HEALTH") return <PulseIcon />;
+  if (type === "QR") return <QrIcon />;
+  return <ServiceIcon />;
 }
 
-function cleanLabel(value: string) {
-  return String(value || "")
-    .replaceAll("_", " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+function IconShell({ children }: { children: ReactNode }) {
+  return <svg viewBox="0 0 24 24">{children}</svg>;
+}
+
+function GridIcon() {
+  return <IconShell><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" /></IconShell>;
+}
+
+function TreeIcon() {
+  return <IconShell><path d="M12 3c-3 3-5 6-5 9a5 5 0 0 0 10 0c0-3-2-6-5-9Z" /><path d="M12 14v7M8 21h8" /></IconShell>;
+}
+
+function PlantationIcon() {
+  return <IconShell><path d="M4 18c4-5 12-5 16 0" /><path d="M7 15c3-4 7-4 10 0" /><path d="M12 3v12" /><path d="M8 7c2-3 6-3 8 0" /></IconShell>;
+}
+
+function MarketIcon() {
+  return <IconShell><path d="M5 8h14l-1.5 12h-11L5 8Z" /><path d="M8 8a4 4 0 0 1 8 0" /></IconShell>;
+}
+
+function ServiceIcon() {
+  return <IconShell><path d="M12 3v4" /><path d="M7 7h10l-1 13H8L7 7Z" /><path d="M9 11h6M9 15h6" /></IconShell>;
+}
+
+function SellIcon() {
+  return <IconShell><path d="M4 12h14" /><path d="m13 7 5 5-5 5" /><path d="M5 5h6M5 19h6" /></IconShell>;
+}
+
+function WalletIcon() {
+  return <IconShell><path d="M4 7h16v12H4V7Z" /><path d="M16 12h4v4h-4a2 2 0 0 1 0-4Z" /><path d="M6 7V5h12v2" /></IconShell>;
+}
+
+function MembershipIcon() {
+  return <IconShell><path d="M12 3 4 7l8 4 8-4-8-4Z" /><path d="M4 12l8 4 8-4" /><path d="M4 17l8 4 8-4" /></IconShell>;
+}
+
+function SupportIcon() {
+  return <IconShell><path d="M5 12a7 7 0 0 1 14 0v5a2 2 0 0 1-2 2h-3" /><path d="M7 13v-2M17 13v-2" /><path d="M10 19h4" /></IconShell>;
+}
+
+function SettingsIcon() {
+  return <IconShell><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.8-1L14.4 3h-4.8l-.3 3.1a7 7 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 1.8 1l.3 3.1h4.8l.3-3.1a7 7 0 0 0 1.8-1l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z" /></IconShell>;
+}
+
+function LogoutIcon() {
+  return <IconShell><path d="M10 4H5v16h5" /><path d="M14 8l4 4-4 4" /><path d="M18 12H9" /></IconShell>;
+}
+
+function PulseIcon() {
+  return <IconShell><path d="M4 13h4l2-6 4 10 2-4h4" /></IconShell>;
+}
+
+function ClockIcon() {
+  return <IconShell><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></IconShell>;
+}
+
+function PinIcon() {
+  return <IconShell><path d="M12 21s7-6 7-12a7 7 0 0 0-14 0c0 6 7 12 7 12Z" /><circle cx="12" cy="9" r="2.5" /></IconShell>;
+}
+
+function CameraIcon() {
+  return <IconShell><path d="M4 7h4l1.5-2h5L16 7h4v12H4V7Z" /><circle cx="12" cy="13" r="3.5" /></IconShell>;
+}
+
+function QrIcon() {
+  return <IconShell><path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Z" /><path d="M14 14h2v2h-2v-2Zm4 0h2v6h-2v-6Zm-4 4h2v2h-2v-2Z" /></IconShell>;
+}
+
+function TrackIcon() {
+  return <IconShell><path d="M4 18V6" /><path d="M4 6h8l1 3h7v8h-8l-1-3H4" /></IconShell>;
+}
+
+function findTree(treeId: any, trees: TreeRow[]) {
+  if (!treeId) return null;
+  return trees.find((tree) => String(tree.id) === String(treeId)) || null;
+}
+
+function treeLabel(tree: TreeRow | null | undefined) {
+  if (!tree) return "Selected tree";
+  return tree.custom_name || tree.display_name || tree.tree_code || "Arganwood Seedling";
+}
+
+function getTreeImageUrl(tree: TreeRow): string | undefined {
+  if (typeof tree.image_url === "string" && tree.image_url.trim().length > 0) {
+    return tree.image_url;
+  }
+
+  if (typeof tree.photo_url === "string" && tree.photo_url.trim().length > 0) {
+    return tree.photo_url;
+  }
+
+  return undefined;
+}
+
+function forestName(tree: TreeRow, groupMap: Map<string, Row>) {
+  const group = tree.group_id ? groupMap.get(String(tree.group_id)) : null;
+  return group?.forest_name || group?.group_name || group?.block_name || tree.tree_group_name || "Customer Plantation";
+}
+
+function treeStatus(tree: TreeRow, healthRows: EvidenceRow[]) {
+  const relatedHealth = healthRows.find((row) => row.tree_id && String(row.tree_id) === String(tree.id));
+  const health = normalize(relatedHealth?.health_status || tree.health_status || tree.status);
+
+  if (!relatedHealth && !tree.health_status) return "Pending Evidence";
+  if (health.includes("CRITICAL") || health.includes("TREATMENT") || health.includes("MONITOR") || health.includes("NEEDS")) {
+    return "Needs Attention";
+  }
+  if (health.includes("PENDING")) return "Monitoring";
+  return "Healthy";
+}
+
+function latestTreeUpdate(tree: TreeRow, photos: EvidenceRow[], gps: EvidenceRow[], health: EvidenceRow[]) {
+  const values = [
+    tree.updated_at,
+    tree.created_at,
+    ...photos.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
+    ...gps.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
+    ...health.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
+  ];
+
+  return latestDate(values);
+}
+
+function latestDate(values: any[]) {
+  const dates = values
+    .filter(Boolean)
+    .map((value) => new Date(value))
+    .filter((date) => !Number.isNaN(date.getTime()));
+
+  if (dates.length === 0) return null;
+  return dates.sort((a, b) => b.getTime() - a.getTime())[0].toISOString();
+}
+
+function uniqueGroupCount(trees: TreeRow[]) {
+  return new Set(trees.map((tree) => tree.group_id).filter(Boolean)).size;
+}
+
+function careReason(action: string) {
+  const text = normalize(action);
+
+  if (text.includes("GPS")) {
+    return "Verifies the physical tree location and protects the customer’s ownership record.";
+  }
+
+  if (text.includes("PHOTO")) {
+    return "Creates visual proof of the tree’s current condition.";
+  }
+
+  if (text.includes("WATER")) {
+    return "Supports healthy establishment and reduces stress during early growth.";
+  }
+
+  if (text.includes("FERTILIZER")) {
+    return "Supports root development and long-term growth.";
+  }
+
+  if (text.includes("HEALTH")) {
+    return "Detects early signs of stress, disease, or treatment needs.";
+  }
+
+  if (text.includes("BUY")) {
+    return "Start by buying or selecting a tree to activate its care plan.";
+  }
+
+  return "Keeps your plantation record current and helps Admin coordinate the next field action.";
 }
 
 function getInitials(name: string) {
@@ -602,83 +1107,161 @@ function getInitials(name: string) {
     .toUpperCase();
 }
 
-const baseStyles = `
+const styles = `
   * { box-sizing: border-box; }
 
   .dashboardPage {
     min-height: 100vh;
-    width: 100%;
-    min-width: 0;
-    overflow-x: hidden;
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    background:
+      radial-gradient(circle at 20% 0%, rgba(214,178,94,.18), transparent 28%),
+      radial-gradient(circle at 92% 8%, rgba(64,130,86,.18), transparent 34%),
+      linear-gradient(180deg, #06110d 0%, #0b1f17 48%, #04100b 100%);
     color: #f8f1d8;
     font-family: Arial, Helvetica, sans-serif;
-    background:
-      radial-gradient(circle at 16% 8%, rgba(214,178,94,.22), transparent 28%),
-      radial-gradient(circle at 86% 12%, rgba(65,120,82,.18), transparent 34%),
-      linear-gradient(180deg, #06110d 0%, #0b1f17 44%, #07120d 100%);
-  }
-
-  .pageShell {
-    width: 100%;
-    max-width: 1480px;
-    min-width: 0;
-    margin: 0 auto;
-    padding: 28px;
     overflow-x: hidden;
   }
 
-  .loadingBox,
-  .errorBox,
-  .emptyState,
-  .metricCard,
-  .plantationPanel,
-  .journeyPanel,
-  .quickPanel,
-  .latestPanel,
-  .portfolioPanel,
-  .operationsPanel,
-  .accountGlass {
+  svg {
+    width: 21px;
+    height: 21px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .sideNav {
+    min-height: 100vh;
+    padding: 22px;
+    border-right: 1px solid rgba(214,178,94,.16);
+    background: rgba(0,0,0,.22);
+    backdrop-filter: blur(18px);
+    position: sticky;
+    top: 0;
+  }
+
+  .brandBlock {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .brandMark,
+  .avatarMark {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+    color: #07140f;
+    font-weight: 950;
+  }
+
+  .brandBlock strong {
+    display: block;
+    color: #fff8dc;
+  }
+
+  .brandBlock span {
+    display: block;
+    margin-top: 2px;
+    color: rgba(248,241,216,.52);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .sideNav nav {
+    display: grid;
+    gap: 8px;
+  }
+
+  .sideLink,
+  .logoutButton {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 12px 13px;
+    color: rgba(248,241,216,.70);
+    text-decoration: none;
+    background: transparent;
+    font-weight: 850;
+    cursor: pointer;
+  }
+
+  .sideLink:hover,
+  .sideLink.active {
+    color: #fff8dc;
+    border-color: rgba(214,178,94,.20);
+    background: rgba(214,178,94,.10);
+  }
+
+  .logoutButton {
+    margin-top: 22px;
+    border-color: rgba(214,178,94,.12);
+  }
+
+  .contentShell {
+    min-width: 0;
+    padding: 24px;
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .loadingBox {
+    grid-column: 1 / -1;
+    margin: 28px;
+    min-height: 70vh;
+    display: grid;
+    place-items: center;
+    border-radius: 28px;
     border: 1px solid rgba(214,178,94,.20);
+    background: rgba(255,255,255,.075);
+    color: #fff8dc;
+    font-weight: 950;
+  }
+
+  .hero,
+  .overviewCard,
+  .carePlanPanel,
+  .plantationPanel,
+  .panel,
+  .miniCard,
+  .errorBox,
+  .emptyState {
+    border: 1px solid rgba(214,178,94,.18);
     background: rgba(255,255,255,.075);
     backdrop-filter: blur(18px);
     box-shadow: 0 24px 70px rgba(0,0,0,.30);
   }
 
-  .loadingBox {
-    min-height: 72vh;
-    border-radius: 28px;
-    display: grid;
-    place-items: center;
-    color: #fff8dc;
-    font-weight: 900;
-  }
-
   .hero {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 420px;
     gap: 18px;
     align-items: stretch;
-    margin-bottom: 18px;
-  }
-
-  .heroText {
-    min-width: 0;
-    border-radius: 32px;
+    border-radius: 30px;
     padding: 28px;
+    margin-bottom: 18px;
     background:
-      linear-gradient(rgba(2,20,12,.62), rgba(2,20,12,.82)),
+      linear-gradient(rgba(2,20,12,.72), rgba(2,20,12,.88)),
       url('/images/agarwood-real-tree.jpg');
     background-size: cover;
     background-position: center;
-    border: 1px solid rgba(214,178,94,.22);
-    box-shadow: 0 24px 70px rgba(0,0,0,.35);
-    overflow: hidden;
   }
 
   .eyebrow {
     margin: 0 0 10px;
     color: #d6b25e;
-    font-weight: 900;
+    font-weight: 950;
     text-transform: uppercase;
     letter-spacing: .16em;
     font-size: 12px;
@@ -687,8 +1270,8 @@ const baseStyles = `
   .hero h1 {
     margin: 0;
     color: #fff8dc;
-    font-size: clamp(34px, 5vw, 56px);
-    line-height: .98;
+    font-size: clamp(36px, 5vw, 58px);
+    line-height: .95;
     letter-spacing: -2px;
   }
 
@@ -697,147 +1280,127 @@ const baseStyles = `
   }
 
   .hero p {
-    max-width: 860px;
+    max-width: 760px;
     margin: 16px 0 0;
-    color: rgba(248,241,216,.78);
-    line-height: 1.7;
-    font-weight: 700;
+    color: rgba(248,241,216,.76);
+    line-height: 1.65;
+    font-weight: 750;
   }
 
-  .heroActions {
-    display: flex;
-    flex-wrap: wrap;
+  .heroCards {
+    display: grid;
     gap: 12px;
-    margin-top: 22px;
   }
 
-  .heroActions a,
-  .accountGlass button,
-  .panelTop a {
-    border: 0;
-    border-radius: 999px;
-    padding: 12px 16px;
-    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
-    color: #07140f;
-    text-decoration: none;
+  .miniCard {
+    border-radius: 22px;
+    padding: 18px;
+    background: rgba(0,0,0,.24);
+  }
+
+  .miniCard p {
+    margin: 0;
+    color: rgba(248,241,216,.55);
+    font-size: 11px;
     font-weight: 950;
-    cursor: pointer;
-  }
-
-  .accountGlass {
-    width: 330px;
-    border-radius: 32px;
-    padding: 22px;
-    display: grid;
-    align-content: space-between;
-    gap: 18px;
-    min-width: 0;
-  }
-
-  .avatar {
-    width: 68px;
-    height: 68px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
-    color: #07140f;
-    font-weight: 950;
-    font-size: 24px;
-  }
-
-  .accountGlass small {
-    color: rgba(248,241,216,.62);
-    font-weight: 900;
     text-transform: uppercase;
-    letter-spacing: .12em;
+    letter-spacing: .14em;
   }
 
-  .accountGlass strong {
+  .miniCard strong {
     display: block;
-    margin-top: 8px;
+    margin-top: 10px;
     color: #fff8dc;
+    font-size: clamp(20px, 3vw, 27px);
     overflow-wrap: anywhere;
   }
 
   .errorBox {
-    margin-top: 16px;
-    border-radius: 18px;
+    margin-top: 14px;
+    border-radius: 16px;
     padding: 14px;
-    color: #ffd7ce;
-    background: rgba(130,40,24,.28);
+    color: #ffd5cd;
+    background: rgba(125,35,25,.26);
   }
 
-  .metricGrid {
+  .overviewGrid {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 18px;
   }
 
-  .metricCard {
+  .overviewCard {
     min-width: 0;
     border-radius: 24px;
     padding: 18px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
   }
 
-  .metricCard p {
+  .overviewCard > span,
+  .actionCard > span,
+  .timelineItem > span {
+    width: 42px;
+    height: 42px;
+    border-radius: 15px;
+    display: grid;
+    place-items: center;
+    color: #d6b25e;
+    background: rgba(214,178,94,.13);
+    border: 1px solid rgba(214,178,94,.16);
+    flex: 0 0 auto;
+  }
+
+  .overviewCard p {
     margin: 0;
-    color: rgba(248,241,216,.62);
+    color: rgba(248,241,216,.54);
     font-size: 11px;
-    font-weight: 900;
+    font-weight: 950;
     text-transform: uppercase;
-    letter-spacing: .11em;
+    letter-spacing: .12em;
   }
 
-  .metricCard h3 {
-    margin: 10px 0 6px;
+  .overviewCard h3 {
+    margin: 8px 0 4px;
     color: #fff8dc;
-    font-size: clamp(21px, 2.2vw, 30px);
+    font-size: 25px;
     overflow-wrap: anywhere;
   }
 
-  .metricCard span {
+  .overviewCard small {
     color: #d6b25e;
-    font-weight: 800;
-    font-size: 12px;
-    line-height: 1.4;
+    font-weight: 850;
   }
 
-  .mainGrid {
+  .mainGrid,
+  .splitGrid {
     display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
     gap: 18px;
-    min-width: 0;
+    margin-bottom: 18px;
   }
 
+  .splitGrid.bottom {
+    align-items: start;
+  }
+
+  .carePlanPanel,
   .plantationPanel,
-  .journeyPanel,
-  .quickPanel,
-  .latestPanel,
-  .portfolioPanel,
-  .operationsPanel {
-    min-width: 0;
+  .panel {
     border-radius: 30px;
     padding: 22px;
+    min-width: 0;
     overflow: hidden;
-  }
-
-  .plantationPanel {
-    grid-row: span 2;
   }
 
   .panelTop {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 16px;
+    gap: 14px;
     margin-bottom: 18px;
-    min-width: 0;
-  }
-
-  .panelTop.compact {
-    margin-bottom: 14px;
   }
 
   .panelTop h2 {
@@ -847,475 +1410,408 @@ const baseStyles = `
     letter-spacing: -.8px;
   }
 
-  .panelTop span {
-    display: block;
-    margin-top: 8px;
-    color: rgba(248,241,216,.66);
-    line-height: 1.5;
-  }
-
-  .stageBadge {
-    flex: 0 0 auto;
-    width: 96px;
-    height: 96px;
-    border-radius: 24px;
-    display: grid;
-    place-items: center;
-    text-align: center;
-    background: rgba(0,0,0,.28);
-    border: 1px solid rgba(214,178,94,.18);
-  }
-
-  .stageBadge strong {
-    display: block;
-    color: #d6b25e;
-    font-size: 28px;
-  }
-
-  .stageBadge small {
-    display: block;
-    margin-top: -18px;
-    color: rgba(248,241,216,.58);
-    font-weight: 900;
-    font-size: 10px;
-    text-transform: uppercase;
-  }
-
-  .plantationVisual {
-    position: relative;
-    height: 430px;
-    border-radius: 28px;
-    overflow: hidden;
-    background:
-      linear-gradient(180deg, rgba(3,19,19,.24) 0%, rgba(7,26,20,.45) 45%, rgba(5,22,12,.96) 100%),
-      radial-gradient(circle at 48% 18%, rgba(214,178,94,.28), transparent 18%),
-      linear-gradient(180deg, #102923 0%, #18372a 45%, #0a1f13 100%);
-    border: 1px solid rgba(214,178,94,.18);
-  }
-
-  .moonGlow {
-    position: absolute;
-    top: 44px;
-    left: 50%;
-    width: 150px;
-    height: 150px;
-    transform: translateX(-50%);
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,237,173,.70), rgba(214,178,94,.20) 42%, transparent 70%);
-    filter: blur(.2px);
-  }
-
-  .mountain {
-    position: absolute;
-    bottom: 154px;
-    width: 58%;
-    height: 170px;
-    background: linear-gradient(135deg, rgba(8,40,27,.96), rgba(2,16,11,.98));
-    clip-path: polygon(0 100%, 48% 8%, 100% 100%);
-    opacity: .78;
-  }
-
-  .m1 { left: -10%; }
-  .m2 { right: -8%; height: 135px; opacity: .66; }
-
-  .mist {
-    position: absolute;
-    left: -10%;
-    right: -10%;
-    height: 54px;
+  .smallLink,
+  .buttonRow a {
     border-radius: 999px;
-    background: linear-gradient(90deg, transparent, rgba(235,245,219,.18), transparent);
-    filter: blur(11px);
-  }
-
-  .mist1 { top: 170px; }
-  .mist2 { top: 235px; opacity: .7; }
-
-  .treeLine {
-    position: absolute;
-    left: 0;
-    right: 0;
-    display: flex;
-    justify-content: space-around;
-    align-items: flex-end;
-  }
-
-  .treeLine i {
-    display: block;
-    position: relative;
-    width: 11px;
-    border-radius: 999px 999px 0 0;
-    background: linear-gradient(180deg, #5a3b1d, #24170d);
-  }
-
-  .treeLine i:before,
-  .treeLine i:after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    border-radius: 50% 50% 46% 46%;
-    transform: translateX(-50%);
-    background:
-      radial-gradient(circle at 35% 28%, rgba(158,198,118,.55), transparent 20%),
-      linear-gradient(145deg, #2f6b3e, #0d2f20);
-    box-shadow: 0 8px 20px rgba(0,0,0,.22);
-  }
-
-  .treeLine i:before {
-    top: -42px;
-    width: 58px;
-    height: 54px;
-  }
-
-  .treeLine i:after {
-    top: -70px;
-    width: 44px;
-    height: 44px;
-  }
-
-  .treeLine.back {
-    bottom: 150px;
-    opacity: .54;
-  }
-
-  .treeLine.back i {
-    height: 48px;
-    transform: scale(.68);
-  }
-
-  .treeLine.mid {
-    bottom: 104px;
-    opacity: .8;
-  }
-
-  .treeLine.mid i {
-    height: 72px;
-    transform: scale(.86);
-  }
-
-  .treeLine.front {
-    bottom: 38px;
-  }
-
-  .treeLine.front i {
-    height: 98px;
-  }
-
-  .fieldRows {
-    position: absolute;
-    inset: auto -20% 0 -20%;
-    height: 190px;
-    transform: perspective(400px) rotateX(58deg);
-    transform-origin: bottom;
-  }
-
-  .fieldRows span {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 18px;
-    border-radius: 50%;
-    border-top: 2px solid rgba(214,178,94,.22);
-    background: linear-gradient(90deg, transparent, rgba(90,120,53,.26), transparent);
-  }
-
-  .fieldRows span:nth-child(1) { bottom: 24px; }
-  .fieldRows span:nth-child(2) { bottom: 64px; }
-  .fieldRows span:nth-child(3) { bottom: 108px; }
-  .fieldRows span:nth-child(4) { bottom: 154px; }
-
-  .estateCard {
-    position: absolute;
-    left: 22px;
-    bottom: 22px;
-    min-width: 190px;
-    border-radius: 22px;
-    padding: 18px;
-    background: rgba(3,20,13,.74);
-    border: 1px solid rgba(214,178,94,.28);
-    backdrop-filter: blur(12px);
-  }
-
-  .estateCard small {
-    color: rgba(248,241,216,.66);
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: .12em;
-  }
-
-  .estateCard strong {
-    display: block;
-    color: #fff8dc;
-    font-size: 48px;
-    line-height: 1;
-    margin-top: 8px;
-  }
-
-  .estateCard span {
-    display: block;
-    color: #d6b25e;
-    font-weight: 900;
-    margin-top: 8px;
-  }
-
-  .plantationStats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 14px;
-  }
-
-  .mini {
-    min-width: 0;
-    border-radius: 18px;
-    padding: 14px;
-    background: rgba(0,0,0,.24);
-    border: 1px solid rgba(214,178,94,.14);
-  }
-
-  .mini span {
-    display: block;
-    color: rgba(248,241,216,.58);
-    font-size: 11px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-  }
-
-  .mini b {
-    display: block;
-    margin-top: 8px;
-    color: #fff8dc;
-    overflow-wrap: anywhere;
-  }
-
-  .journeyList {
-    display: grid;
-    gap: 10px;
-  }
-
-  .journeyStep {
-    display: grid;
-    grid-template-columns: 42px 1fr auto;
-    align-items: center;
-    gap: 12px;
-    padding: 13px;
-    border-radius: 18px;
-    background: rgba(0,0,0,.24);
-    border: 1px solid rgba(214,178,94,.12);
-    text-decoration: none;
-    color: inherit;
-  }
-
-  .journeyStep span {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: rgba(214,178,94,.18);
-    color: #d6b25e;
-    font-weight: 950;
-  }
-
-  .journeyStep.done span {
-    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+    padding: 11px 14px;
     color: #07140f;
-  }
-
-  .journeyStep strong {
-    color: #fff8dc;
-  }
-
-  .journeyStep small {
-    color: rgba(248,241,216,.56);
-    font-weight: 900;
-  }
-
-  .quickGrid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-
-  .quickAction {
-    min-width: 0;
-    display: grid;
-    grid-template-columns: 38px 1fr;
-    align-items: center;
-    gap: 10px;
-    padding: 13px;
-    border-radius: 18px;
-    background: rgba(0,0,0,.24);
-    border: 1px solid rgba(214,178,94,.12);
-    color: #fff8dc;
+    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
     text-decoration: none;
-    font-weight: 900;
-  }
-
-  .quickAction span {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: rgba(214,178,94,.16);
-    color: #d6b25e;
-  }
-
-  .latestPanel,
-  .portfolioPanel,
-  .operationsPanel {
-    grid-column: auto;
-  }
-
-  .activityList,
-  .portfolioRows,
-  .operationList {
-    display: grid;
-    gap: 10px;
-  }
-
-  .activityRow,
-  .operationRow,
-  .overviewRow {
-    min-width: 0;
-    border-radius: 18px;
-    padding: 13px;
-    background: rgba(0,0,0,.22);
-    border: 1px solid rgba(214,178,94,.12);
-  }
-
-  .activityRow {
-    display: grid;
-    grid-template-columns: 42px minmax(0, 1fr) auto;
-    gap: 12px;
-    align-items: center;
-  }
-
-  .activityRow > span {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: rgba(214,178,94,.14);
-    color: #d6b25e;
-    font-weight: 950;
-  }
-
-  .activityRow strong,
-  .operationRow strong {
-    color: #fff8dc;
-    overflow-wrap: anywhere;
-  }
-
-  .activityRow p,
-  .operationRow p {
-    margin: 4px 0 0;
-    color: rgba(248,241,216,.58);
-    line-height: 1.4;
-    overflow-wrap: anywhere;
-  }
-
-  .activityRow small {
-    display: block;
-    margin-top: 4px;
-    color: rgba(248,241,216,.45);
-    font-weight: 800;
-  }
-
-  .activityRow b,
-  .operationRow span,
-  .overviewRow b {
-    color: #d6b25e;
     font-weight: 950;
     white-space: nowrap;
   }
 
-  .overviewRow,
-  .operationRow {
+  .statusPill {
+    border-radius: 999px;
+    padding: 9px 12px;
+    color: #ffe49a;
+    background: rgba(214,178,94,.12);
+    border: 1px solid rgba(214,178,94,.22);
+    font-size: 12px;
+    font-weight: 950;
+  }
+
+  .carePlanBody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .careInfo,
+  .whyBox,
+  .treeCard,
+  .timelineItem,
+  .actionCard,
+  .recentRow {
+    border-radius: 18px;
+    background: rgba(0,0,0,.22);
+    border: 1px solid rgba(214,178,94,.12);
+  }
+
+  .careInfo {
+    padding: 15px;
+  }
+
+  .careInfo span {
+    display: block;
+    color: rgba(248,241,216,.55);
+    font-size: 11px;
+    font-weight: 950;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+
+  .careInfo strong {
+    display: block;
+    margin-top: 7px;
+    color: #fff8dc;
+    font-size: 18px;
+  }
+
+  .careInfo.highlight strong {
+    color: #d6b25e;
+  }
+
+  .whyBox {
+    padding: 16px;
+    margin-top: 14px;
+  }
+
+  .whyBox strong {
+    color: #fff8dc;
+  }
+
+  .whyBox p {
+    margin: 6px 0 0;
+    color: rgba(248,241,216,.67);
+    line-height: 1.55;
+  }
+
+  .buttonRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .buttonRow a:nth-child(2) {
+    background: rgba(255,255,255,.09);
+    color: #fff8dc;
+    border: 1px solid rgba(214,178,94,.20);
+  }
+
+  .forestVisual {
+    position: relative;
+    min-height: 360px;
+    overflow: hidden;
+    border-radius: 24px;
+    background:
+      linear-gradient(180deg, rgba(7,31,24,.15), rgba(5,22,12,.96)),
+      radial-gradient(circle at 50% 20%, rgba(214,178,94,.25), transparent 18%),
+      linear-gradient(180deg, #143026, #0b2418);
+    border: 1px solid rgba(214,178,94,.14);
+  }
+
+  .orb {
+    position: absolute;
+    top: 42px;
+    left: 50%;
+    width: 130px;
+    height: 130px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,235,180,.68), rgba(214,178,94,.17) 55%, transparent 70%);
+  }
+
+  .hill {
+    position: absolute;
+    bottom: 92px;
+    width: 70%;
+    height: 180px;
+    background: linear-gradient(135deg, rgba(8,45,30,.92), rgba(3,16,11,.98));
+    clip-path: polygon(0 100%, 50% 12%, 100% 100%);
+  }
+
+  .h1 { left: -14%; }
+  .h2 { right: -18%; height: 140px; opacity: .74; }
+
+  .forestRows {
+    position: absolute;
+    inset: auto 0 0;
+    height: 170px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-around;
+  }
+
+  .forestRows span {
+    position: relative;
+    width: 10px;
+    height: 70px;
+    border-radius: 999px 999px 0 0;
+    background: #4b2f17;
+  }
+
+  .forestRows span:before,
+  .forestRows span:after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: linear-gradient(145deg, #3d7a43, #11351f);
+  }
+
+  .forestRows span:before {
+    top: -38px;
+    width: 50px;
+    height: 48px;
+  }
+
+  .forestRows span:after {
+    top: -62px;
+    width: 38px;
+    height: 38px;
+  }
+
+  .visualCard {
+    position: absolute;
+    left: 18px;
+    bottom: 18px;
+    border-radius: 20px;
+    padding: 16px;
+    min-width: 170px;
+    background: rgba(3,20,13,.72);
+    border: 1px solid rgba(214,178,94,.24);
+    backdrop-filter: blur(12px);
+  }
+
+  .visualCard small {
+    color: rgba(248,241,216,.55);
+    font-weight: 950;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+  }
+
+  .visualCard strong {
+    display: block;
+    color: #fff8dc;
+    font-size: 44px;
+    line-height: 1;
+    margin-top: 8px;
+  }
+
+  .visualCard p {
+    margin: 8px 0 0;
+    color: #d6b25e;
+    font-weight: 950;
+  }
+
+  .treeGrid,
+  .actionGrid,
+  .timelineList,
+  .recentList {
+    display: grid;
+    gap: 12px;
+  }
+
+  .treeCard {
+    color: inherit;
+    text-decoration: none;
+    padding: 14px;
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .treeImage {
+    width: 78px;
+    height: 78px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    color: #d6b25e;
+    background: rgba(214,178,94,.12);
+    overflow: hidden;
+  }
+
+  .treeImage img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .treeCard span {
+    color: #d6b25e;
+    font-size: 12px;
+    font-weight: 950;
+  }
+
+  .treeCard h3 {
+    margin: 4px 0;
+    color: #fff8dc;
+    font-size: 18px;
+  }
+
+  .treeCard p,
+  .treeMeta small,
+  .timelineItem p,
+  .timelineItem small,
+  .actionCard p,
+  .recentRow p,
+  .recentRow span {
+    color: rgba(248,241,216,.58);
+  }
+
+  .treeCard p {
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .treeMeta {
+    text-align: right;
+  }
+
+  .treeMeta b {
+    display: block;
+    color: #fff8dc;
+    margin-bottom: 5px;
+  }
+
+  .treeMeta small {
+    display: block;
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .timelineItem,
+  .actionCard,
+  .recentRow {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .timelineItem,
+  .actionCard {
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .timelineItem strong,
+  .actionCard strong,
+  .recentRow strong {
+    color: #fff8dc;
+  }
+
+  .timelineItem p,
+  .actionCard p,
+  .recentRow p {
+    margin: 5px 0 0;
+    line-height: 1.45;
+    font-size: 13px;
+  }
+
+  .timelineItem small {
+    display: block;
+    margin-top: 5px;
+    font-weight: 800;
+  }
+
+  .actionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recentRow {
     display: flex;
     justify-content: space-between;
-    align-items: center;
     gap: 14px;
+    padding: 14px;
   }
 
-  .overviewRow p {
-    margin: 0;
+  .recentRow span {
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 850;
+  }
+
+  .emptyState {
+    border-radius: 20px;
+    padding: 22px;
     color: rgba(248,241,216,.65);
-    font-weight: 800;
+    font-weight: 850;
+    background: rgba(0,0,0,.22);
   }
 
-  .overviewRow.alert b {
-    color: #ffcf8c;
-  }
+  @media (max-width: 1220px) {
+    .dashboardPage {
+      grid-template-columns: 1fr;
+    }
 
-  footer {
-    padding: 22px 0 0;
-    text-align: center;
-    color: rgba(248,241,216,.58);
-    font-weight: 800;
-  }
+    .sideNav {
+      position: static;
+      min-height: auto;
+      border-right: 0;
+      border-bottom: 1px solid rgba(214,178,94,.14);
+    }
 
-  @media (max-width: 1280px) {
-    .metricGrid {
+    .sideNav nav {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .mainGrid {
+    .logoutButton {
+      max-width: 220px;
+    }
+
+    .hero,
+    .mainGrid,
+    .splitGrid {
       grid-template-columns: 1fr;
     }
 
-    .plantationPanel {
-      grid-row: auto;
+    .overviewGrid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
-  @media (max-width: 860px) {
-    .pageShell {
-      padding: 18px;
-    }
-
-    .hero {
-      grid-template-columns: 1fr;
-    }
-
-    .accountGlass {
-      width: 100%;
-    }
-
-    .metricGrid,
-    .plantationStats,
-    .quickGrid {
-      grid-template-columns: 1fr;
-    }
-
-    .panelTop {
-      flex-direction: column;
-    }
-
-    .stageBadge {
-      width: 100%;
-      height: auto;
+  @media (max-width: 720px) {
+    .contentShell {
       padding: 16px;
     }
 
-    .stageBadge small {
-      margin-top: 2px;
+    .sideNav {
+      padding: 16px;
     }
 
-    .plantationVisual {
-      height: 360px;
+    .sideNav nav,
+    .overviewGrid,
+    .actionGrid {
+      grid-template-columns: 1fr;
     }
 
-    .activityRow {
-      grid-template-columns: 42px minmax(0, 1fr);
+    .hero {
+      padding: 22px;
     }
 
-    .activityRow b {
-      grid-column: 2;
-      white-space: normal;
+    .panelTop,
+    .recentRow {
+      flex-direction: column;
+    }
+
+    .treeCard {
+      grid-template-columns: 70px minmax(0, 1fr);
+    }
+
+    .treeMeta {
+      grid-column: 1 / -1;
+      text-align: left;
+    }
+
+    .buttonRow a,
+    .smallLink {
+      width: 100%;
+      text-align: center;
     }
   }
 `;

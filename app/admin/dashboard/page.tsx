@@ -1,42 +1,44 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Row = Record<string, any>;
 
-type ForestRow = {
-  key: string;
-  groupId: string | null;
-  customerProfileId: string | null;
-  customerName: string;
-  customerEmail: string;
-  forestName: string;
-  totalTrees: number;
-  protectedCount: number;
-  attentionCount: number;
-  criticalCount: number;
-  pendingValuation: number;
-  needsCare: number;
+type LoadResult = {
+  profiles: Row[];
   trees: Row[];
-};
-
-type AlertRow = {
-  key: string;
-  severity: "CRITICAL" | "ATTENTION";
-  reason: string;
-  treeName: string;
-  forestName: string;
-  customerName: string;
-  customerEmail: string;
-  createdAt: string | null;
+  groups: Row[];
+  operations: Row[];
+  caretakers: Row[];
+  assignments: Row[];
+  tasks: Row[];
+  memberships: Row[];
+  cashins: Row[];
+  cashouts: Row[];
+  sellRequests: Row[];
+  treasury: Row[];
+  supportTickets: Row[];
 };
 
 export default function AdminDashboardPage() {
-  const [profiles, setProfiles] = useState<Row[]>([]);
-  const [trees, setTrees] = useState<Row[]>([]);
-  const [groups, setGroups] = useState<Row[]>([]);
-  const [operationRequests, setOperationRequests] = useState<Row[]>([]);
+  const [data, setData] = useState<LoadResult>({
+    profiles: [],
+    trees: [],
+    groups: [],
+    operations: [],
+    caretakers: [],
+    assignments: [],
+    tasks: [],
+    memberships: [],
+    cashins: [],
+    cashouts: [],
+    sellRequests: [],
+    treasury: [],
+    supportTickets: [],
+  });
+
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
@@ -44,13 +46,31 @@ export default function AdminDashboardPage() {
     loadDashboard();
   }, []);
 
+  async function safeRows(label: string, query: PromiseLike<any>) {
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn(`${label} dashboard load skipped:`, error.message);
+      return [];
+    }
+
+    return data || [];
+  }
+
   async function loadDashboard() {
     setLoading(true);
     setMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
+
+    if (userError) {
+      setMessage(userError.message);
+      setLoading(false);
+      return;
+    }
 
     if (!user) {
       window.location.href = "/login";
@@ -93,239 +113,260 @@ export default function AdminDashboardPage() {
       return;
     }
 
-    const [profileResult, treeResult, groupResult, operationResult] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select("id, full_name, email, phone, account_status, kyc_status, membership_status, created_at")
-        .order("created_at", { ascending: false }),
+    const [
+      profiles,
+      trees,
+      groups,
+      operations,
+      caretakers,
+      assignments,
+      tasks,
+      memberships,
+      cashins,
+      cashouts,
+      sellRequests,
+      treasury,
+      supportTickets,
+    ] = await Promise.all([
+      safeRows(
+        "profiles",
+        supabase
+          .from("profiles")
+          .select("id, full_name, email, phone, account_status, kyc_status, membership_status, created_at")
+          .order("created_at", { ascending: false })
+      ),
 
-      supabase
-        .from("trees")
-        .select(
-          "id, profile_id, customer_profile_id, group_id, display_name, custom_name, tree_group_name, stage, health_status, status, care_status, care_expires_at, last_photo_update_at, last_gps_update_at, last_health_report_at, last_health_status, alert_status, alert_reason, valuation_status, valuation_requested_at, created_at, updated_at"
-        )
-        .order("created_at", { ascending: false }),
+      safeRows(
+        "trees",
+        supabase
+          .from("trees")
+          .select(
+            "id, profile_id, customer_profile_id, group_id, display_name, custom_name, tree_code, tree_qr_code, tree_qr_url, qr_tag_status, tree_group_name, stage, health_status, status, care_status, care_expires_at, valuation_status, valuation_requested_at, created_at, updated_at"
+          )
+          .order("created_at", { ascending: false })
+      ),
 
-      supabase
-        .from("tree_groups")
-        .select("id, profile_id, customer_profile_id, group_name, forest_name, description, farm_location, block_name, total_trees, status, created_at, updated_at")
-        .order("created_at", { ascending: false }),
+      safeRows(
+        "tree_groups",
+        supabase
+          .from("tree_groups")
+          .select("id, profile_id, customer_profile_id, group_name, forest_name, farm_location, block_name, total_trees, status, created_at, updated_at")
+          .order("created_at", { ascending: false })
+      ),
 
-      supabase
-        .from("tree_operation_requests")
-        .select("id, profile_id, customer_profile_id, tree_id, group_id, request_type, operation_type, service_name, status, assignment_status, created_at, requested_at")
-        .order("created_at", { ascending: false }),
+      safeRows(
+        "tree_operation_requests",
+        supabase
+          .from("tree_operation_requests")
+          .select("id, profile_id, customer_profile_id, tree_id, group_id, request_type, operation_type, service_name, status, assignment_status, caretaker_id, total_amount, amount, created_at, requested_at, assigned_at, completed_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "caretakers",
+        supabase
+          .from("caretakers")
+          .select("id, caretaker_profile_id, full_name, email, phone, status, assigned_area, created_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "caretaker_assignments",
+        supabase
+          .from("caretaker_assignments")
+          .select("id, caretaker_id, caretaker_profile_id, operation_request_id, customer_profile_id, tree_id, group_id, status, assigned_at, started_at, submitted_at, completed_at, created_at, updated_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "caretaker_task_logs",
+        supabase
+          .from("caretaker_task_logs")
+          .select("id, caretaker_id, caretaker_profile_id, operation_request_id, assignment_id, task_type, source_type, evidence_status, status, created_at, started_at, submitted_at, completed_at, updated_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "membership_orders",
+        supabase
+          .from("membership_orders")
+          .select("id, profile_id, plan_name, annual_fee, amount, status, payment_status, submitted_at, approved_at, created_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "cashin_requests",
+        supabase
+          .from("cashin_requests")
+          .select("id, profile_id, amount, status, payment_method, reference_no, created_at, approved_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "withdrawal_requests",
+        supabase
+          .from("withdrawal_requests")
+          .select("id, profile_id, amount, net_amount, fee_amount, status, created_at, approved_at, paid_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "sell_tree_requests",
+        supabase
+          .from("sell_tree_requests")
+          .select("id, profile_id, customer_profile_id, tree_id, status, offer_status, asking_price, offer_amount, created_at, updated_at")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "platform_treasury",
+        supabase
+          .from("platform_treasury")
+          .select("*")
+          .order("created_at", { ascending: false })
+      ),
+
+      safeRows(
+        "support_tickets",
+        supabase
+          .from("support_tickets")
+          .select("id, profile_id, customer_profile_id, subject, status, priority, created_at, updated_at")
+          .order("created_at", { ascending: false })
+      ),
     ]);
 
-    if (profileResult.error) {
-      setMessage(profileResult.error.message);
-      setLoading(false);
-      return;
-    }
+    setData({
+      profiles,
+      trees,
+      groups,
+      operations,
+      caretakers,
+      assignments,
+      tasks,
+      memberships,
+      cashins,
+      cashouts,
+      sellRequests,
+      treasury,
+      supportTickets,
+    });
 
-    if (treeResult.error) {
-      setMessage(treeResult.error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (groupResult.error) {
-      setMessage(groupResult.error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (operationResult.error) {
-      setMessage(operationResult.error.message);
-      setLoading(false);
-      return;
-    }
-
-    setProfiles(profileResult.data || []);
-    setTrees(treeResult.data || []);
-    setGroups(groupResult.data || []);
-    setOperationRequests(operationResult.data || []);
     setLoading(false);
   }
 
-  const profileMap = useMemo(() => {
-    const map = new Map<string, Row>();
-    profiles.forEach((profile) => {
-      if (profile.id) map.set(String(profile.id), profile);
-    });
-    return map;
-  }, [profiles]);
+  const summary = useMemo(() => {
+    const operations = data.operations;
+    const tasks = data.tasks;
+    const assignments = data.assignments;
 
-  const groupMap = useMemo(() => {
-    const map = new Map<string, Row>();
-    groups.forEach((group) => {
-      if (group.id) map.set(String(group.id), group);
-    });
-    return map;
-  }, [groups]);
+    const pendingOperations = operations.filter((row) => {
+      const status = normalize(row.status);
+      const assignmentStatus = normalize(row.assignment_status);
+      return (
+        status === "PENDING" ||
+        status === "REQUESTED" ||
+        status === "PAID" ||
+        assignmentStatus === "NOT_ASSIGNED" ||
+        assignmentStatus === "PENDING" ||
+        assignmentStatus === ""
+      );
+    }).length;
 
-  const forestRows = useMemo<ForestRow[]>(() => {
-    const map = new Map<string, ForestRow>();
+    const submittedTasks = tasks.filter((row) => {
+      const status = normalize(row.status);
+      const evidenceStatus = normalize(row.evidence_status);
+      return status === "SUBMITTED" || evidenceStatus === "SUBMITTED";
+    }).length;
 
-    groups.forEach((group) => {
-      const customerProfileId = group.customer_profile_id || group.profile_id || null;
-      const customer = customerProfileId ? profileMap.get(String(customerProfileId)) : null;
-      const key = `group-${group.id}`;
+    const pendingMemberships = data.memberships.filter((row) => normalize(row.status) === "PENDING").length;
+    const pendingCashin = data.cashins.filter((row) => normalize(row.status) === "PENDING").length;
+    const pendingCashout = data.cashouts.filter((row) => ["PENDING", "PROCESSING"].includes(normalize(row.status))).length;
+    const pendingSellTree = data.sellRequests.filter((row) => ["PENDING", "REQUESTED", "UNDER_REVIEW", "OFFER_SENT"].includes(normalize(row.status))).length;
 
-      map.set(key, {
-        key,
-        groupId: group.id || null,
-        customerProfileId,
-        customerName: customerName(customer, customerProfileId),
-        customerEmail: customer?.email || "No email",
-        forestName: forestNameFromGroup(group),
-        totalTrees: 0,
-        protectedCount: 0,
-        attentionCount: 0,
-        criticalCount: 0,
-        pendingValuation: 0,
-        needsCare: 0,
-        trees: [],
-      });
-    });
+    const qrPending = data.trees.filter((tree) => {
+      const qrStatus = normalize(tree.qr_tag_status);
+      return !tree.tree_qr_url || !tree.tree_qr_code || qrStatus === "" || qrStatus === "PENDING" || qrStatus === "PENDING_TAG";
+    }).length;
 
-    trees.forEach((tree) => {
-      const group = tree.group_id ? groupMap.get(String(tree.group_id)) : null;
-      const customerProfileId = tree.customer_profile_id || tree.profile_id || null;
-      const customer = customerProfileId ? profileMap.get(String(customerProfileId)) : null;
-      const forestName = group ? forestNameFromGroup(group) : tree.tree_group_name || "Ungrouped Forest";
-      const key = tree.group_id ? `group-${tree.group_id}` : `loose-${customerProfileId}-${forestName}`;
+    const supportTickets = data.supportTickets.filter((ticket) => {
+      const status = normalize(ticket.status);
+      return status !== "CLOSED" && status !== "RESOLVED";
+    }).length;
 
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          groupId: tree.group_id || null,
-          customerProfileId,
-          customerName: customerName(customer, customerProfileId),
-          customerEmail: customer?.email || "No email",
-          forestName,
-          totalTrees: 0,
-          protectedCount: 0,
-          attentionCount: 0,
-          criticalCount: 0,
-          pendingValuation: 0,
-          needsCare: 0,
-          trees: [],
-        });
-      }
+    const assigned = countStatus([...operations, ...assignments], "ASSIGNED");
+    const inProgress = countStatus([...operations, ...assignments, ...tasks], "IN_PROGRESS");
+    const submitted = submittedTasks;
+    const completed = countStatus([...operations, ...assignments, ...tasks], "COMPLETED");
 
-      const forest = map.get(key);
-      if (!forest) return;
+    const activeGardeners = data.caretakers.filter((row) => normalize(row.status) === "ACTIVE").length;
+    const tasksAssigned = tasks.filter((row) => normalize(row.status) === "ASSIGNED").length;
 
-      const warning = treeWarning(tree);
+    const totalTreasury = data.treasury.reduce((sum, row) => sum + moneyValue(row), 0);
+    const todayRevenue = data.treasury
+      .filter((row) => isToday(row.created_at))
+      .reduce((sum, row) => sum + moneyValue(row), 0);
 
-      forest.totalTrees += 1;
-      forest.trees.push(tree);
+    const membershipRevenue = data.treasury
+      .filter((row) => rowText(row).includes("MEMBERSHIP"))
+      .reduce((sum, row) => sum + moneyValue(row), 0);
 
-      if (warning.severity === "PROTECTED") forest.protectedCount += 1;
-      if (warning.severity === "ATTENTION") forest.attentionCount += 1;
-      if (warning.severity === "CRITICAL") forest.criticalCount += 1;
-      if (warning.reason === "Valuation Pending") forest.pendingValuation += 1;
-      if (warning.reason === "Not Subscribed" || warning.reason === "Care Expired") forest.needsCare += 1;
-    });
-
-    return Array.from(map.values()).sort((a, b) => {
-      const scoreA = a.criticalCount * 5 + a.attentionCount * 2 + a.needsCare;
-      const scoreB = b.criticalCount * 5 + b.attentionCount * 2 + b.needsCare;
-      return scoreB - scoreA;
-    });
-  }, [trees, groups, profileMap, groupMap]);
-
-  const alertRows = useMemo<AlertRow[]>(() => {
-    const treeAlerts = trees
-      .map((tree) => {
-        const warning = treeWarning(tree);
-        if (warning.severity === "PROTECTED") return null;
-
-        const group = tree.group_id ? groupMap.get(String(tree.group_id)) : null;
-        const customerProfileId = tree.customer_profile_id || tree.profile_id || null;
-        const customer = customerProfileId ? profileMap.get(String(customerProfileId)) : null;
-
-        return {
-          key: `tree-${tree.id}`,
-          severity: warning.severity,
-          reason: warning.reason,
-          treeName: treeDisplayName(tree),
-          forestName: group ? forestNameFromGroup(group) : tree.tree_group_name || "Ungrouped Forest",
-          customerName: customerName(customer, customerProfileId),
-          customerEmail: customer?.email || "No email",
-          createdAt: tree.updated_at || tree.created_at || null,
-        };
+    const marketplaceFees = data.treasury
+      .filter((row) => {
+        const text = rowText(row);
+        return text.includes("MARKETPLACE") || text.includes("TREE_PURCHASE") || text.includes("TECHNICAL_FEE") || text.includes("PLATFORM_FEE");
       })
-      .filter(Boolean) as AlertRow[];
+      .reduce((sum, row) => sum + moneyValue(row), 0);
 
-    const valuationAlerts = operationRequests
-      .filter((request) => {
-        const text = `${request.request_type || ""} ${request.operation_type || ""} ${request.service_name || ""}`.toUpperCase();
-        const status = String(request.status || "").toUpperCase();
-        return text.includes("VALUATION") && ["PENDING", "REQUESTED", "PAID"].includes(status);
-      })
-      .map((request) => {
-        const customerProfileId = request.customer_profile_id || request.profile_id || null;
-        const customer = customerProfileId ? profileMap.get(String(customerProfileId)) : null;
-        const group = request.group_id ? groupMap.get(String(request.group_id)) : null;
-        const tree = request.tree_id ? trees.find((item) => String(item.id) === String(request.tree_id)) : null;
+    return {
+      pendingOperations,
+      submittedTasks,
+      pendingMemberships,
+      pendingCashin,
+      pendingCashout,
+      pendingSellTree,
+      qrPending,
+      supportTickets,
+      assigned,
+      inProgress,
+      submitted,
+      completed,
+      activeGardeners,
+      tasksAssigned,
+      totalTreasury,
+      todayRevenue,
+      membershipRevenue,
+      marketplaceFees,
+    };
+  }, [data]);
 
-        return {
-          key: `valuation-${request.id}`,
-          severity: "ATTENTION" as const,
-          reason: "Valuation Pending",
-          treeName: tree ? treeDisplayName(tree) : "Forest Valuation Request",
-          forestName: group ? forestNameFromGroup(group) : tree?.tree_group_name || "Customer Forest",
-          customerName: customerName(customer, customerProfileId),
-          customerEmail: customer?.email || "No email",
-          createdAt: request.created_at || request.requested_at || null,
-        };
-      });
-
-    return [...treeAlerts, ...valuationAlerts].sort((a, b) => {
-      const severityA = a.severity === "CRITICAL" ? 2 : 1;
-      const severityB = b.severity === "CRITICAL" ? 2 : 1;
-      if (severityB !== severityA) return severityB - severityA;
-
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA;
-    });
-  }, [trees, operationRequests, profileMap, groupMap]);
-
-  const totalProtected = forestRows.reduce((sum, forest) => sum + forest.protectedCount, 0);
-  const totalAttention = forestRows.reduce((sum, forest) => sum + forest.attentionCount, 0);
-  const totalCritical = forestRows.reduce((sum, forest) => sum + forest.criticalCount, 0);
-  const pendingValuation = forestRows.reduce((sum, forest) => sum + forest.pendingValuation, 0);
-  const needsCare = forestRows.reduce((sum, forest) => sum + forest.needsCare, 0);
+  const latestOperations = data.operations.slice(0, 5);
+  const latestTasks = data.tasks.slice(0, 5);
 
   return (
-    <main className="min-h-screen bg-[#03130d] p-6 text-white md:p-8">
+    <main className="min-h-screen overflow-x-hidden bg-[#03130d] p-4 text-white md:p-8">
       <div className="fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(217,180,95,0.20),transparent_32%),radial-gradient(circle_at_top_right,rgba(52,120,77,0.30),transparent_30%),linear-gradient(180deg,#082015,#03130d_48%,#010805)]" />
 
-      <div className="mx-auto max-w-7xl space-y-8">
-        <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.07] p-7 shadow-2xl backdrop-blur-xl md:p-9">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.07] p-6 shadow-2xl backdrop-blur-xl md:p-9">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d9b45f]">
-                Arganwood V6 Admin
+              <p className="text-xs font-black uppercase tracking-[0.32em] text-[#d9b45f]">
+                Arganwood Admin
               </p>
               <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
                 Forest Command Center
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-white/65">
-                Premium forest control dashboard for customer forests, tree alerts, care risk,
-                valuation queue, and Admin → Gardener sync.
+                Action-first control center for operations, QR tagging, memberships, treasury, gardeners, and customer support.
               </p>
             </div>
 
             <button
               onClick={loadDashboard}
               disabled={loading}
-              className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-6 py-4 font-black text-[#f7d774] shadow-lg shadow-black/20 transition hover:bg-[#d9b45f]/25 disabled:opacity-50"
+              className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-6 py-4 font-black text-[#f7d774] transition hover:bg-[#d9b45f]/25 disabled:opacity-50"
             >
-              {loading ? "Refreshing..." : "Refresh Center"}
+              {loading ? "Refreshing..." : "Refresh Dashboard"}
             </button>
           </div>
 
@@ -334,186 +375,169 @@ export default function AdminDashboardPage() {
               {message}
             </div>
           )}
-
-          <div className="mt-8 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-            <HeroStat label="Forests" value={forestRows.length} />
-            <HeroStat label="Total Trees" value={trees.length} />
-            <HeroStat label="Protected" value={totalProtected} tone="green" />
-            <HeroStat label="Attention" value={totalAttention} tone="yellow" />
-            <HeroStat label="Critical" value={totalCritical} tone="red" />
-            <HeroStat label="Needs Care" value={needsCare} tone="gold" />
-          </div>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[1.35fr_.85fr]">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <AttentionCard title="Pending Operations" value={summary.pendingOperations} href="/admin/operations" action="Assign gardener" />
+          <AttentionCard title="Tasks for Review" value={summary.submittedTasks} href="/admin/operations" action="Review evidence" tone="purple" />
+          <AttentionCard title="Pending Membership" value={summary.pendingMemberships} href="/admin/membership" action="Approve access" />
+          <AttentionCard title="QR Tags Pending" value={summary.qrPending} href="/admin/qr-tags" action="Print / install QR" tone="green" />
+          <AttentionCard title="Pending Cash-In" value={summary.pendingCashin} href="/admin/cash-in" action="Verify payment" />
+          <AttentionCard title="Pending Cash-Out" value={summary.pendingCashout} href="/admin/withdrawals" action="Process payout" tone="red" />
+          <AttentionCard title="Pending Sell Tree" value={summary.pendingSellTree} href="/admin/sell-tree" action="Review offer" />
+          <AttentionCard title="Support Tickets" value={summary.supportTickets} href="/admin/support" action="Reply customer" tone="blue" />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[1.25fr_.75fr]">
           <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]/80">
-                  Forest Center
+                  Operations Snapshot
                 </p>
-                <h2 className="mt-2 text-3xl font-black text-white">Customer Forests</h2>
+                <h2 className="mt-2 text-3xl font-black text-white">Admin → Gardener Flow</h2>
               </div>
 
-              <a
+              <Link
                 href="/admin/operations"
-                className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-center text-sm font-black text-[#071f16] shadow-lg shadow-black/20"
+                className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-center text-sm font-black text-[#071f16]"
               >
-                Open Operations
-              </a>
+                Open Operations Queue
+              </Link>
             </div>
 
-            <div className="mt-6 grid gap-4">
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Metric label="Assigned" value={summary.assigned} />
+              <Metric label="In Progress" value={summary.inProgress} tone="yellow" />
+              <Metric label="Submitted" value={summary.submitted} tone="purple" />
+              <Metric label="Completed" value={summary.completed} tone="green" />
+            </div>
+
+            <div className="mt-6 space-y-3">
               {loading ? (
-                <EmptyCard text="Loading forest center..." />
-              ) : forestRows.length === 0 ? (
-                <EmptyCard text="No forests yet. Trees are currently reset to 0." />
+                <EmptyCard text="Loading operations..." />
+              ) : latestOperations.length === 0 ? (
+                <EmptyCard text="No operation requests yet." />
               ) : (
-                forestRows.map((forest) => (
-                  <ForestCard key={forest.key} forest={forest} />
+                latestOperations.map((row) => (
+                  <QueueRow
+                    key={row.id}
+                    title={serviceName(row)}
+                    subtitle={`${friendlyStatus(row.status || row.assignment_status)} • ${formatDate(row.created_at || row.requested_at)}`}
+                    href="/admin/operations"
+                  />
                 ))
               )}
             </div>
           </div>
 
           <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]/80">
-                Tree Alert Center
-              </p>
-              <h2 className="mt-2 text-3xl font-black text-white">Warnings</h2>
-              <p className="mt-2 text-sm text-white/55">
-                Critical alerts first, then attention items.
-              </p>
+            <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]/80">
+              Gardener Snapshot
+            </p>
+            <h2 className="mt-2 text-3xl font-black text-white">Field Team</h2>
+
+            <div className="mt-6 grid gap-4">
+              <Metric label="Active Gardeners" value={summary.activeGardeners} tone="green" />
+              <Metric label="Tasks Assigned" value={summary.tasksAssigned} />
+              <Metric label="Submitted Tasks" value={summary.submittedTasks} tone="purple" />
             </div>
 
-            <div className="mt-6 space-y-4">
-              {loading ? (
-                <EmptyCard text="Loading alerts..." />
-              ) : alertRows.length === 0 ? (
-                <div className="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-5">
-                  <p className="font-black text-emerald-100">All clear</p>
-                  <p className="mt-1 text-sm text-emerald-100/70">No urgent forest alerts.</p>
-                </div>
+            <div className="mt-6 space-y-3">
+              {latestTasks.length === 0 ? (
+                <EmptyCard text="No gardener task logs yet." />
               ) : (
-                alertRows.slice(0, 14).map((alert) => <AlertCard key={alert.key} alert={alert} />)
+                latestTasks.map((task) => (
+                  <QueueRow
+                    key={task.id}
+                    title={task.task_type || task.source_type || "Gardener Task"}
+                    subtitle={`${friendlyStatus(task.status)} • Evidence ${friendlyStatus(task.evidence_status)}`}
+                    href="/admin/operations"
+                  />
+                ))
               )}
             </div>
           </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-3">
-          <SummaryCard title="Pending Valuation" value={pendingValuation} subtitle="Waiting for admin/gardener action" />
-          <SummaryCard title="Open Requests" value={operationRequests.length} subtitle="Tree operation request queue" />
-          <SummaryCard title="Profiles" value={profiles.length} subtitle="Registered customer/admin/gardener profiles" />
+        <section className="grid gap-6 lg:grid-cols-4">
+          <TreasuryCard title="Platform Treasury" value={peso(summary.totalTreasury)} href="/admin/treasury" />
+          <TreasuryCard title="Today Revenue" value={peso(summary.todayRevenue)} href="/admin/treasury" />
+          <TreasuryCard title="Membership Revenue" value={peso(summary.membershipRevenue)} href="/admin/membership" />
+          <TreasuryCard title="Marketplace / Fees" value={peso(summary.marketplaceFees)} href="/admin/treasury" />
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <NavCard title="Customers" href="/admin/customers" description="Profiles, KYC, account status" />
+          <NavCard title="Memberships" href="/admin/membership" description="Annual membership approvals" />
+          <NavCard title="Caretakers" href="/admin/caretakers" description="Gardener records and status" />
+          <NavCard title="Caretaker Hires" href="/admin/caretaker-hires" description="Customer hire requests" />
+          <NavCard title="Forests / Trees" href="/admin/tree-purchases" description="Tree purchase records" />
+          <NavCard title="Sell Requests" href="/admin/sell-tree" description="Tree sale review queue" />
+          <NavCard title="Cash-In" href="/admin/cash-in" description="Customer funding approvals" />
+          <NavCard title="Cash-Out" href="/admin/withdrawals" description="Withdrawal processing" />
+          <NavCard title="Wallet" href="/admin/wallet" description="Wallet records and history" />
+          <NavCard title="Reports" href="/admin/reports" description="Operational summaries" />
+          <NavCard title="Analytics" href="/admin/analytics" description="Performance view" />
+          <NavCard title="Treasury" href="/admin/treasury" description="Platform treasury records" />
         </section>
       </div>
     </main>
   );
 }
 
-function ForestCard({ forest }: { forest: ForestRow }) {
-  const risk =
-    forest.criticalCount > 0
-      ? "border-red-400/25 bg-red-500/[0.08]"
-      : forest.attentionCount > 0
-      ? "border-yellow-400/25 bg-yellow-500/[0.08]"
-      : "border-emerald-400/20 bg-emerald-500/[0.07]";
+function AttentionCard({
+  title,
+  value,
+  href,
+  action,
+  tone,
+}: {
+  title: string;
+  value: number;
+  href: string;
+  action: string;
+  tone?: "green" | "purple" | "red" | "blue";
+}) {
+  const color =
+    tone === "green"
+      ? "text-emerald-200"
+      : tone === "purple"
+      ? "text-purple-200"
+      : tone === "red"
+      ? "text-red-200"
+      : tone === "blue"
+      ? "text-blue-200"
+      : "text-[#d9b45f]";
 
   return (
-    <article className={`rounded-3xl border p-5 ${risk}`}>
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <p className="text-sm font-bold text-white/55">{forest.customerName}</p>
-          <h3 className="mt-1 text-2xl font-black text-[#ffe49a]">🌳 {forest.forestName}</h3>
-          <p className="mt-1 text-xs font-semibold text-white/40">{forest.customerEmail}</p>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-6 lg:min-w-[620px]">
-          <MiniStat label="Trees" value={forest.totalTrees} />
-          <MiniStat label="Protected" value={forest.protectedCount} tone="green" />
-          <MiniStat label="Attention" value={forest.attentionCount} tone="yellow" />
-          <MiniStat label="Critical" value={forest.criticalCount} tone="red" />
-          <MiniStat label="Valuation" value={forest.pendingValuation} tone="gold" />
-          <MiniStat label="Needs Care" value={forest.needsCare} tone="gold" />
-        </div>
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-2">
-        {forest.trees.slice(0, 8).map((tree) => {
-          const warning = treeWarning(tree);
-          const color =
-            warning.severity === "CRITICAL"
-              ? "border-red-300/25 bg-red-500/10 text-red-100"
-              : warning.severity === "ATTENTION"
-              ? "border-yellow-300/25 bg-yellow-500/10 text-yellow-100"
-              : "border-emerald-300/20 bg-emerald-500/10 text-emerald-100";
-
-          return (
-            <span key={tree.id} className={`rounded-full border px-3 py-1 text-xs font-black ${color}`}>
-              {treeDisplayName(tree)}
-            </span>
-          );
-        })}
-
-        {forest.trees.length > 8 && (
-          <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-black text-white/50">
-            +{forest.trees.length - 8} more
-          </span>
-        )}
-      </div>
-    </article>
-  );
-}
-
-function AlertCard({ alert }: { alert: AlertRow }) {
-  const critical = alert.severity === "CRITICAL";
-
-  return (
-    <article
-      className={`rounded-3xl border p-5 ${
-        critical ? "border-red-400/25 bg-red-500/10" : "border-yellow-400/25 bg-yellow-500/10"
-      }`}
+    <Link
+      href={href}
+      className="rounded-[1.6rem] border border-white/10 bg-white/[0.07] p-5 text-white no-underline shadow-2xl backdrop-blur-xl transition hover:border-[#d9b45f]/40 hover:bg-white/[0.10]"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-lg font-black text-white">
-            {critical ? "🔴" : "🟡"} {alert.treeName}
-          </p>
-          <p className="mt-1 text-sm font-black text-[#ffe49a]">{alert.reason}</p>
-        </div>
-
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-black text-white/70">
-          {alert.severity}
-        </span>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
-        <p className="text-sm font-black text-white/80">🌳 {alert.forestName}</p>
-        <p className="mt-1 text-xs font-semibold text-white/45">
-          {alert.customerName} • {alert.customerEmail}
-        </p>
-      </div>
-    </article>
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-white/45">{title}</p>
+      <p className={`mt-3 text-4xl font-black ${color}`}>{value}</p>
+      <p className="mt-2 text-sm font-bold text-white/55">{action}</p>
+    </Link>
   );
 }
 
-function HeroStat({
+function Metric({
   label,
   value,
   tone,
 }: {
   label: string;
   value: number;
-  tone?: "green" | "yellow" | "red" | "gold";
+  tone?: "green" | "yellow" | "purple";
 }) {
   const color =
     tone === "green"
       ? "text-emerald-200"
       : tone === "yellow"
       ? "text-yellow-200"
-      : tone === "red"
-      ? "text-red-200"
+      : tone === "purple"
+      ? "text-purple-200"
       : "text-[#d9b45f]";
 
   return (
@@ -524,49 +548,44 @@ function HeroStat({
   );
 }
 
-function MiniStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "green" | "yellow" | "red" | "gold";
-}) {
-  const color =
-    tone === "green"
-      ? "text-emerald-200"
-      : tone === "yellow"
-      ? "text-yellow-200"
-      : tone === "red"
-      ? "text-red-200"
-      : tone === "gold"
-      ? "text-[#ffe49a]"
-      : "text-white";
-
+function TreasuryCard({ title, value, href }: { title: string; value: string; href: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
-      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-white/40">{label}</p>
-      <p className={`mt-2 text-xl font-black ${color}`}>{value}</p>
-    </div>
+    <Link
+      href={href}
+      className="rounded-[2rem] border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-6 text-white no-underline shadow-2xl backdrop-blur-xl transition hover:bg-[#d9b45f]/15"
+    >
+      <p className="text-xs font-black uppercase tracking-[0.2em] text-[#ffe49a]/70">{title}</p>
+      <p className="mt-3 break-words text-3xl font-black text-[#ffe49a]">{value}</p>
+    </Link>
   );
 }
 
-function SummaryCard({
-  title,
-  value,
-  subtitle,
-}: {
-  title: string;
-  value: number;
-  subtitle: string;
-}) {
+function NavCard({ title, href, description }: { title: string; href: string; description: string }) {
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
-      <p className="text-xs font-black uppercase tracking-[0.25em] text-[#d9b45f]/80">{title}</p>
-      <p className="mt-3 text-4xl font-black text-white">{value}</p>
-      <p className="mt-2 text-sm text-white/50">{subtitle}</p>
-    </div>
+    <Link
+      href={href}
+      className="rounded-[1.5rem] border border-white/10 bg-black/20 p-5 text-white no-underline transition hover:border-[#d9b45f]/35 hover:bg-white/[0.07]"
+    >
+      <p className="text-lg font-black text-white">{title}</p>
+      <p className="mt-2 text-sm font-semibold leading-relaxed text-white/50">{description}</p>
+    </Link>
+  );
+}
+
+function QueueRow({ title, subtitle, href }: { title: string; subtitle: string; href: string }) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-white no-underline transition hover:bg-white/[0.06]"
+    >
+      <div className="min-w-0">
+        <p className="break-words font-black text-white">{title}</p>
+        <p className="mt-1 break-words text-sm font-semibold text-white/45">{subtitle}</p>
+      </div>
+      <span className="shrink-0 rounded-full border border-[#d9b45f]/20 bg-[#d9b45f]/10 px-3 py-1 text-xs font-black text-[#ffe49a]">
+        Open
+      </span>
+    </Link>
   );
 }
 
@@ -578,86 +597,61 @@ function EmptyCard({ text }: { text: string }) {
   );
 }
 
-function customerName(customer: Row | null | undefined, fallbackId?: string | null) {
-  if (!customer) return fallbackId ? "Customer" : "Unassigned Customer";
-  return customer.full_name || customer.email || "Customer";
+function normalize(value: any) {
+  return String(value || "").trim().replace(/\s+/g, "_").toUpperCase();
 }
 
-function forestNameFromGroup(group: Row | null | undefined) {
-  if (!group) return "Customer Forest";
-  return group.forest_name || group.group_name || group.block_name || group.farm_location || "Customer Forest";
+function friendlyStatus(value: any) {
+  const status = normalize(value || "PENDING");
+  return status.replaceAll("_", " ");
 }
 
-function treeDisplayName(tree: Row | null | undefined) {
-  if (!tree) return "Seedling";
-  return tree.display_name || tree.custom_name || "Seedling";
+function countStatus(rows: Row[], target: string) {
+  return rows.filter((row) => normalize(row.status || row.assignment_status) === target).length;
 }
 
-function treeWarning(tree: Row): {
-  severity: "PROTECTED" | "ATTENTION" | "CRITICAL";
-  reason: string;
-} {
-  const alertStatus = String(tree.alert_status || "").toUpperCase();
-  const alertReason = String(tree.alert_reason || "").trim();
-
-  if (alertStatus === "CRITICAL") return { severity: "CRITICAL", reason: alertReason || "Critical Alert" };
-  if (alertStatus === "ATTENTION" || alertStatus === "WARNING") return { severity: "ATTENTION", reason: alertReason || "Needs Attention" };
-
-  const careStatus = String(tree.care_status || "").toUpperCase();
-
-  if (careStatus.includes("NOT_SUBSCRIBED") || careStatus.includes("NOT ENROLLED")) {
-    return { severity: "CRITICAL", reason: "Not Subscribed" };
-  }
-
-  if (careStatus.includes("EXPIRED")) {
-    return { severity: "CRITICAL", reason: "Care Expired" };
-  }
-
-  const expiresAt = tree.care_expires_at ? new Date(tree.care_expires_at) : null;
-
-  if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
-    const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-
-    if (daysLeft < 0) return { severity: "CRITICAL", reason: "Care Expired" };
-    if (daysLeft <= 7) return { severity: "ATTENTION", reason: "Care Expiring Soon" };
-  }
-
-  const health = String(tree.last_health_status || tree.health_status || "").toUpperCase();
-
-  if (health.includes("CRITICAL") || health.includes("DISEASE") || health.includes("PEST") || health.includes("ISSUE")) {
-    return { severity: "CRITICAL", reason: "Health Issue" };
-  }
-
-  const latestUpdate = latestDate([
-    tree.last_photo_update_at,
-    tree.last_gps_update_at,
-    tree.last_health_report_at,
-  ]);
-
-  if (latestUpdate) {
-    const days = Math.floor((Date.now() - latestUpdate.getTime()) / (1000 * 60 * 60 * 24));
-    if (days > 30) return { severity: "ATTENTION", reason: "No Recent Update" };
-  }
-
-  const valuationStatus = String(tree.valuation_status || "").toUpperCase();
-
-  if (valuationStatus.includes("PENDING") || valuationStatus.includes("NEEDS_REVIEW") || tree.valuation_requested_at) {
-    return { severity: "ATTENTION", reason: "Valuation Pending" };
-  }
-
-  return { severity: "PROTECTED", reason: "Protected" };
+function serviceName(row: Row) {
+  return row.service_name || row.operation_type || row.request_type || "Tree Operation";
 }
 
-function latestDate(values: any[]) {
-  const dates = values
-    .map((value) => {
-      if (!value) return null;
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? null : date;
-    })
-    .filter(Boolean) as Date[];
+function moneyValue(row: Row) {
+  return Number(row.amount || row.total_amount || row.platform_fee || row.fee_amount || row.net_amount || 0);
+}
 
-  if (dates.length === 0) return null;
+function rowText(row: Row) {
+  return Object.values(row)
+    .join(" ")
+    .toUpperCase();
+}
 
-  return dates.sort((a, b) => b.getTime() - a.getTime())[0];
+function isToday(value: any) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function peso(value: number) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatDate(value: any) {
+  if (!value) return "No date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "No date";
+
+  return date.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }

@@ -1,6 +1,6 @@
-// app/dashboard/membership/page.tsx
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -63,6 +63,15 @@ type WalletTransaction = {
   created_at: string | null;
 };
 
+const MEMBERSHIP_BENEFITS = [
+  "Unlock Tree Operations and forest care requests",
+  "Request Sell Tree review when ready",
+  "Access QR verified tree records",
+  "Monitor portfolio activity and service history",
+  "View approved photo, GPS, and health evidence",
+  "Access customer support for your Arganwood account",
+];
+
 function peso(value: number) {
   return `₱${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -81,32 +90,6 @@ function formatDate(value: string | null | undefined) {
 
 function normalize(value: any) {
   return String(value || "").trim().toUpperCase();
-}
-
-function makeReference(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-}
-
-
-const PLAN_BENEFITS: Record<string, string[]> = {
-  BASIC: [
-    "Unlock Tree Operations",
-    "Unlock Sell Tree Requests",
-    "Access forestry maintenance services",
-    "Request photo, GPS, and health updates",
-    "Request valuation support",
-    "Keep trees eligible for sale review",
-  ],
-  PREMIUM: [],
-  LEGACY: [],
-};
-
-function getPlanTier(plan: MembershipPlan) {
-  return "BASIC";
-}
-
-function getPlanPosition(tier: string) {
-  return "Annual operations access";
 }
 
 export default function MembershipPage() {
@@ -170,7 +153,7 @@ export default function MembershipPage() {
       const currentProfile = await findProfile(user.id, user.email || "");
 
       if (!currentProfile) {
-        setMessage("Profile not found. Please check the customer profile row.");
+        setMessage("Profile not found. Please contact support.");
         setLoading(false);
         return;
       }
@@ -251,15 +234,20 @@ export default function MembershipPage() {
     return orders.find((order) => normalize(order.status) === "PENDING");
   }, [orders]);
 
-  async function payMembership(plan: MembershipPlan) {
+  const annualPlan = useMemo(() => {
+    return plans[0] || null;
+  }, [plans]);
+
+  const annualFee = Number(annualPlan?.annual_fee || pendingOrder?.amount || pendingOrder?.annual_fee || membership?.amount || 999);
+
+  async function payMembership() {
     setMessage("");
 
     if (!profile) return setMessage("Profile not loaded.");
     if (!wallet) return setMessage("Wallet not found. Please cash in first.");
+    if (!annualPlan) return setMessage("No active membership plan found.");
     if (activeMembership) return setMessage("Your Arganwood Annual Membership is already active.");
     if (pendingOrder) return setMessage("You already have a pending membership order waiting for admin approval.");
-
-    const annualFee = Number(plan.annual_fee || 999);
     if (walletBalance < annualFee) return setMessage("Insufficient wallet balance. Please cash in first.");
 
     setProcessing(true);
@@ -271,7 +259,7 @@ export default function MembershipPage() {
 
       if (error) throw error;
 
-      setMessage("Arganwood Annual Membership payment submitted. Admin approval will activate your membership.");
+      setMessage("Membership payment submitted. Admin approval will activate your Arganwood Annual Membership.");
       await loadData();
     } catch (error: any) {
       setMessage(error?.message || "Membership payment failed.");
@@ -282,123 +270,141 @@ export default function MembershipPage() {
 
   return (
     <main className="membershipPage">
-      <div className="membershipContainer">
+      <div className="membershipShell">
         <section className="hero">
-          <div>
-            <p className="eyebrow">Customer Membership</p>
+          <div className="heroCopy">
+            <p className="eyebrow">Arganwood Access</p>
             <h1>Arganwood Annual Membership</h1>
-            <span>
-              Arganwood Annual Membership unlocks Tree Operations and Sell Tree only. Wallet payment is processed by audited PostgreSQL RPC.
-            </span>
+            <p>
+              One simple annual membership for Tree Operations, Sell Tree access,
+              QR verified records, customer service, and portfolio monitoring.
+            </p>
+
+            <div className="heroActions">
+              <Link href="/dashboard">Back to Dashboard</Link>
+              <Link href="/dashboard/wallet">Open Wallet</Link>
+            </div>
           </div>
 
-          <div className="walletCard">
+          <div className="statusGlass">
+            <span className={`statusBadge ${activeMembership ? "active" : pendingOrder ? "pending" : ""}`}>
+              {activeMembership ? "ACTIVE" : pendingOrder ? "PENDING APPROVAL" : "NOT ACTIVE"}
+            </span>
+
+            <h2>{profile?.full_name || profile?.email || "Customer"}</h2>
             <p>Wallet Balance</p>
             <strong>{peso(walletBalance)}</strong>
-            <small>{profile?.full_name || profile?.email || "Customer"}</small>
           </div>
         </section>
 
-        {message && <div className="message">{message}</div>}
+        {message && <div className="messageBox">{message}</div>}
 
         {loading ? (
-          <div className="empty">Loading Arganwood Annual Membership...</div>
+          <div className="emptyBox">Loading membership records...</div>
         ) : (
           <>
-            <section className="stats">
-              <Card label="Wallet Balance" value={peso(walletBalance)} />
-              <Card label="Membership" value={profile?.membership_status || membership?.status || "INACTIVE"} />
-              <Card label="KYC" value={profile?.kyc_status || "NOT SUBMITTED"} />
+            <section className="summaryGrid">
+              <SummaryCard label="Membership Status" value={profile?.membership_status || membership?.status || "INACTIVE"} />
+              <SummaryCard label="Start Date" value={formatDate(membership?.start_date)} />
+              <SummaryCard label="Expiry Date" value={formatDate(membership?.expiry_date)} />
+              <SummaryCard label="KYC Status" value={profile?.kyc_status || "NOT SUBMITTED"} />
             </section>
 
-            {membership && (
-              <section className="currentBox">
-                <p className="eyebrow">Current Membership</p>
-                <h2>{membership.plan_name || "Arganwood Annual Membership"}</h2>
-                <span>
-                  Status: {membership.status || "UNKNOWN"} • Start: {formatDate(membership.start_date)} • Expiry:{" "}
-                  {formatDate(membership.expiry_date)}
-                </span>
-              </section>
-            )}
+            <section className="mainGrid">
+              <article className="membershipCard">
+                <div className="cardTop">
+                  <div>
+                    <p className="eyebrow">Membership Product</p>
+                    <h2>Arganwood Annual Membership</h2>
+                  </div>
 
-            {pendingOrder && (
-              <section className="pendingBox">
-                <p className="eyebrow">Pending Approval</p>
-                <h2>{peso(Number(pendingOrder.amount || pendingOrder.annual_fee || 0))}</h2>
-                <span>
-                  Submitted: {formatDate(pendingOrder.submitted_at || pendingOrder.created_at)}. Admin approval will activate your membership.
-                </span>
-              </section>
-            )}
+                  <div className="priceBox">
+                    <small>Annual Fee</small>
+                    <b>{peso(annualFee)}</b>
+                  </div>
+                </div>
 
-            <section className="planGrid">
-              {plans.length === 0 ? (
-                <div className="empty">No active membership plans found.</div>
-              ) : (
-                plans.map((plan) => {
-                  const annualFee = Number(plan.annual_fee || 0);
-                  const disabled = processing || !!pendingOrder || activeMembership;
-                  const tier = getPlanTier(plan);
-                  const benefits = PLAN_BENEFITS[tier] || PLAN_BENEFITS.BASIC;
+                <p className="membershipDescription">
+                  {annualPlan?.description ||
+                    "Annual access for Arganwood customer features and forest operation services."}
+                </p>
 
-                  return (
-                    <article className={`planCard ${tier.toLowerCase()}`} key={plan.id}>
-                      <div className="planTopline">
-                        <p className="eyebrow">Forest Plan</p>
-                        <em>{getPlanPosition(tier)}</em>
-                      </div>
-                      <h2>{plan.name || "Arganwood Annual Membership"}</h2>
-                      <strong>{peso(annualFee)}</strong>
-                      <small>₱999 / Year</small>
-                      <span>{plan.description || "Annual access for Tree Operations and Sell Tree services."}</span>
+                <div className="benefitGrid">
+                  {MEMBERSHIP_BENEFITS.map((benefit) => (
+                    <div className="benefit" key={benefit}>
+                      <span>✓</span>
+                      <p>{benefit}</p>
+                    </div>
+                  ))}
+                </div>
 
-                      <ul className="benefitList">
-                        {benefits.map((benefit) => (
-                          <li key={benefit}>
-                            <b>✓</b>
-                            <span>{benefit}</span>
-                          </li>
-                        ))}
-                      </ul>
+                <div className="actionBox">
+                  <button
+                    type="button"
+                    disabled={processing || !!pendingOrder || activeMembership || !annualPlan}
+                    onClick={payMembership}
+                  >
+                    {activeMembership
+                      ? "Membership Active"
+                      : pendingOrder
+                      ? "Waiting for Admin Approval"
+                      : processing
+                      ? "Processing..."
+                      : "Pay / Renew Membership"}
+                  </button>
 
-                      <button disabled={disabled} onClick={() => payMembership(plan)}>
-                        {activeMembership
-                          ? "Already Active"
-                          : pendingOrder
-                          ? "Waiting Approval"
-                          : processing
-                          ? "Processing..."
-                          : "Activate Membership"}
-                      </button>
-                    </article>
-                  );
-                })
-              )}
+                  <p>
+                    Payment and approval are handled by the existing audited membership RPC.
+                    Admin approval activates your access after submission.
+                  </p>
+                </div>
+              </article>
+
+              <aside className="timelineCard">
+                <p className="eyebrow">How It Works</p>
+                <h2>Approval Flow</h2>
+
+                <div className="timeline">
+                  <Step done={Boolean(pendingOrder || activeMembership)} title="Pay Membership" text="Submit annual payment from wallet." />
+                  <Step done={Boolean(pendingOrder || activeMembership)} title="Admin Review" text="Admin verifies and approves the order." />
+                  <Step done={activeMembership} title="Membership Activated" text="Your membership becomes ACTIVE." />
+                  <Step done={activeMembership} title="Access Features" text="Use Tree Operations, Sell Tree, QR records, and support." />
+                </div>
+
+                {pendingOrder && (
+                  <div className="pendingNotice">
+                    <strong>Pending Approval</strong>
+                    <p>
+                      Submitted {formatDate(pendingOrder.submitted_at || pendingOrder.created_at)}.
+                      Please wait for admin approval.
+                    </p>
+                  </div>
+                )}
+              </aside>
             </section>
 
-            <section className="panel twoCols">
-              <div className="minCol">
+            <section className="historyGrid">
+              <div className="panel">
                 <div className="panelHead">
-                  <h2>Membership History</h2>
-                  <button onClick={loadData}>Refresh</button>
+                  <div>
+                    <p className="eyebrow">Membership Orders</p>
+                    <h2>History</h2>
+                  </div>
+                  <button type="button" onClick={loadData}>Refresh</button>
                 </div>
 
                 {orders.length === 0 ? (
-                  <div className="empty small">No membership orders yet.</div>
+                  <div className="emptySmall">No membership orders yet.</div>
                 ) : (
                   <div className="list">
                     {orders.map((order) => (
                       <div className="row" key={order.id}>
                         <div>
                           <strong>{order.plan_name || "Arganwood Annual Membership"}</strong>
-                          <p>
-                            {peso(Number(order.amount || order.annual_fee || 0))} • Submitted{" "}
-                            {formatDate(order.submitted_at || order.created_at)}
-                          </p>
+                          <p>{formatDate(order.submitted_at || order.created_at)}</p>
                         </div>
                         <span>
-                          {order.status || "PENDING"} • {order.payment_status || "UNKNOWN"}
+                          {peso(Number(order.amount || order.annual_fee || 0))} • {order.status || "PENDING"}
                         </span>
                       </div>
                     ))}
@@ -406,13 +412,16 @@ export default function MembershipPage() {
                 )}
               </div>
 
-              <div className="minCol">
+              <div className="panel">
                 <div className="panelHead">
-                  <h2>Wallet Logs</h2>
+                  <div>
+                    <p className="eyebrow">Wallet Logs</p>
+                    <h2>Membership Payments</h2>
+                  </div>
                 </div>
 
                 {transactions.length === 0 ? (
-                  <div className="empty small">No membership wallet logs yet.</div>
+                  <div className="emptySmall">No membership wallet logs yet.</div>
                 ) : (
                   <div className="list">
                     {transactions.map((tx) => (
@@ -435,344 +444,411 @@ export default function MembershipPage() {
       </div>
 
       <style>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         .membershipPage {
-          width: 100%;
-          min-width: 0;
           min-height: 100vh;
+          width: 100%;
           overflow-x: hidden;
           color: #f8f1d8;
           font-family: Arial, Helvetica, sans-serif;
           background:
             radial-gradient(circle at 15% 5%, rgba(214,178,94,.24), transparent 28%),
-            radial-gradient(circle at 90% 10%, rgba(65,120,82,.22), transparent 30%),
-            linear-gradient(180deg, #07140f 0%, #0d2118 48%, #07120d 100%);
+            radial-gradient(circle at 88% 10%, rgba(65,120,82,.22), transparent 32%),
+            linear-gradient(180deg, #06110d 0%, #0d2118 48%, #07120d 100%);
         }
 
-        .membershipContainer {
+        .membershipShell {
           width: 100%;
           max-width: 1280px;
-          min-width: 0;
           margin: 0 auto;
-          padding: 30px;
+          padding: 28px;
         }
 
         .hero {
-          display: flex;
-          justify-content: space-between;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 360px;
           gap: 18px;
-          margin-bottom: 22px;
-          min-width: 0;
+          margin-bottom: 18px;
         }
 
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #d6b25e;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .14em;
-          font-size: 12px;
-        }
-
-        .hero h1 {
-          margin: 0;
-          font-size: clamp(34px, 5vw, 46px);
-          color: #fff8dc;
-          letter-spacing: -1.6px;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 10px;
-          color: rgba(248,241,216,.72);
-          max-width: 820px;
-          line-height: 1.6;
-        }
-
-        .walletCard,
-        .planCard,
-        .currentBox,
-        .pendingBox,
+        .heroCopy,
+        .statusGlass,
+        .summaryCard,
+        .membershipCard,
+        .timelineCard,
         .panel,
-        .message,
-        .empty,
-        .card {
+        .messageBox,
+        .emptyBox {
           border: 1px solid rgba(214,178,94,.22);
           background: linear-gradient(180deg, rgba(255,255,255,.105), rgba(255,255,255,.055));
           backdrop-filter: blur(18px);
           box-shadow: 0 24px 60px rgba(0,0,0,.28);
         }
 
-        .walletCard {
-          width: 100%;
-          max-width: 330px;
-          min-width: 260px;
-          border-radius: 28px;
-          padding: 24px;
-        }
-
-        .walletCard p,
-        .walletCard small {
-          margin: 0;
-          color: rgba(248,241,216,.68);
-          font-weight: 900;
-        }
-
-        .walletCard strong {
-          display: block;
-          margin: 10px 0;
-          font-size: clamp(26px, 4vw, 34px);
-          color: #d6b25e;
-          word-break: break-word;
-        }
-
-        .message,
-        .empty {
-          width: 100%;
-          min-width: 0;
-          padding: 18px;
-          border-radius: 22px;
-          margin-bottom: 18px;
-          color: #fff8dc;
-          font-weight: 900;
-        }
-
-        .stats {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-          min-width: 0;
-        }
-
-        .card {
-          min-width: 0;
-          border-radius: 24px;
-          padding: 20px;
-        }
-
-        .card p {
-          margin: 0;
-          color: rgba(248,241,216,.62);
-          font-size: 12px;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-        }
-
-        .card h3 {
-          margin: 10px 0 0;
-          color: #fff8dc;
-          font-size: clamp(20px, 3vw, 26px);
-          overflow-wrap: anywhere;
-        }
-
-        .currentBox,
-        .pendingBox {
-          width: 100%;
-          min-width: 0;
-          border-radius: 28px;
-          padding: 22px;
-          margin-bottom: 18px;
-        }
-
-        .currentBox h2,
-        .pendingBox h2 {
-          margin: 0;
-          color: #fff8dc;
-          font-size: clamp(24px, 4vw, 30px);
-        }
-
-        .currentBox span,
-        .pendingBox span {
-          display: block;
-          margin-top: 8px;
-          color: rgba(248,241,216,.68);
-          line-height: 1.5;
-        }
-
-        .planGrid {
-          width: 100%;
-          min-width: 0;
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
-          margin-bottom: 18px;
-        }
-
-        .planCard {
-          min-width: 0;
-          position: relative;
-          overflow: hidden;
-          border-radius: 28px;
-          padding: 24px;
-          min-height: 560px;
-          display: flex;
-          flex-direction: column;
-        }
-
-
-        .planCard.premium {
-          border-color: rgba(214,178,94,.48);
-          box-shadow: 0 30px 80px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.14);
-        }
-
-        .planCard.legacy {
-          border-color: rgba(255,224,137,.58);
+        .heroCopy {
+          border-radius: 32px;
+          padding: 30px;
           background:
-            radial-gradient(circle at 85% 5%, rgba(214,178,94,.20), transparent 34%),
-            linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.055));
+            linear-gradient(rgba(2,20,12,.70), rgba(2,20,12,.88)),
+            url('/images/agarwood-real-tree.jpg');
+          background-size: cover;
+          background-position: center;
         }
 
-        .planTopline {
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
-          align-items: center;
-          margin-bottom: 6px;
-        }
-
-        .planTopline em {
-          padding: 7px 10px;
-          border-radius: 999px;
-          background: rgba(214,178,94,.14);
-          border: 1px solid rgba(214,178,94,.22);
-          color: #f6dc98;
-          font-size: 11px;
-          font-style: normal;
+        .eyebrow {
+          margin: 0 0 9px;
+          color: #d6b25e;
+          font-size: 12px;
           font-weight: 950;
-          white-space: nowrap;
+          letter-spacing: .16em;
+          text-transform: uppercase;
         }
 
-        .planCard h2 {
-          margin: 0;
+        h1,
+        h2,
+        p {
+          margin-top: 0;
+        }
+
+        .hero h1 {
+          margin-bottom: 14px;
           color: #fff8dc;
-          font-size: 26px;
-          overflow-wrap: anywhere;
+          font-size: clamp(36px, 6vw, 58px);
+          line-height: .95;
+          letter-spacing: -2px;
         }
 
-        .planCard strong {
-          display: block;
-          margin-top: 14px;
-          color: #d6b25e;
-          font-size: clamp(26px, 4vw, 34px);
-          overflow-wrap: anywhere;
+        .hero p,
+        .membershipDescription,
+        .actionBox p,
+        .timelineCard p,
+        .row p {
+          color: rgba(248,241,216,.68);
+          line-height: 1.65;
         }
 
-        .planCard small {
-          margin-top: 4px;
-          color: rgba(248,241,216,.62);
-          font-weight: 900;
-        }
-
-        .planCard span {
-          display: block;
-          margin: 16px 0;
-          color: rgba(248,241,216,.7);
-          line-height: 1.6;
-          flex: 1;
-        }
-
-
-        .benefitList {
-          list-style: none;
-          padding: 0;
-          margin: 0 0 20px;
-          display: grid;
-          gap: 10px;
-          flex: 1;
-        }
-
-        .benefitList li {
+        .heroActions {
           display: flex;
-          align-items: flex-start;
-          gap: 10px;
-          padding: 10px 11px;
-          border-radius: 16px;
-          background: rgba(0,0,0,.18);
-          border: 1px solid rgba(214,178,94,.11);
-          color: rgba(248,241,216,.82);
-          font-size: 13px;
-          line-height: 1.35;
-          font-weight: 800;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-top: 24px;
         }
 
-        .benefitList b {
-          color: #d6b25e;
-          flex: 0 0 auto;
-        }
-
-        .benefitList span {
-          margin: 0;
-          color: inherit;
-          line-height: inherit;
-          flex: initial;
-        }
-
-        button {
+        .heroActions a,
+        .panelHead button,
+        .actionBox button {
           border: 0;
           border-radius: 999px;
-          padding: 12px 16px;
+          padding: 13px 17px;
           background: linear-gradient(135deg, #d6b25e, #8c6a3c);
           color: #07140f;
           font-weight: 950;
+          text-decoration: none;
           cursor: pointer;
-          white-space: nowrap;
         }
 
-        button:disabled {
+        .heroActions a:nth-child(2) {
+          background: rgba(255,255,255,.10);
+          color: #fff8dc;
+          border: 1px solid rgba(214,178,94,.22);
+        }
+
+        .statusGlass {
+          border-radius: 32px;
+          padding: 24px;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          min-height: 290px;
+        }
+
+        .statusBadge {
+          align-self: flex-start;
+          border-radius: 999px;
+          padding: 9px 12px;
+          background: rgba(255,255,255,.10);
+          border: 1px solid rgba(214,178,94,.22);
+          color: #f8f1d8;
+          font-size: 12px;
+          font-weight: 950;
+        }
+
+        .statusBadge.active {
+          background: rgba(16,185,129,.16);
+          border-color: rgba(16,185,129,.35);
+          color: #b8f7d1;
+        }
+
+        .statusBadge.pending {
+          background: rgba(214,178,94,.16);
+          border-color: rgba(214,178,94,.38);
+          color: #ffe49a;
+        }
+
+        .statusGlass h2 {
+          margin: 22px 0 0;
+          color: #fff8dc;
+          font-size: 25px;
+          overflow-wrap: anywhere;
+        }
+
+        .statusGlass p {
+          margin: auto 0 8px;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          color: rgba(248,241,216,.55);
+        }
+
+        .statusGlass strong {
+          color: #d6b25e;
+          font-size: clamp(28px, 4vw, 38px);
+          overflow-wrap: anywhere;
+        }
+
+        .messageBox,
+        .emptyBox {
+          border-radius: 22px;
+          padding: 18px;
+          margin-bottom: 18px;
+          color: #fff8dc;
+          font-weight: 900;
+        }
+
+        .summaryGrid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          margin-bottom: 18px;
+        }
+
+        .summaryCard {
+          border-radius: 24px;
+          padding: 18px;
+        }
+
+        .summaryCard p {
+          margin: 0;
+          color: rgba(248,241,216,.55);
+          font-size: 11px;
+          font-weight: 950;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .summaryCard h3 {
+          margin: 10px 0 0;
+          color: #fff8dc;
+          font-size: 22px;
+          overflow-wrap: anywhere;
+        }
+
+        .mainGrid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+          gap: 18px;
+          margin-bottom: 18px;
+        }
+
+        .membershipCard,
+        .timelineCard,
+        .panel {
+          border-radius: 30px;
+          padding: 24px;
+          overflow: hidden;
+        }
+
+        .cardTop {
+          display: flex;
+          justify-content: space-between;
+          gap: 18px;
+          align-items: flex-start;
+          margin-bottom: 14px;
+        }
+
+        .membershipCard h2,
+        .timelineCard h2,
+        .panel h2 {
+          margin: 0;
+          color: #fff8dc;
+          font-size: clamp(26px, 4vw, 34px);
+          letter-spacing: -.8px;
+        }
+
+        .priceBox {
+          min-width: 160px;
+          border-radius: 22px;
+          padding: 16px;
+          background: rgba(0,0,0,.26);
+          border: 1px solid rgba(214,178,94,.18);
+          text-align: right;
+        }
+
+        .priceBox small {
+          display: block;
+          color: rgba(248,241,216,.55);
+          font-weight: 900;
+        }
+
+        .priceBox b {
+          display: block;
+          margin-top: 8px;
+          color: #d6b25e;
+          font-size: 24px;
+        }
+
+        .benefitGrid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          margin: 22px 0;
+        }
+
+        .benefit {
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+          border-radius: 18px;
+          padding: 14px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
+        }
+
+        .benefit span {
+          width: 26px;
+          height: 26px;
+          flex: 0 0 auto;
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          background: rgba(214,178,94,.18);
+          color: #d6b25e;
+          font-weight: 950;
+        }
+
+        .benefit p {
+          margin: 0;
+          color: rgba(248,241,216,.78);
+          font-weight: 800;
+          line-height: 1.45;
+        }
+
+        .actionBox {
+          border-radius: 22px;
+          padding: 18px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.14);
+        }
+
+        .actionBox button {
+          width: 100%;
+          font-size: 15px;
+        }
+
+        .actionBox button:disabled {
           cursor: not-allowed;
           opacity: .55;
         }
 
-        .panel {
-          width: 100%;
-          min-width: 0;
-          border-radius: 28px;
-          padding: 22px;
+        .actionBox p {
+          margin: 12px 0 0;
+          font-size: 13px;
         }
 
-        .twoCols {
+        .timeline {
+          display: grid;
+          gap: 12px;
+          margin-top: 20px;
+        }
+
+        .step {
+          display: grid;
+          grid-template-columns: 38px 1fr;
+          gap: 12px;
+          align-items: flex-start;
+          border-radius: 18px;
+          padding: 14px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
+        }
+
+        .stepIcon {
+          width: 34px;
+          height: 34px;
+          display: grid;
+          place-items: center;
+          border-radius: 50%;
+          background: rgba(255,255,255,.10);
+          color: rgba(248,241,216,.65);
+          font-weight: 950;
+        }
+
+        .step.done .stepIcon {
+          background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+          color: #07140f;
+        }
+
+        .step strong {
+          color: #fff8dc;
+        }
+
+        .step p {
+          margin: 4px 0 0;
+          font-size: 13px;
+        }
+
+        .pendingNotice {
+          margin-top: 18px;
+          border-radius: 20px;
+          padding: 16px;
+          background: rgba(214,178,94,.12);
+          border: 1px solid rgba(214,178,94,.24);
+        }
+
+        .pendingNotice strong {
+          color: #ffe49a;
+        }
+
+        .pendingNotice p {
+          margin: 6px 0 0;
+          font-size: 13px;
+        }
+
+        .historyGrid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 18px;
         }
 
-        .minCol {
-          min-width: 0;
-        }
-
         .panelHead {
           display: flex;
           justify-content: space-between;
-          align-items: center;
+          align-items: flex-start;
           gap: 14px;
           margin-bottom: 16px;
-          min-width: 0;
         }
 
-        .panelHead h2 {
-          margin: 0;
-          color: #fff8dc;
-          font-size: clamp(20px, 3vw, 24px);
+        .panelHead button {
+          padding: 10px 14px;
         }
 
         .list {
           display: grid;
           gap: 12px;
-          min-width: 0;
         }
 
         .row {
           display: flex;
           justify-content: space-between;
           gap: 14px;
-          padding: 14px;
           border-radius: 18px;
+          padding: 14px;
           background: rgba(0,0,0,.22);
           border: 1px solid rgba(214,178,94,.12);
-          min-width: 0;
         }
 
         .row div {
@@ -780,74 +856,73 @@ export default function MembershipPage() {
         }
 
         .row strong {
+          display: block;
           color: #fff8dc;
           overflow-wrap: anywhere;
         }
 
         .row p {
-          margin: 6px 0 0;
-          color: rgba(248,241,216,.6);
-          line-height: 1.4;
-          overflow-wrap: anywhere;
+          margin: 5px 0 0;
+          font-size: 13px;
         }
 
         .row span {
           color: #d6b25e;
-          font-weight: 900;
+          font-weight: 950;
           white-space: nowrap;
         }
 
-        .small {
-          box-shadow: none;
-          margin: 0;
-          background: rgba(0,0,0,.2);
+        .emptySmall {
+          border-radius: 18px;
+          padding: 16px;
+          background: rgba(0,0,0,.22);
+          border: 1px solid rgba(214,178,94,.12);
+          color: rgba(248,241,216,.62);
+          font-weight: 800;
         }
 
-        @media (max-width: 1100px) {
-          .membershipContainer {
-            padding: 24px;
+        @media (max-width: 1080px) {
+          .hero,
+          .mainGrid,
+          .historyGrid {
+            grid-template-columns: 1fr;
           }
 
-          .planGrid {
+          .summaryGrid,
+          .benefitGrid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
-        @media (max-width: 980px) {
-          .hero,
-          .twoCols {
-            grid-template-columns: 1fr;
-            display: grid;
-          }
-
-          .walletCard {
-            max-width: none;
-            min-width: 0;
-          }
-
-          .stats,
-          .planGrid {
-            grid-template-columns: 1fr;
-          }
-        }
-
         @media (max-width: 640px) {
-          .membershipContainer {
+          .membershipShell {
             padding: 18px;
           }
 
-          .row,
-          .panelHead {
-            align-items: flex-start;
+          .summaryGrid,
+          .benefitGrid {
+            grid-template-columns: 1fr;
+          }
+
+          .cardTop,
+          .panelHead,
+          .row {
             flex-direction: column;
+          }
+
+          .priceBox {
+            width: 100%;
+            text-align: left;
           }
 
           .row span {
             white-space: normal;
           }
 
-          button {
+          .heroActions a,
+          .panelHead button {
             width: 100%;
+            text-align: center;
           }
         }
       `}</style>
@@ -855,11 +930,23 @@ export default function MembershipPage() {
   );
 }
 
-function Card({ label, value }: { label: string; value: string }) {
+function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
-    <article className="card">
+    <article className="summaryCard">
       <p>{label}</p>
       <h3>{value}</h3>
     </article>
+  );
+}
+
+function Step({ done, title, text }: { done: boolean; title: string; text: string }) {
+  return (
+    <div className={`step ${done ? "done" : ""}`}>
+      <span className="stepIcon">{done ? "✓" : "•"}</span>
+      <div>
+        <strong>{title}</strong>
+        <p>{text}</p>
+      </div>
+    </div>
   );
 }
