@@ -166,19 +166,19 @@ export default function AdminOperationsPage() {
       supabase
         .from("tree_photo_updates")
         .select(
-          "id, assignment_id, operation_request_id, tree_id, customer_profile_id, caretaker_id, photo_url, before_photo_url, after_photo_url, notes, status, created_at, updated_at"
+          "id, assignment_id, operation_request_id, tree_id, group_id, customer_profile_id, caretaker_id, caretaker_profile_id, photo_url, image_url, before_photo_url, after_photo_url, caption, notes, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
       supabase
         .from("tree_gps_logs")
         .select(
-          "id, assignment_id, operation_request_id, tree_id, customer_profile_id, caretaker_id, latitude, longitude, notes, status, created_at, updated_at"
+          "id, assignment_id, operation_request_id, tree_id, group_id, customer_profile_id, caretaker_id, caretaker_profile_id, latitude, longitude, map_url, gps_url, location_note, notes, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
       supabase
         .from("tree_health_reports")
         .select(
-          "id, assignment_id, operation_request_id, tree_id, customer_profile_id, caretaker_id, health_status, notes, status, created_at, updated_at"
+          "id, assignment_id, operation_request_id, tree_id, group_id, customer_profile_id, caretaker_id, caretaker_profile_id, health_status, issue_severity, issue_summary, report_notes, notes, status, created_at, updated_at"
         )
         .order("created_at", { ascending: false }),
     ]);
@@ -253,7 +253,7 @@ export default function AdminOperationsPage() {
       const sourceType = getSourceType(request);
       const status = normalizeStatus(task?.status || assignment?.status || request.assignment_status || request.status);
       const evidenceStatus = normalizeStatus(task?.evidence_status || getEvidenceStatus(evidence) || status);
-      const assignmentMode = request.group_id || group?.id ? "FOREST" : "TREE";
+      const assignmentMode = request.tree_id || tree?.id ? "TREE" : "FOREST";
 
       return {
         request,
@@ -401,6 +401,10 @@ export default function AdminOperationsPage() {
     if (!item.assignment?.id) return setMessage("Assignment is required before review.");
     if (!item.task?.id) return setMessage("Task log is required before review.");
     if (!hasAnyEvidence(item.evidence)) return setMessage("Gardener evidence is required before Admin review.");
+
+    if (action === "APPROVE" && !hasCompleteEvidence(item.evidence)) {
+      return setMessage("Photo, GPS, and Health evidence are required before approving completion.");
+    }
 
     const submittedEnough = item.status === "SUBMITTED" || item.evidenceStatus === "SUBMITTED";
     if (!submittedEnough && action === "APPROVE") {
@@ -613,7 +617,7 @@ export default function AdminOperationsPage() {
               ["PENDING", "Pending Requests"],
               ["ASSIGNED", "Assigned"],
               ["IN_PROGRESS", "In Progress"],
-              ["SUBMITTED", "Submitted Evidence"],
+              ["SUBMITTED", "Submitted by Gardener"],
               ["COMPLETED", "Completed"],
               ["REWORK", "Rework"],
               ["REJECTED", "Rejected"],
@@ -1025,6 +1029,10 @@ function getEvidenceStatus(evidence: EvidenceBundle) {
 
 function hasAnyEvidence(evidence: EvidenceBundle) {
   return evidence.photos.length + evidence.gps.length + evidence.health.length > 0;
+}
+
+function hasCompleteEvidence(evidence: EvidenceBundle) {
+  return evidence.photos.length > 0 && evidence.gps.length > 0 && evidence.health.length > 0;
 }
 
 function resolveCustomerProfileId(item: OperationItem) {
