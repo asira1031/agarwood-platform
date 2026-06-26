@@ -577,6 +577,45 @@ export default function DashboardPage() {
     return actions.sort((a, b) => a.priority - b.priority).slice(0, 7);
   }, [trees.length, activeOperation, walletBalance, membershipStatus, gpsEvidence.length, photoEvidence.length]);
 
+  const missionStats = useMemo(() => {
+    const total = operationRequests.length;
+
+    const pending = operationRequests.filter((mission) =>
+      ["PENDING", "REQUESTED", "PAID", "PROCESSING"].includes(
+        normalize(mission.status || mission.assignment_status)
+      )
+    ).length;
+
+    const active = operationRequests.filter((mission) =>
+      ["ASSIGNED", "IN_PROGRESS"].includes(normalize(mission.status || mission.assignment_status))
+    ).length;
+
+    const completed = operationRequests.filter((mission) =>
+      ["COMPLETED", "APPROVED", "DONE"].includes(normalize(mission.status || mission.assignment_status))
+    ).length;
+
+    return { total, pending, active, completed };
+  }, [operationRequests]);
+
+  const missionLogs = useMemo(() => {
+    return operationRequests
+      .map((mission) => ({
+        id: `mission-log-${mission.id}`,
+        title: cleanLabel(
+          mission.service_name ||
+            mission.operation_type ||
+            mission.service_type ||
+            mission.request_type ||
+            "Tree Mission"
+        ),
+        detail: normalize(mission.status || mission.assignment_status || "PENDING").replaceAll("_", " "),
+        date: mission.completed_at || mission.created_at || mission.requested_at || null,
+        href: "/dashboard/tree-operations",
+      }))
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 8);
+  }, [operationRequests]);
+
   const recentActivity = useMemo(() => {
     const walletRows = walletTransactions.map((tx) => ({
       id: `wallet-${tx.id}`,
@@ -671,10 +710,10 @@ export default function DashboardPage() {
         </header>
 
         <section className="overviewGrid">
-          <OverviewCard label="Total Trees" value={String(trees.length)} note="Owned seedlings" icon={<TreeIcon />} />
-          <OverviewCard label="Plantations" value={String(groups.length || uniqueGroupCount(trees))} note="Forest groups" icon={<PlantationIcon />} />
-          <OverviewCard label="Overall Status" value={overallStatus} note="Based on approved evidence" icon={<PulseIcon />} />
-          <OverviewCard label="Latest Update" value={formatDate(latestEvidenceDate)} note="Farm proof or operation" icon={<ClockIcon />} />
+          <OverviewCard label="Mission Total" value={String(missionStats.total)} note="All service missions" icon={<ServiceIcon />} />
+          <OverviewCard label="Pending Missions" value={String(missionStats.pending)} note="Awaiting admin action" icon={<ClockIcon />} />
+          <OverviewCard label="Active Missions" value={String(missionStats.active)} note="Assigned or in progress" icon={<TrackIcon />} />
+          <OverviewCard label="Completed Missions" value={String(missionStats.completed)} note="Approved field work" icon={<PulseIcon />} />
         </section>
 
         <section className="mainGrid">
@@ -801,17 +840,17 @@ export default function DashboardPage() {
         </section>
 
         <section className="splitGrid bottom">
-          <article className="panel">
+          <article className="panel explorePanel">
             <div className="panelTop">
               <div>
-                <p className="eyebrow">Recommended Actions</p>
-                <h2>What You Can Do Now</h2>
+                <p className="eyebrow">Explore</p>
+                <h2>Discover Your Arganwood Tools</h2>
               </div>
             </div>
 
-            <div className="actionGrid">
+            <div className="actionGrid centeredExplore">
               {smartActions.map((action) => (
-                <Link className="actionCard" href={action.href} key={`${action.title}-${action.href}`}>
+                <Link className="actionCard exploreCard" href={action.href} key={`${action.title}-${action.href}`}>
                   <span>{action.icon}</span>
                   <div>
                     <strong>{action.title}</strong>
@@ -822,19 +861,20 @@ export default function DashboardPage() {
             </div>
           </article>
 
-          <article className="panel">
+          <article className="panel logsPanel">
             <div className="panelTop">
               <div>
-                <p className="eyebrow">Recent Activity</p>
-                <h2>Account Updates</h2>
+                <p className="eyebrow">Mission Logs</p>
+                <h2>Operation History</h2>
               </div>
+              <StatusPill value={`${missionStats.completed}/${missionStats.total} Complete`} />
             </div>
 
-            {recentActivity.length === 0 ? (
-              <EmptyState text="No recent activity yet." />
+            {missionLogs.length === 0 ? (
+              <EmptyState text="No mission logs yet. Requested tree services will appear here." />
             ) : (
               <div className="recentList">
-                {recentActivity.map((item) => (
+                {missionLogs.map((item) => (
                   <Link href={item.href} className="recentRow" key={item.id}>
                     <div>
                       <strong>{item.title}</strong>
@@ -1742,6 +1782,31 @@ const styles = `
     color: rgba(248,241,216,.65);
     font-weight: 850;
     background: rgba(0,0,0,.22);
+  }
+
+
+
+  .centeredExplore {
+    align-items: stretch;
+  }
+
+  .exploreCard {
+    min-height: 150px;
+    place-items: center;
+    text-align: center;
+  }
+
+  .exploreCard > span {
+    margin: 0 auto;
+    width: 58px;
+    height: 58px;
+    border-radius: 22px;
+  }
+
+  .exploreCard p {
+    max-width: 230px;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   @media (max-width: 1220px) {

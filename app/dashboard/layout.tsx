@@ -1,28 +1,9 @@
 // app/dashboard/layout.tsx
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
-
-const sidebarItems = [
-  { label: "Dashboard", href: "/dashboard" },
-  { label: "My Trees", href: "/dashboard/my-trees" },
-  { label: "Tree Operations", href: "/dashboard/tree-operations" },
-  { label: "Inventory", href: "/dashboard/inventory" },
-  { label: "Marketplace", href: "/dashboard/marketplace" },
-  { label: "Investments", href: "/dashboard/investments" },
-  { label: "Earnings", href: "/dashboard/earnings" },
-  { label: "Sell Tree", href: "/dashboard/sell-tree" },
-  { label: "Wallet", href: "/dashboard/wallet" },
-  { label: "Transactions", href: "/dashboard/transactions" },
-  { label: "Referrals", href: "/dashboard/referrals" },
-  { label: "Membership", href: "/dashboard/membership" },
-  { label: "Profile", href: "/dashboard/profile" },
-  { label: "Settings", href: "/dashboard/settings" },
-  { label: "Support", href: "/dashboard/support" },
-];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [allowed, setAllowed] = useState(false);
@@ -79,59 +60,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-[#07140f] text-[#f8f1d8]">
-      <div className="flex min-h-screen w-full overflow-x-hidden">
-        <aside className="hidden lg:flex lg:w-72 lg:shrink-0 lg:flex-col border-r border-amber-200/15 bg-[#071f16] text-white">
-          <div className="sticky top-0 h-screen overflow-y-auto p-6">
-            <div className="rounded-3xl border border-white/10 bg-white/10 p-5 shadow-lg backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.3em] text-amber-200">
-                ARGANWOOD
-              </p>
-              <h1 className="mt-2 text-2xl font-bold">Customer Portal</h1>
-              <p className="mt-2 text-sm text-white/70">
-                Manage trees, inventory, care services, earnings, and membership.
-              </p>
-            </div>
-
-            <nav className="mt-6 space-y-2">
-              {sidebarItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="block rounded-2xl px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </div>
-        </aside>
-
-        <main className="min-w-0 flex-1 overflow-x-hidden">
-          <div className="lg:hidden border-b border-amber-200/15 bg-[#071f16] p-4">
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-amber-200">
-                ARGANWOOD
-              </p>
-              <h1 className="mt-1 text-xl font-bold text-white">Customer Portal</h1>
-            </div>
-
-            <nav className="mt-4 flex gap-2 overflow-x-auto pb-1">
-              {sidebarItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="shrink-0 rounded-full bg-white/10 px-4 py-2 text-sm font-bold text-white/80"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </div>
-
-          <div className="min-w-0 w-full overflow-x-hidden">{children}</div>
-        </main>
-      </div>
-    </div>
+    <main className="min-h-screen w-full overflow-x-hidden bg-[#07140f] text-[#f8f1d8]">
+      {children}
+    </main>
   );
 }
