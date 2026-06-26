@@ -39,8 +39,26 @@ type OperationLike = {
   care_program_name?: string | null;
 };
 
-export function isCareSubscriptionActive(treeOrSubscription: TreeLike | SubscriptionLike | null | undefined) {
-  const status = String(treeOrSubscription?.status || (treeOrSubscription as TreeLike | undefined)?.care_status || "")
+function getSubscriptionStatus(
+  value: TreeLike | SubscriptionLike,
+): string {
+  if ("status" in value && typeof value.status === "string") {
+    return value.status;
+  }
+
+  if ("care_status" in value && typeof value.care_status === "string") {
+    return value.care_status;
+  }
+
+  return "";
+}
+
+export function isCareSubscriptionActive(
+  treeOrSubscription: TreeLike | SubscriptionLike | null | undefined,
+) {
+  if (!treeOrSubscription) return false;
+
+  const status = getSubscriptionStatus(treeOrSubscription)
     .trim()
     .toUpperCase();
 
@@ -58,14 +76,20 @@ function operationText(operation: OperationLike) {
     .join(" ");
 }
 
-function hasActiveDuplicate(tree: TreeLike, existingOperations: OperationLike[], missionKey: string) {
+function hasActiveDuplicate(
+  tree: TreeLike,
+  existingOperations: OperationLike[],
+  missionKey: string,
+) {
   const treeId = tree.tree_id || tree.id || null;
   const groupId = tree.group_id || null;
 
   return existingOperations.some((operation) => {
     if (!isActiveMissionStatus(operation.status)) return false;
 
-    const sameMission = getMissionKeyFromText(operationText(operation)) === missionKey;
+    const sameMission =
+      getMissionKeyFromText(operationText(operation)) === missionKey;
+
     if (!sameMission) return false;
 
     if (treeId && operation.tree_id) {
@@ -118,8 +142,15 @@ export function shouldAutoGenerateMission(
     subscriptions.some((subscription) => {
       if (!isCareSubscriptionActive(subscription)) return false;
 
-      const sameTree = treeId && subscription.tree_id && String(subscription.tree_id) === String(treeId);
-      const sameGroup = groupId && subscription.group_id && String(subscription.group_id) === String(groupId);
+      const sameTree =
+        treeId &&
+        subscription.tree_id &&
+        String(subscription.tree_id) === String(treeId);
+
+      const sameGroup =
+        groupId &&
+        subscription.group_id &&
+        String(subscription.group_id) === String(groupId);
 
       return Boolean(sameTree || sameGroup);
     });
