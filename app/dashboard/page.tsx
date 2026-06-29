@@ -791,7 +791,8 @@ export default function DashboardPage() {
           ) : (
             <div className="treeScroller">
               {trees.slice(0, 6).map((tree, index) => {
-                const treeImageUrl = getTreeImageUrl(tree) || referenceTreeImages[index % referenceTreeImages.length];
+                const latestTreePhoto = photoEvidence.find((row) => String(row.tree_id || "") === String(tree.id));
+                const treeImageUrl = getTreeImageUrl(tree, latestTreePhoto) || referenceTreeImages[index % referenceTreeImages.length];
 
                 return (
                   <Link className="treeCard" href="/dashboard/my-trees" key={tree.id}>
@@ -923,15 +924,11 @@ function treeLabel(tree: TreeRow | null | undefined) {
   return tree.custom_name || tree.display_name || tree.tree_code || "Arganwood Seedling";
 }
 
-function getTreeImageUrl(tree: TreeRow): string | undefined {
-  if (typeof tree.image_url === "string" && tree.image_url.trim().length > 0) {
-    return tree.image_url;
-  }
-
-  if (typeof tree.photo_url === "string" && tree.photo_url.trim().length > 0) {
-    return tree.photo_url;
-  }
-
+function getTreeImageUrl(tree: TreeRow, latestPhoto?: EvidenceRow | null): string | undefined {
+  if (typeof latestPhoto?.photo_url === "string" && latestPhoto.photo_url.trim().length > 0) return latestPhoto.photo_url;
+  if (typeof latestPhoto?.image_url === "string" && latestPhoto.image_url.trim().length > 0) return latestPhoto.image_url;
+  if (typeof tree.image_url === "string" && tree.image_url.trim().length > 0) return tree.image_url;
+  if (typeof tree.photo_url === "string" && tree.photo_url.trim().length > 0) return tree.photo_url;
   return undefined;
 }
 

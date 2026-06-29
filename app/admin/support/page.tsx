@@ -41,7 +41,7 @@ type SupportMessage = {
 };
 
 const forestBg =
-  "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1800&q=80";
+  "/images/arganwood-reference/premium-background.png";
 
 const TABS: { key: AdminTab; label: string }[] = [
   { key: "OPEN", label: "Open Tickets" },
@@ -93,11 +93,11 @@ export default function AdminSupportPage() {
 
     if (authError) {
       console.error("Admin auth lookup failed:", authError);
-      throw new Error("admin not authorized: auth lookup failed");
+      throw new Error("Active admin access check failed. Please login again.");
     }
 
     if (!authData.user) {
-      throw new Error("admin not authorized: please login first");
+      throw new Error("Please login as an active admin first.");
     }
 
     const user = authData.user;
@@ -132,7 +132,7 @@ export default function AdminSupportPage() {
     const resolvedProfile = (profileById || profileByEmail) as Profile | null;
 
     if (!resolvedProfile) {
-      throw new Error("admin not authorized: profile not found");
+      throw new Error("Admin profile not found. Please contact the platform owner.");
     }
 
     await verifyAdminAccess(resolvedProfile, email);
@@ -172,13 +172,13 @@ export default function AdminSupportPage() {
     }
 
     if (checks.length === 0) {
-      throw new Error("admin not authorized");
+      throw new Error("Active admin access not found.");
     }
 
     const activeAdmin = checks.find((row) => String(row?.status || "ACTIVE").toUpperCase() === "ACTIVE");
 
     if (!activeAdmin) {
-      throw new Error("admin not authorized: admin account is not ACTIVE");
+      throw new Error("Admin account is not ACTIVE.");
     }
   }
 
@@ -252,7 +252,7 @@ export default function AdminSupportPage() {
 
   async function sendAdminReply() {
     if (!adminProfile) {
-      setUiError("admin not authorized");
+      setUiError("Active admin access not found.");
       return;
     }
 

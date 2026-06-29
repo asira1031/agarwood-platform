@@ -58,6 +58,11 @@ type TreeDetail = {
   latest_photo_at: string | null;
   latest_photo_url: string | null;
   latest_image_url: string | null;
+  image_url?: string | null;
+  photo_url?: string | null;
+  default_image_url?: string | null;
+  product_image_url?: string | null;
+  marketplace_image_url?: string | null;
   latest_gps_at: string | null;
   latest_latitude: number | null;
   latest_longitude: number | null;
@@ -172,6 +177,13 @@ function normalizeStatus(value: string | null | undefined) {
     .toUpperCase();
 }
 
+function cleanLabel(value: any) {
+  return String(value || "Record")
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\w/g, (char) => char.toUpperCase());
+}
+
 function customerTreeName(tree: TreeDetail | null | undefined) {
   return tree?.custom_name || tree?.customer_tree_name || tree?.display_name || "Seedling";
 }
@@ -228,6 +240,24 @@ function getMapLink(gps: GpsEvidence | TreeDetail) {
 
 function latestTreeUpdate(tree: TreeDetail) {
   return tree.latest_health_at || tree.latest_photo_at || tree.latest_gps_at || tree.updated_at || tree.created_at;
+}
+
+function treeDisplayImage(tree: TreeDetail | null | undefined) {
+  return (
+    tree?.latest_photo_url ||
+    tree?.latest_image_url ||
+    tree?.image_url ||
+    tree?.photo_url ||
+    tree?.default_image_url ||
+    tree?.product_image_url ||
+    tree?.marketplace_image_url ||
+    "/images/arganwood-reference/young-agarwood-tree.png"
+  );
+}
+
+function treeStageLabel(tree: TreeDetail | null | undefined) {
+  const row = tree as Record<string, any> | null | undefined;
+  return row?.stage || row?.growth_stage || row?.status || tree?.care_status || "Active";
 }
 
 function isCareInactive(tree: TreeDetail) {
@@ -825,13 +855,18 @@ export default function MyTreesPage() {
     return (
       <article className={`treeCard ${bucketClass(bucket)}`} key={tree.tree_id}>
         <button className="treeCardMain" type="button" onClick={() => setSelectedTree(tree)}>
-          <div className="treeCardTop">
-            <span className="lineBadge" />
+          <div className="treeCardImage">
+            <img src={treeDisplayImage(tree)} alt={customerTreeName(tree)} />
             <small>{bucketLabel(bucket)}</small>
           </div>
 
+          <div className="treeCardTop">
+            <span className="lineBadge" />
+            <small>{cleanLabel(treeStageLabel(tree))}</small>
+          </div>
+
           <b>{customerTreeName(tree)}</b>
-          <code>{tree.tree_code || "No tree code yet"}</code>
+          <code>{tree.tree_code || "Tree code pending"}</code>
           <p>{treeForestName(tree)}</p>
 
           <div className="treeMetaGrid">
@@ -854,6 +889,7 @@ export default function MyTreesPage() {
           <button type="button" onClick={() => setSelectedTree(tree)}>Open Details</button>
           <button type="button" onClick={() => openMissionPlan(tree)}>View Mission Plan</button>
           <button type="button" onClick={() => requestCare(tree)}>Request Care</button>
+          <button type="button" onClick={() => startRename(tree)}>Rename</button>
           <button type="button" onClick={() => startMoveTree(tree)}>Move Tree</button>
         </div>
       </article>
@@ -1070,6 +1106,11 @@ export default function MyTreesPage() {
             <h2>{customerTreeName(selectedTree)}</h2>
             <p className="detailSubtitle">{treeForestName(selectedTree)}</p>
 
+            <div className="detailHeroImage">
+              <img src={treeDisplayImage(selectedTree)} alt={customerTreeName(selectedTree)} />
+              <span>Latest approved farm photo automatically overrides the original marketplace image.</span>
+            </div>
+
             <div className="detailBlock">
               <h3>Tree Identity</h3>
               <div className="detailGrid">
@@ -1225,7 +1266,7 @@ export default function MyTreesPage() {
             <p className="eyebrow">Forest Management</p>
             <h2>Rename Forest</h2>
             <p className="detailSubtitle">Rename this forest. Tree QR identity and group_id stay the same.</p>
-            <label className="fieldLabel">Forest Name<input value={renameForestValue} onChange={(event) => setRenameForestValue(event.target.value)} placeholder="Robert Family Plantation" /></label>
+            <label className="fieldLabel">Forest Name<input value={renameForestValue} onChange={(event) => setRenameForestValue(event.target.value)} placeholder="My Family Plantation" /></label>
             <button className="primaryBtn" disabled={actionLoading} onClick={saveRenameForest}>{actionLoading ? "Saving..." : "Save Forest Name"}</button>
           </div>
         </div>
@@ -1294,7 +1335,7 @@ export default function MyTreesPage() {
         .hero { display: grid; grid-template-columns: 1fr 430px; gap: 22px; align-items: stretch; margin-bottom: 22px; }
         .heroCopy, .forestHeroCard, .message, .empty, .forestCard, .forestDetail, .emptyState { border: 1px solid rgba(232,190,103,.18); background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)), rgba(7,24,15,.82); box-shadow: 0 24px 70px rgba(0,0,0,.32); backdrop-filter: blur(10px); }
         .heroCopy { border-radius: 34px; min-height: 330px; padding: 28px; position: relative; overflow: hidden; }
-        .heroCopy:before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(7,19,13,.96), rgba(7,19,13,.74), rgba(7,19,13,.92)), url("https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1600&q=80"); background-size: cover; background-position: center; opacity: .82; z-index: -2; }
+        .heroCopy:before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(7,19,13,.96), rgba(7,19,13,.74), rgba(7,19,13,.92)), url("/images/arganwood-reference/premium-background.png"); background-size: cover; background-position: center; opacity: .82; z-index: -2; }
         .heroCopy:after { content: ""; position: absolute; width: 300px; height: 300px; right: -90px; bottom: -120px; border-radius: 50%; background: rgba(232,190,103,.20); filter: blur(8px); z-index: -1; }
         .back { display: inline-flex; margin-bottom: 18px; color: #e8be67; font-weight: 900; text-decoration: none; }
         .eyebrow { margin: 0 0 8px; color: #e8be67; font-weight: 900; text-transform: uppercase; letter-spacing: .14em; font-size: 12px; }
@@ -1360,6 +1401,9 @@ export default function MyTreesPage() {
         .treeCard.monitoring { border-color: rgba(159,216,255,.22); }
         .treeCard.needsAttention { border-color: rgba(255,176,142,.26); }
         .treeCard.pendingEvidence { border-color: rgba(244,213,139,.24); }
+        .treeCardImage { position: relative; height: 154px; margin-bottom: 13px; overflow: hidden; border-radius: 18px; border: 1px solid rgba(255,255,255,.08); background: rgba(0,0,0,.18); }
+        .treeCardImage img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .treeCardImage small { position: absolute; left: 10px; bottom: 10px; border-radius: 999px; padding: 7px 10px; color: #08120d; background: rgba(244,213,139,.92); font-size: 10px; font-weight: 1000; text-transform: uppercase; letter-spacing: .08em; box-shadow: 0 10px 24px rgba(0,0,0,.22); }
         .treeCardTop { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
         .treeCardTop small { border-radius: 999px; padding: 7px 10px; background: rgba(255,255,255,.08); color: rgba(255,247,223,.75); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
         .treeCard b { display: block; color: #fff7df; font-size: 18px; margin-bottom: 6px; }
@@ -1370,13 +1414,16 @@ export default function MyTreesPage() {
         .treeMetaGrid small { display: block; color: rgba(255,247,223,.54); font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 5px; }
         .treeMetaGrid span { color: rgba(255,247,223,.82); font-size: 11px; font-weight: 900; }
         .wideMeta { grid-column: 1 / -1; }
-        .treeCardActionsInline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+        .treeCardActionsInline { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; margin-top: 14px; }
         .treeCardActionsInline button { border: 1px solid rgba(232,190,103,.18); border-radius: 14px; padding: 10px 8px; color: #f4d58b; background: rgba(232,190,103,.10); font-size: 11px; font-weight: 1000; cursor: pointer; }
         .softEmpty { border-radius: 20px; padding: 16px; color: rgba(255,247,223,.62); background: rgba(255,255,255,.06); font-weight: 900; text-align: center; }
         .modalOverlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(3,10,7,.72); backdrop-filter: blur(9px); }
         .modal { position: relative; width: min(880px, 100%); max-height: 92vh; overflow: auto; border-radius: 34px; padding: 26px; color: #fff7df; background: radial-gradient(circle at 90% 8%, rgba(232,190,103,.20), transparent 30%), linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.03)), #07180f; box-shadow: 0 34px 100px rgba(0,0,0,.52); border: 1px solid rgba(232,190,103,.18); }
         .closeBtn { position: absolute; top: 16px; right: 16px; width: 42px; height: 42px; border: 0; border-radius: 999px; background: rgba(255,255,255,.10); color: #f4d58b; font-size: 26px; font-weight: 900; cursor: pointer; }
         .detailStatus { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 9px 12px; margin-bottom: 14px; font-size: 13px; font-weight: 900; background: rgba(255,255,255,.08); color: #f4d58b; }
+        .detailHeroImage { position: relative; overflow: hidden; height: 260px; border-radius: 26px; border: 1px solid rgba(232,190,103,.18); margin: 18px 0; background: rgba(0,0,0,.20); }
+        .detailHeroImage img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .detailHeroImage span { position: absolute; left: 16px; right: 16px; bottom: 14px; border-radius: 16px; padding: 10px 12px; color: #fff7df; background: rgba(7,24,15,.76); backdrop-filter: blur(10px); font-size: 12px; font-weight: 900; }
         .modal h2 { margin: 0; color: #fff7df; font-size: 38px; letter-spacing: -1px; }
         .modal h3 { margin: 0 0 12px; color: #f4d58b; font-size: 16px; }
         .detailSubtitle { margin: 8px 0 18px; color: rgba(255,247,223,.66); font-weight: 900; }
@@ -1423,7 +1470,7 @@ export default function MyTreesPage() {
         .gpsCard, .healthCard { grid-template-columns: 74px 1fr; }
         .severity { display: inline-flex; margin-top: 8px; border-radius: 999px; padding: 7px 10px; color: #ffb08e; background: rgba(255,120,96,.12); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
         @media (max-width: 1180px) { .hero, .forestGrid, .treeSections { grid-template-columns: 1fr; } .forestHeroCard strong { font-size: 66px; } }
-        @media (max-width: 760px) { .page { padding: 18px; } h1 { font-size: 42px; } .heroMiniStats, .forestCounts, .forestDetailHead, .detailGrid, .proofGrid, .actionGrid, .tagRows, .evidenceCard, .gpsCard, .healthCard, .treeMetaGrid { display: grid; grid-template-columns: 1fr; } .forestDetailHead { align-items: start; } .forestHeadActions, .heroActions { display: grid; grid-template-columns: 1fr; width: 100%; } .forestCardActions, .treeCardActionsInline { grid-template-columns: 1fr 1fr; } .evidenceCard img, .imageFallback { width: 100%; height: 180px; } }
+        @media (max-width: 760px) { .page { padding: 18px; } h1 { font-size: 42px; } .heroMiniStats, .forestCounts, .forestDetailHead, .detailGrid, .proofGrid, .actionGrid, .tagRows, .evidenceCard, .gpsCard, .healthCard, .treeMetaGrid { display: grid; grid-template-columns: 1fr; } .forestDetailHead { align-items: start; } .forestHeadActions, .heroActions { display: grid; grid-template-columns: 1fr; width: 100%; } .forestCardActions, .treeCardActionsInline { grid-template-columns: 1fr; } .evidenceCard img, .imageFallback { width: 100%; height: 180px; } .detailHeroImage { height: 210px; } }
       `}</style>
     </main>
   );

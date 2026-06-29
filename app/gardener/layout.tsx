@@ -42,14 +42,46 @@ export default function GardenerLayout({
       const userEmail = user.email?.trim().toLowerCase() || "";
       setGardenerEmail(userEmail);
 
-      const { data: caretakerRow, error: caretakerError } = await supabase
-        .from("caretakers")
-        .select("id,email,status")
-        .eq("email", userEmail)
-        .eq("status", "ACTIVE")
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id,email")
+        .eq("id", user.id)
         .maybeSingle();
 
-      if (caretakerError || !caretakerRow) {
+      const { data: profileByEmail } = userEmail
+        ? await supabase
+            .from("profiles")
+            .select("id,email")
+            .ilike("email", userEmail)
+            .maybeSingle()
+        : { data: null };
+
+      const profile = profileById || profileByEmail;
+
+      const { data: caretakerByEmail, error: caretakerByEmailError } = userEmail
+        ? await supabase
+            .from("caretakers")
+            .select("id,caretaker_profile_id,email,status")
+            .ilike("email", userEmail)
+            .eq("status", "ACTIVE")
+            .maybeSingle()
+        : { data: null, error: null };
+
+      if (caretakerByEmailError) {
+        window.location.href = "/dashboard";
+        return;
+      }
+
+      const { data: caretakerByProfile, error: caretakerByProfileError } = profile?.id
+        ? await supabase
+            .from("caretakers")
+            .select("id,caretaker_profile_id,email,status")
+            .eq("caretaker_profile_id", profile.id)
+            .eq("status", "ACTIVE")
+            .maybeSingle()
+        : { data: null, error: null };
+
+      if (caretakerByProfileError || (!caretakerByEmail && !caretakerByProfile)) {
         window.location.href = "/dashboard";
         return;
       }

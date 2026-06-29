@@ -91,29 +91,43 @@ export default function AdminOperationsPage() {
 
     if (profileByIdError) return fail(profileByIdError.message);
 
-    const { data: profileByEmail, error: profileByEmailError } = await supabase
-      .from("profiles")
-      .select("id, full_name, email")
-      .eq("email", email)
-      .maybeSingle();
+    const { data: profileByEmail, error: profileByEmailError } = email
+      ? await supabase
+          .from("profiles")
+          .select("id, full_name, email")
+          .ilike("email", email)
+          .maybeSingle()
+      : { data: null, error: null };
 
     if (profileByEmailError) return fail(profileByEmailError.message);
 
     const profile = profileById || profileByEmail;
-    if (!profile) return fail("Admin profile not found.");
+    if (!profile) return fail("Admin profile not found. Please contact the platform owner.");
 
-    const { data: adminRow, error: adminError } = await supabase
+    const { data: adminByEmail, error: adminByEmailError } = email
+      ? await supabase
+          .from("admins")
+          .select("id, admin_profile_id, email, status")
+          .ilike("email", email)
+          .eq("status", "ACTIVE")
+          .maybeSingle()
+      : { data: null, error: null };
+
+    if (adminByEmailError) return fail(adminByEmailError.message);
+
+    const { data: adminByProfile, error: adminByProfileError } = await supabase
       .from("admins")
       .select("id, admin_profile_id, email, status")
       .eq("admin_profile_id", profile.id)
+      .eq("status", "ACTIVE")
       .maybeSingle();
 
-    if (adminError) return fail(adminError.message);
+    if (adminByProfileError) return fail(adminByProfileError.message);
 
-    const fallbackAdmin = String(profile.email || "").toLowerCase() === "admin@test.com";
-    if (!adminRow && !fallbackAdmin) return fail("Admin access not found.");
+    const adminRow = adminByEmail || adminByProfile;
+    if (!adminRow) return fail("Active admin access not found for this account.");
 
-    setAdminProfileId(profile.id);
+    setAdminProfileId(adminRow.admin_profile_id || profile.id);
 
     const [
       requestResult,
@@ -674,7 +688,7 @@ export default function AdminOperationsPage() {
               />
             </div>
 
-            <button>Sort: Newest</button>
+            <button type="button" className="sortPill" onClick={loadData} disabled={loading}>Refresh / Newest</button>
           </div>
 
           <div className="statsGrid">
@@ -1875,5 +1889,19 @@ const styles = `
       grid-template-columns: 1fr;
       gap: 4px;
     }
+  }
+
+  .sortPill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 18px;
+    border: 1px solid rgba(214, 178, 94, .22);
+    background: rgba(255, 255, 255, .08);
+    color: #d6b25e;
+    padding: 12px 14px;
+    font-size: 12px;
+    font-weight: 950;
+    white-space: nowrap;
   }
 `;

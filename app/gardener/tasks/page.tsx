@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -1388,14 +1389,14 @@ export default function GardenerTasksPage() {
       <div className="mx-auto max-w-md space-y-5">
         <header className="rounded-[28px] border border-white/10 bg-white/[0.07] p-5 shadow-2xl backdrop-blur-xl">
           <div className="flex items-center justify-between gap-3">
-            <button className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl">
+            <Link href="/gardener/dashboard" className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl" aria-label="Open gardener dashboard">
               ☰
-            </button>
+            </Link>
             <div className="text-center">
               <h1 className="text-lg font-black">Today&apos;s Mission</h1>
               <p className="text-xs font-semibold text-white/55">Mission Queue</p>
             </div>
-            <button className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl">
+            <button type="button" onClick={() => loadData(selected?.key)} className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xl" aria-label="Refresh mission notifications">
               🔔
             </button>
           </div>
@@ -1457,7 +1458,16 @@ export default function GardenerTasksPage() {
         {selected && (
           <section className="rounded-[28px] border border-white/10 bg-white/[0.06] p-4 shadow-2xl backdrop-blur-xl">
             <div className="flex items-center justify-between gap-3">
-              <button className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedKey("");
+                  stopCameraScanner();
+                  resetEvidenceForm();
+                  setScanValue("");
+                }}
+                className="rounded-xl border border-white/10 bg-black/20 px-3 py-2"
+              >
                 ←
               </button>
               <h2 className="text-base font-black">Mission Details</h2>

@@ -987,7 +987,48 @@ export default function MarketplacePage() {
       throw new Error(`Tree purchase failed: ${error.message}`);
     }
 
+    await syncPurchasedTreeImages(product, quantity);
+
     return data;
+  }
+
+  async function syncPurchasedTreeImages(product: MarketplaceProduct, quantity: number) {
+    if (!profile) return;
+    const imageUrl = getProductImageUrl(product);
+    if (!imageUrl) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("trees")
+        .select("id")
+        .or(`customer_profile_id.eq.${profile.id},profile_id.eq.${profile.id}`)
+        .order("created_at", { ascending: false })
+        .limit(Math.max(quantity, 1));
+
+      if (error) return console.warn("Purchased tree image sync skipped:", error.message);
+
+      for (const tree of data || []) {
+        await updateTreeBaseImage(String(tree.id), imageUrl);
+      }
+    } catch (error) {
+      console.warn("Purchased tree image sync skipped:", error);
+    }
+  }
+
+  async function updateTreeBaseImage(treeId: string, imageUrl: string) {
+    const now = new Date().toISOString();
+    const attempts: Record<string, any>[] = [
+      { image_url: imageUrl, photo_url: imageUrl, default_image_url: imageUrl, updated_at: now },
+      { image_url: imageUrl, photo_url: imageUrl, updated_at: now },
+      { image_url: imageUrl, updated_at: now },
+      { photo_url: imageUrl, updated_at: now },
+      { image_url: imageUrl },
+      { photo_url: imageUrl },
+    ];
+    for (const payload of attempts) {
+      const { error } = await supabase.from("trees").update(payload).eq("id", treeId);
+      if (!error) return;
+    }
   }
 
   async function purchaseProduct(product: MarketplaceProduct) {
@@ -1394,7 +1435,7 @@ export default function MarketplacePage() {
                       type="text"
                       value={newForestName}
                       onChange={(event) => setNewForestName(event.target.value)}
-                      placeholder="Example: Robert Forest"
+                      placeholder="Example: My Forest"
                     />
                   </label>
                 )}

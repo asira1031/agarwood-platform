@@ -61,26 +61,42 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
       const userEmail = user.email?.trim().toLowerCase() || "";
 
-      const { data: adminRow } = await supabase
-        .from("admins")
-        .select("id")
-        .eq("email", userEmail)
-        .eq("status", "ACTIVE")
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id,email")
+        .eq("id", user.id)
         .maybeSingle();
 
-      if (adminRow) {
+      const { data: profileByEmail } = userEmail
+        ? await supabase
+            .from("profiles")
+            .select("id,email")
+            .ilike("email", userEmail)
+            .maybeSingle()
+        : { data: null };
+
+      const profile = profileById || profileByEmail;
+
+      const { data: adminByEmail } = userEmail
+        ? await supabase.from("admins").select("id").ilike("email", userEmail).eq("status", "ACTIVE").maybeSingle()
+        : { data: null };
+      const { data: adminByProfile } = profile?.id
+        ? await supabase.from("admins").select("id").eq("admin_profile_id", profile.id).eq("status", "ACTIVE").maybeSingle()
+        : { data: null };
+
+      if (adminByEmail || adminByProfile) {
         window.location.href = "/admin/dashboard";
         return;
       }
 
-      const { data: caretakerRow } = await supabase
-        .from("caretakers")
-        .select("id")
-        .eq("email", userEmail)
-        .eq("status", "ACTIVE")
-        .maybeSingle();
+      const { data: caretakerByEmail } = userEmail
+        ? await supabase.from("caretakers").select("id").ilike("email", userEmail).eq("status", "ACTIVE").maybeSingle()
+        : { data: null };
+      const { data: caretakerByProfile } = profile?.id
+        ? await supabase.from("caretakers").select("id").eq("caretaker_profile_id", profile.id).eq("status", "ACTIVE").maybeSingle()
+        : { data: null };
 
-      if (caretakerRow) {
+      if (caretakerByEmail || caretakerByProfile) {
         window.location.href = "/gardener/dashboard";
         return;
       }

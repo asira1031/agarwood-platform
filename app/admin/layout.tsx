@@ -12,7 +12,7 @@ const adminLinks = [
   { label: "Membership", href: "/admin/membership", icon: "💳" },
   { label: "Wallet", href: "/admin/wallet", icon: "💰" },
   { label: "Treasury", href: "/admin/treasury", icon: "🏦" },
-  { label: "Cash-In Approval", href: "/admin/cash-in", icon: "⬇️" },
+  { label: "Cash-In Approval", href: "/admin/cashin", icon: "⬇️" },
   { label: "Payout Queue", href: "/admin/withdrawals", icon: "💸" },
   { label: "Referrals", href: "/admin/referral-links", icon: "🔗" },
   { label: "Tree Purchases", href: "/admin/tree-purchases", icon: "🌳" },
@@ -51,14 +51,46 @@ export default function AdminLayout({
       const userEmail = user.email?.trim().toLowerCase() || "";
       setAdminEmail(userEmail);
 
-      const { data: adminRow, error: adminError } = await supabase
-        .from("admins")
-        .select("id,email,status")
-        .eq("email", userEmail)
-        .eq("status", "ACTIVE")
+      const { data: profileById } = await supabase
+        .from("profiles")
+        .select("id,email")
+        .eq("id", user.id)
         .maybeSingle();
 
-      if (adminError || !adminRow) {
+      const { data: profileByEmail } = userEmail
+        ? await supabase
+            .from("profiles")
+            .select("id,email")
+            .ilike("email", userEmail)
+            .maybeSingle()
+        : { data: null };
+
+      const profile = profileById || profileByEmail;
+
+      const { data: adminByEmail, error: adminByEmailError } = userEmail
+        ? await supabase
+            .from("admins")
+            .select("id,admin_profile_id,email,status")
+            .ilike("email", userEmail)
+            .eq("status", "ACTIVE")
+            .maybeSingle()
+        : { data: null, error: null };
+
+      if (adminByEmailError) {
+        window.location.href = "/dashboard";
+        return;
+      }
+
+      const { data: adminByProfile, error: adminByProfileError } = profile?.id
+        ? await supabase
+            .from("admins")
+            .select("id,admin_profile_id,email,status")
+            .eq("admin_profile_id", profile.id)
+            .eq("status", "ACTIVE")
+            .maybeSingle()
+        : { data: null, error: null };
+
+      if (adminByProfileError || (!adminByEmail && !adminByProfile)) {
         window.location.href = "/dashboard";
         return;
       }

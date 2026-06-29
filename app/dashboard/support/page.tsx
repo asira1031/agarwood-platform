@@ -40,7 +40,7 @@ type SupportMessage = {
 };
 
 const forestBg =
-  "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1800&q=80";
+  "/images/arganwood-reference/premium-background.png";
 
 export default function CustomerSupportPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -119,13 +119,39 @@ export default function CustomerSupportPage() {
       const resolvedProfile = await resolveProfile();
       setProfile(resolvedProfile);
 
-      const { data: ticketRows, error: ticketError } = await supabase
+      let ticketRows: any[] = [];
+
+      const eitherResult = await supabase
         .from("support_tickets")
         .select("*")
         .or(`profile_id.eq.${resolvedProfile.id},customer_id.eq.${resolvedProfile.id}`)
         .order("updated_at", { ascending: false });
 
-      if (ticketError) throw ticketError;
+      if (!eitherResult.error) {
+        ticketRows = eitherResult.data || [];
+      } else {
+        const profileOnlyResult = await supabase
+          .from("support_tickets")
+          .select("*")
+          .eq("profile_id", resolvedProfile.id)
+          .order("updated_at", { ascending: false });
+
+        if (!profileOnlyResult.error) {
+          ticketRows = profileOnlyResult.data || [];
+        } else {
+          const customerOnlyResult = await supabase
+            .from("support_tickets")
+            .select("*")
+            .eq("customer_id", resolvedProfile.id)
+            .order("updated_at", { ascending: false });
+
+          if (!customerOnlyResult.error) {
+            ticketRows = customerOnlyResult.data || [];
+          } else {
+            throw profileOnlyResult.error || customerOnlyResult.error || eitherResult.error;
+          }
+        }
+      }
 
       const cleanTickets = ((ticketRows || []) as Ticket[])
         .map((ticket) => ({ ...ticket, status: normalizeStatus(ticket.status) }))
@@ -169,7 +195,7 @@ export default function CustomerSupportPage() {
 
       setSelectedTicket(nextSelected);
     } catch (error: any) {
-      setUiMessage(error?.message || "Failed to load Customer Support Center.");
+      setUiMessage("Support tickets could not load. Please refresh or contact Arganwood Support.");
     } finally {
       setLoading(false);
     }
@@ -308,7 +334,7 @@ export default function CustomerSupportPage() {
       await loadSupportCenter(ticketData.id);
       setUiMessage("Message sent to Admin Support.");
     } catch (error: any) {
-      setUiMessage(error?.message || "Failed to create support ticket.");
+      setUiMessage("Support ticket could not be created. Please review the subject and message, then try again.");
     } finally {
       setSaving(false);
     }
@@ -348,7 +374,7 @@ export default function CustomerSupportPage() {
       await loadSupportCenter(selectedTicket.id);
       setUiMessage("Reply sent to Admin Support.");
     } catch (error: any) {
-      setUiMessage(error?.message || "Failed to send reply.");
+      setUiMessage("Reply could not be sent. Please try again.");
     } finally {
       setSaving(false);
     }

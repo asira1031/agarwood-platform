@@ -251,6 +251,17 @@ export default function WalletPage() {
   const withdrawNumber = Number(withdrawAmount || 0);
   const withdrawFee = withdrawNumber * 0.02;
   const withdrawNet = withdrawNumber - withdrawFee;
+  const payoutReady = Boolean(payoutMethod && payoutName.trim() && payoutNumber.trim());
+  const withdrawalBlockedReason = (() => {
+    if (!withdrawAmount.trim()) return "";
+    if (!Number.isFinite(withdrawNumber) || withdrawNumber <= 0) return "Enter a withdrawal amount greater than ₱0.";
+    if (withdrawNumber < 100) return "Minimum withdrawal amount is ₱100.";
+    if (withdrawNumber > walletBalance) return "Insufficient wallet balance. Please enter an amount within your available balance.";
+    if (!canWithdraw) return "Withdrawal is locked until your KYC is approved.";
+    if (!payoutReady) return "Complete payout method, account name, and account number before submitting.";
+    return "";
+  })();
+  const canSubmitWithdrawal = !processing && !withdrawalBlockedReason && withdrawNumber > 0 && payoutReady && canWithdraw;
 
   const stats = useMemo(() => {
     const totalCashIn = transactions
@@ -379,12 +390,16 @@ export default function WalletPage() {
         return setMessage("Withdrawal locked. KYC must be APPROVED.");
       }
 
-      if (!withdrawNumber || withdrawNumber < 100) {
+      if (!Number.isFinite(withdrawNumber) || withdrawNumber <= 0) {
+        return setMessage("Enter a withdrawal amount greater than ₱0.");
+      }
+
+      if (withdrawNumber < 100) {
         return setMessage("Minimum withdrawal amount is ₱100.");
       }
 
       if (withdrawNumber > walletBalance) {
-        return setMessage("Insufficient wallet balance.");
+        return setMessage("Insufficient wallet balance. Please enter an amount within your available balance.");
       }
 
       if (!payoutMethod) {
@@ -681,11 +696,15 @@ export default function WalletPage() {
                         </div>
                       </div>
 
-                      <button className="primaryButton" onClick={submitWithdrawal} disabled={!canWithdraw || processing}>
+                      {withdrawalBlockedReason && (
+                        <small className="lockText">{withdrawalBlockedReason}</small>
+                      )}
+
+                      <button className="primaryButton" onClick={submitWithdrawal} disabled={!canSubmitWithdrawal}>
                         {processing ? "Processing..." : "Submit Withdrawal Request"}
                       </button>
 
-                      {!canWithdraw && (
+                      {!canWithdraw && !withdrawalBlockedReason && (
                         <small className="lockText">
                           Withdrawal locked. Complete KYC verification first.
                         </small>

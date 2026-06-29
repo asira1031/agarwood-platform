@@ -46,8 +46,17 @@ type WithdrawalRequest = {
   created_at?: string | null;
 };
 
+type PhotoUpdate = {
+  id: string;
+  tree_id: string | null;
+  photo_url?: string | null;
+  image_url?: string | null;
+  status?: string | null;
+  created_at?: string | null;
+};
+
 const forestBg =
-  "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1800&q=80";
+  "/images/arganwood-reference/premium-background.png";
 
 const PLATFORM_FEE_RATE = 0.02;
 
@@ -68,6 +77,7 @@ export default function CustomerSellTreePageV6() {
   const [trees, setTrees] = useState<TreeRow[]>([]);
   const [requests, setRequests] = useState<SellTreeRequest[]>([]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [photoUpdates, setPhotoUpdates] = useState<PhotoUpdate[]>([]);
 
   const [selectedTreeId, setSelectedTreeId] = useState("");
   const [payoutMethod, setPayoutMethod] = useState("BANK_TRANSFER");
@@ -98,11 +108,25 @@ export default function CustomerSellTreePageV6() {
     return Math.max(previewValue - previewFee, 0);
   }, [previewValue, previewFee]);
 
+  const payoutComplete = Boolean(payoutMethod.trim() && payoutAccountName.trim() && payoutAccountNumber.trim());
+
   const membershipActive =
     String(profile?.membership_status || "").toUpperCase() === "ACTIVE";
 
   const kycApproved =
     String(profile?.kyc_status || "").toUpperCase() === "APPROVED";
+
+  const latestPhotoByTreeId = useMemo(() => {
+    const map = new Map<string, PhotoUpdate>();
+    photoUpdates.forEach((photo) => {
+      if (!photo.tree_id) return;
+      const current = map.get(String(photo.tree_id));
+      if (!current || new Date(photo.created_at || 0).getTime() >= new Date(current.created_at || 0).getTime()) {
+        map.set(String(photo.tree_id), photo);
+      }
+    });
+    return map;
+  }, [photoUpdates]);
 
   async function resolveProfile() {
     const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -173,6 +197,20 @@ export default function CustomerSellTreePageV6() {
       const treeRows = await loadCustomerTrees(resolvedProfile.id);
       setTrees(treeRows);
 
+      const treeIds = treeRows.map((tree) => tree.id).filter(Boolean);
+      if (treeIds.length > 0) {
+        const { data: photoRows, error: photoError } = await supabase
+          .from("tree_photo_updates")
+          .select("id, tree_id, photo_url, image_url, status, created_at")
+          .in("tree_id", treeIds)
+          .in("status", ["APPROVED", "COMPLETED"])
+          .order("created_at", { ascending: false });
+        if (!photoError) setPhotoUpdates((photoRows || []) as PhotoUpdate[]);
+        else setPhotoUpdates([]);
+      } else {
+        setPhotoUpdates([]);
+      }
+
       const { data: requestRows, error: requestError } = await supabase
         .from("sell_tree_requests")
         .select("*")
@@ -209,6 +247,9 @@ export default function CustomerSellTreePageV6() {
     }
 
     if (!selectedTree) return alert("Please select a seedling to sell.");
+    if (!payoutMethod.trim()) return alert("Please select payout method.");
+    if (!payoutAccountName.trim()) return alert("Please enter payout account name.");
+    if (!payoutAccountNumber.trim()) return alert("Please enter payout account number or mobile number.");
 
     const existingActive = requests.find(
       (request) =>
@@ -227,18 +268,28 @@ export default function CustomerSellTreePageV6() {
       const platformFee = Math.round(treeValue * PLATFORM_FEE_RATE);
       const netReceive = Math.max(treeValue - platformFee, 0);
 
-      const { error } = await supabase.from("sell_tree_requests").insert({
+      const primaryPayload: Record<string, any> = {
         profile_id: profile.id,
         tree_id: selectedTree.id,
         tree_value: treeValue,
         platform_fee: platformFee,
         net_receive: netReceive,
+        payout_method: payoutMethod,
+        payout_account_name: payoutAccountName.trim(),
+        payout_account_number: payoutAccountNumber.trim(),
+        latest_photo_id: latestPhotoByTreeId.get(String(selectedTree.id))?.id || null,
         payout_status: "NOT_QUEUED",
         status: "PENDING",
         admin_notes: null,
-      });
+      };
 
-      if (error) throw error;
+      const { error } = await supabase.from("sell_tree_requests").insert(primaryPayload);
+      if (error) {
+        const fallbackPayload = { ...primaryPayload };
+        delete fallbackPayload.latest_photo_id;
+        const { error: fallbackError } = await supabase.from("sell_tree_requests").insert(fallbackPayload);
+        if (fallbackError) throw fallbackError;
+      }
 
       setSelectedTreeId("");
       await loadSellTreeCenter();
@@ -307,21 +358,36 @@ export default function CustomerSellTreePageV6() {
   }
 
   function getForestName(tree: TreeRow | null | undefined) {
-    if (!tree) return "Robert Forest";
+    if (!tree) return "Unnamed Forest";
 
     return (
       tree.tree_group_name ||
       tree.plantation_block ||
       tree.block_name ||
       tree.farm_location ||
-      "Robert Forest"
+      "Unnamed Forest"
     );
   }
 
   function getSeedlingName(tree: TreeRow | null | undefined) {
     if (!tree) return "Seedling";
 
-    return tree.display_name || tree.custom_name || "Seedling";
+    return tree.display_name || tree.custom_name || tree.customer_tree_name || "Seedling";
+  }
+
+  function getTreeCode(tree: TreeRow | null | undefined) {
+    if (!tree) return "Code pending";
+    return tree.tree_code || tree.code || "Code pending";
+  }
+
+  function getLatestPhoto(tree: TreeRow | null | undefined) {
+    if (!tree?.id) return null;
+    return latestPhotoByTreeId.get(String(tree.id)) || null;
+  }
+
+  function getTreeImage(tree: TreeRow | null | undefined) {
+    const latest = getLatestPhoto(tree);
+    return latest?.photo_url || latest?.image_url || tree?.latest_photo_url || tree?.latest_image_url || tree?.image_url || tree?.photo_url || tree?.default_image_url || "/images/arganwood-reference/young-agarwood-tree.png";
   }
 
   function getTreeValue(tree: TreeRow | null | undefined) {
@@ -478,6 +544,7 @@ export default function CustomerSellTreePageV6() {
 
                 {selectedTree ? (
                   <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5 space-y-3">
+                    <img src={getTreeImage(selectedTree)} alt={getSeedlingName(selectedTree)} className="h-44 w-full rounded-2xl border border-white/10 object-cover" />
                     <InfoRow
                       label="Forest Name"
                       value={getForestName(selectedTree)}
@@ -504,11 +571,14 @@ export default function CustomerSellTreePageV6() {
 
                 <button
                   onClick={createSellRequest}
-                  disabled={saving || !selectedTree || !membershipActive}
+                  disabled={saving || !selectedTree || !membershipActive || !payoutComplete}
                   className="w-full rounded-xl bg-gradient-to-r from-amber-400 to-yellow-600 text-black font-bold py-3 hover:opacity-90 disabled:opacity-50"
                 >
                   {saving ? "Saving..." : "Create Sell Request"}
                 </button>
+                {!payoutComplete && (
+                  <p className="text-center text-xs font-semibold text-amber-200/80">Add payout method, account name, and account/mobile number before creating a sell request.</p>
+                )}
               </div>
             </div>
 
@@ -516,7 +586,7 @@ export default function CustomerSellTreePageV6() {
               <StepHeader
                 step="2"
                 title="PAYOUT DETAILS"
-                subtitle="Required when accepting offer."
+                subtitle="Required before creating or accepting a sell request."
               />
 
               {!kycApproved && (
