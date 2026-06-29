@@ -78,6 +78,27 @@ const SUPPLY_CATEGORIES: SupplyCategory[] = [
   "Tree Care Programs",
 ];
 
+const PRODUCT_IMAGE_BASES = {
+  default: "default-product",
+  seedling: "agarwood-seedling",
+  seeds: "agarwood-seeds",
+  careLogo: "care-package-logo",
+  fertilizer: "fertilizer",
+  fungicide: "fungicide",
+  gardenerCare: "gardener-care",
+  nutrients: "nutrients",
+  package10: "package-10",
+  package50: "package-50",
+  package100: "package-100",
+  pestControl: "pest-control",
+  seedPackage: "seed-package",
+  soil: "soil",
+  treeHealth: "tree-health",
+  youngSeedling: "young-seedling",
+};
+
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp"];
+
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -103,75 +124,80 @@ function getForestName(group: TreeGroup | null | undefined) {
   return group?.forest_name || group?.group_name || "Unnamed Forest";
 }
 
-function getMarketplaceImageFallback(product: MarketplaceProduct): string {
+function productPathCandidates(baseName: string) {
+  return IMAGE_EXTENSIONS.map((ext) => `/products/${baseName}.${ext}`);
+}
+
+function getMarketplaceImageFallbackBase(product: MarketplaceProduct): string {
   const type = normalize(product.product_type);
   const category = normalize(product.category);
   const name = normalize(product.name);
 
-  if (
-    name.includes("100") &&
-    (name.includes("tree package") || name.includes("package"))
-  ) {
-    return "/images/arganwood-reference/marketplace-100-tree-package.png";
+  if (name.includes("100") && (name.includes("package") || name.includes("seed"))) {
+    return PRODUCT_IMAGE_BASES.package100;
+  }
+
+  if (name.includes("50") && (name.includes("package") || name.includes("seed"))) {
+    return PRODUCT_IMAGE_BASES.package50;
+  }
+
+  if (name.includes("10") && (name.includes("package") || name.includes("seed"))) {
+    return PRODUCT_IMAGE_BASES.package10;
+  }
+
+  if (name.includes("young") && name.includes("seedling")) {
+    return PRODUCT_IMAGE_BASES.youngSeedling;
+  }
+
+  if (name.includes("seed package")) {
+    return PRODUCT_IMAGE_BASES.seedPackage;
+  }
+
+  if (name.includes("seedling")) {
+    return PRODUCT_IMAGE_BASES.seedling;
+  }
+
+  if (name.includes("seed")) {
+    return PRODUCT_IMAGE_BASES.seeds;
+  }
+
+  if (category.includes("fertilizer") || name.includes("fertilizer")) {
+    return PRODUCT_IMAGE_BASES.fertilizer;
   }
 
   if (
-    name.includes("50") &&
-    (name.includes("tree package") || name.includes("package"))
-  ) {
-    return "/images/arganwood-reference/marketplace-50-tree-package.png";
-  }
-
-  if (
-    name.includes("10") &&
-    (name.includes("tree package") || name.includes("package"))
-  ) {
-    return "/images/arganwood-reference/marketplace-10-tree-package.png";
-  }
-
-  if (
-    name.includes("seedling package") ||
-    name.includes("tree seedling") ||
-    name.includes("seedling")
-  ) {
-    return "/images/arganwood-reference/marketplace-tree-seedling-package.png";
-  }
-
-  if (name.includes("organic fertilizer") || category.includes("fertilizer")) {
-    return "/images/arganwood-reference/marketplace-organic-fertilizer.png";
-  }
-
-  if (
-    name.includes("nutrient") ||
-    name.includes("booster") ||
     category.includes("nutrient") ||
-    category.includes("booster")
+    category.includes("booster") ||
+    name.includes("nutrient") ||
+    name.includes("booster")
   ) {
-    return "/images/arganwood-reference/marketplace-nutrient.png";
+    return PRODUCT_IMAGE_BASES.nutrients;
   }
 
-  if (name.includes("fungicide") || category.includes("fungicide")) {
-    return "/images/arganwood-reference/marketplace-fungicide.png";
+  if (category.includes("fungicide") || name.includes("fungicide")) {
+    return PRODUCT_IMAGE_BASES.fungicide;
   }
 
   if (
+    category.includes("pest") ||
+    category.includes("insecticide") ||
     name.includes("pest") ||
-    name.includes("insecticide") ||
-    category.includes("pest")
+    name.includes("insecticide")
   ) {
-    return "/images/arganwood-reference/marketplace-pest-control.png";
+    return PRODUCT_IMAGE_BASES.pestControl;
   }
 
-  if (name.includes("soil") || category.includes("soil")) {
-    return "/images/arganwood-reference/marketplace-premium-soil.png";
+  if (category.includes("soil") || name.includes("soil")) {
+    return PRODUCT_IMAGE_BASES.soil;
   }
 
   if (
-    name.includes("tree booster") ||
-    name.includes("booster") ||
-    category.includes("tree health")
+    category.includes("health") ||
+    category.includes("treatment") ||
+    name.includes("health") ||
+    name.includes("treatment")
   ) {
-    return "/images/arganwood-reference/marketplace-tree-booster.png";
+    return PRODUCT_IMAGE_BASES.treeHealth;
   }
 
   if (
@@ -180,30 +206,27 @@ function getMarketplaceImageFallback(product: MarketplaceProduct): string {
     category.includes("service") ||
     name.includes("care")
   ) {
-    return "/images/arganwood-reference/explore-tree-services.png";
+    return PRODUCT_IMAGE_BASES.careLogo;
   }
 
-  if (type.includes("membership") || category.includes("membership")) {
-    return "/images/arganwood-reference/explore-membership.png";
-  }
+  return PRODUCT_IMAGE_BASES.default;
+}
 
-  if (type.includes("package") || category.includes("package")) {
-    return "/images/arganwood-reference/marketplace-tree-seedling-package.png";
-  }
+function getProductImageCandidates(product: MarketplaceProduct): string[] {
+  const uploaded = typeof product.image_url === "string" ? product.image_url.trim() : "";
+  const base = getMarketplaceImageFallbackBase(product);
+  const candidates = [
+    uploaded,
+    ...productPathCandidates(base),
+    ...productPathCandidates(PRODUCT_IMAGE_BASES.default),
+    "/images/arganwood-reference/explore-marketplace.png",
+  ].filter(Boolean);
 
-  if (type.includes("tree") || category.includes("tree") || name.includes("tree")) {
-    return "/images/arganwood-reference/young-agarwood-tree.png";
-  }
-
-  return "/images/arganwood-reference/explore-marketplace.png";
+  return Array.from(new Set(candidates));
 }
 
 function getProductImageUrl(product: MarketplaceProduct): string {
-  if (typeof product.image_url === "string" && product.image_url.trim().length > 0) {
-    return product.image_url;
-  }
-
-  return getMarketplaceImageFallback(product);
+  return getProductImageCandidates(product)[0] || "/products/default-product.png";
 }
 
 function getProductImageClass(product: MarketplaceProduct): string {
@@ -211,7 +234,7 @@ function getProductImageClass(product: MarketplaceProduct): string {
   const category = normalize(product.category);
   const name = normalize(product.name);
 
-  if (type === "TREE" || category.includes("tree") || name.includes("tree only")) {
+  if (type === "TREE" || category.includes("tree") || name.includes("seedling")) {
     return "productImage treeImageProduct";
   }
 
@@ -225,19 +248,19 @@ function getProductImageClass(product: MarketplaceProduct): string {
     category.includes("booster") ||
     category.includes("fungicide") ||
     category.includes("pest") ||
-    category.includes("soil")
+    category.includes("soil") ||
+    category.includes("health")
   ) {
     return "productImage supplyImageProduct";
   }
 
-  return "productImage";
+  return "productImage supplyImageProduct";
 }
 
 function getProductInitial(product: MarketplaceProduct): string {
   const name = product.name || "A";
   return name.trim().slice(0, 1).toUpperCase();
 }
-
 
 function normalizeSupplyCategory(category: string | null | undefined): SupplyCategory {
   const raw = normalize(category);
@@ -297,7 +320,8 @@ function normalizeSupplyCategory(category: string | null | undefined): SupplyCat
     raw.includes("disease") ||
     raw.includes("recovery") ||
     raw.includes("root protection") ||
-    raw.includes("protection")
+    raw.includes("protection") ||
+    raw.includes("treatment")
   ) {
     return "Tree Health";
   }
@@ -313,6 +337,21 @@ function getProductType(product: MarketplaceProduct): ProductType {
   if (type === "CARE_PACKAGE" || type === "SUPPLY") return "SUPPLY";
 
   if (normalizeSupplyCategory(product.category) === "Tree Care Programs") return "SUPPLY";
+
+  const name = normalize(product.name);
+  const category = normalize(product.category);
+
+  if (name.includes("package") || category.includes("package")) return "PACKAGE";
+  if (
+    category.includes("fertilizer") ||
+    category.includes("nutrient") ||
+    category.includes("fungicide") ||
+    category.includes("pest") ||
+    category.includes("soil") ||
+    category.includes("health")
+  ) {
+    return "SUPPLY";
+  }
 
   return "TREE";
 }
@@ -553,6 +592,41 @@ function getInventoryUnit(product: MarketplaceProduct) {
   if (category === "Soil Products") return "Bag";
 
   return "Unit";
+}
+
+function ProductVisual({
+  product,
+  className,
+  status,
+}: {
+  product: MarketplaceProduct;
+  className: string;
+  status?: string | null;
+}) {
+  const candidates = useMemo(() => getProductImageCandidates(product), [product]);
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [product.id, product.image_url, product.name, product.category]);
+
+  const src = candidates[index] || "/products/default-product.png";
+  const hasMore = index < candidates.length - 1;
+
+  return (
+    <div className={className}>
+      <img
+        src={src}
+        alt={product.name || "Marketplace product"}
+        onError={() => {
+          if (hasMore) {
+            setIndex((current) => current + 1);
+          }
+        }}
+      />
+      {status !== undefined && <em>{status || "AVAILABLE"}</em>}
+    </div>
+  );
 }
 
 export default function MarketplacePage() {
@@ -887,68 +961,6 @@ export default function MarketplacePage() {
     return getForestName(group);
   }
 
-  async function addInventoryStock(product: MarketplaceProduct, quantity: number) {
-    if (!profile) throw new Error("Profile not found.");
-
-    const itemName = product.name || "Marketplace Supply";
-    const category = product.category || normalizeSupplyCategory(product.category);
-    const unit = getInventoryUnit(product);
-
-    const existingItem = inventoryItems.find((item) => {
-      return (
-        normalize(item.item_name) === normalize(itemName) &&
-        normalize(item.category) === normalize(category) &&
-        normalize(item.unit) === normalize(unit)
-      );
-    });
-
-    if (existingItem) {
-      const newRemainingQty = Number(existingItem.remaining_qty || 0) + quantity;
-
-      const { error } = await supabase
-        .from("inventory")
-        .update({
-          remaining_qty: newRemainingQty,
-          status: "AVAILABLE",
-        })
-        .eq("id", existingItem.id);
-
-      if (error) throw error;
-
-      return;
-    }
-
-    const fullPayload = {
-      profile_id: profile.id,
-      tree_id: null,
-      item_name: itemName,
-      category,
-      unit,
-      starting_qty: quantity,
-      remaining_qty: quantity,
-      low_stock_level: Number(product.low_stock_level || 1),
-      status: "AVAILABLE",
-    };
-
-    const { error } = await supabase.from("inventory").insert(fullPayload);
-
-    if (error) {
-      const fallbackPayload = {
-        profile_id: profile.id,
-        item_name: itemName,
-        category,
-        unit,
-        remaining_qty: quantity,
-        status: "AVAILABLE",
-      };
-
-      const { error: fallbackError } = await supabase.from("inventory").insert(fallbackPayload);
-
-      if (fallbackError) throw fallbackError;
-    }
-  }
-
-
   async function buyTreesWithForest(product: MarketplaceProduct) {
     if (!profile) throw new Error("Profile not found.");
 
@@ -987,48 +999,7 @@ export default function MarketplacePage() {
       throw new Error(`Tree purchase failed: ${error.message}`);
     }
 
-    await syncPurchasedTreeImages(product, quantity);
-
     return data;
-  }
-
-  async function syncPurchasedTreeImages(product: MarketplaceProduct, quantity: number) {
-    if (!profile) return;
-    const imageUrl = getProductImageUrl(product);
-    if (!imageUrl) return;
-
-    try {
-      const { data, error } = await supabase
-        .from("trees")
-        .select("id")
-        .or(`customer_profile_id.eq.${profile.id},profile_id.eq.${profile.id}`)
-        .order("created_at", { ascending: false })
-        .limit(Math.max(quantity, 1));
-
-      if (error) return console.warn("Purchased tree image sync skipped:", error.message);
-
-      for (const tree of data || []) {
-        await updateTreeBaseImage(String(tree.id), imageUrl);
-      }
-    } catch (error) {
-      console.warn("Purchased tree image sync skipped:", error);
-    }
-  }
-
-  async function updateTreeBaseImage(treeId: string, imageUrl: string) {
-    const now = new Date().toISOString();
-    const attempts: Record<string, any>[] = [
-      { image_url: imageUrl, photo_url: imageUrl, default_image_url: imageUrl, updated_at: now },
-      { image_url: imageUrl, photo_url: imageUrl, updated_at: now },
-      { image_url: imageUrl, updated_at: now },
-      { photo_url: imageUrl, updated_at: now },
-      { image_url: imageUrl },
-      { photo_url: imageUrl },
-    ];
-    for (const payload of attempts) {
-      const { error } = await supabase.from("trees").update(payload).eq("id", treeId);
-      if (!error) return;
-    }
   }
 
   async function purchaseProduct(product: MarketplaceProduct) {
@@ -1098,13 +1069,13 @@ export default function MarketplacePage() {
 
   const selectedCategory = selectedProduct ? normalizeSupplyCategory(selectedProduct.category) : "All Supplies";
   const selectedProductType = selectedProduct ? getProductType(selectedProduct) : "TREE";
-  const selectedProductImageUrl = selectedProduct ? getProductImageUrl(selectedProduct) : undefined;
   const selectedIsTreePurchase = selectedProduct ? isTreePurchaseProduct(selectedProduct) : false;
   const selectedQuantity = selectedProduct ? getSelectedTreeQuantity(selectedProduct) : 1;
   const selectedSubtotal = selectedProduct ? getSelectedPurchaseSubtotal(selectedProduct) : 0;
   const selectedPlatformFee = selectedProduct ? getSelectedPlatformFeeAmount(selectedProduct) : 0;
   const selectedTotal = selectedProduct ? getSelectedPurchaseTotal(selectedProduct) : 0;
   const selectedUnitPrice = selectedProduct ? getSelectedUnitPrice(selectedProduct) : 0;
+
   const addToForestBannerGroup = useMemo(() => {
     if (typeof window === "undefined") return null;
 
@@ -1255,21 +1226,15 @@ export default function MarketplacePage() {
                   const category = normalizeSupplyCategory(product.category);
                   const isProgram = category === "Tree Care Programs";
                   const treePurchase = isTreePurchaseProduct(product);
-                  const productImageUrl = getProductImageUrl(product);
                   const imageClassName = getProductImageClass(product);
 
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
-                      <div className={imageClassName}>
-                        <img
-                          src={productImageUrl}
-                          alt={product.name || "Marketplace product"}
-                          onError={(event) => {
-                            event.currentTarget.src = getMarketplaceImageFallback(product);
-                          }}
-                        />
-                        <em>{product.stock_status || "AVAILABLE"}</em>
-                      </div>
+                      <ProductVisual
+                        product={product}
+                        className={imageClassName}
+                        status={product.stock_status || "AVAILABLE"}
+                      />
 
                       <div className="cardHead">
                         <small>{isProgram ? "CARE PACKAGE" : type}</small>
@@ -1328,15 +1293,10 @@ export default function MarketplacePage() {
               ×
             </button>
 
-            <div className={selectedProductType === "TREE" ? "modalProductImage treeImageProduct" : "modalProductImage"}>
-              <img
-                src={selectedProductImageUrl}
-                alt={selectedProduct.name || "Marketplace product"}
-                onError={(event) => {
-                  event.currentTarget.src = getMarketplaceImageFallback(selectedProduct);
-                }}
-              />
-            </div>
+            <ProductVisual
+              product={selectedProduct}
+              className={selectedProductType === "TREE" ? "modalProductImage treeImageProduct" : "modalProductImage"}
+            />
 
             <p className="eyebrow">Product Details</p>
             <h2>{selectedProduct.name || "Marketplace Product"}</h2>
@@ -1435,7 +1395,7 @@ export default function MarketplacePage() {
                       type="text"
                       value={newForestName}
                       onChange={(event) => setNewForestName(event.target.value)}
-                      placeholder="Example: My Forest"
+                      placeholder="Example: Robert Forest"
                     />
                   </label>
                 )}
@@ -1577,9 +1537,9 @@ export default function MarketplacePage() {
             )}
 
             {selectedCategory === "Tree Care Programs" ? (
-              <button className="disabledBuy" disabled>
+              <Link className="disabledBuy actionLink" href="/dashboard/tree-operations">
                 Activate Care from Tree Operations
-              </button>
+              </Link>
             ) : (
               <button
                 className="buyBtn modalBuy"
@@ -1594,9 +1554,7 @@ export default function MarketplacePage() {
       )}
 
       <style>{`
-        * {
-          box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         .page {
           min-height: 100vh;
@@ -1609,51 +1567,13 @@ export default function MarketplacePage() {
             linear-gradient(180deg, #f8f4eb 0%, #f3eadb 52%, #eadcc3 100%);
         }
 
-        .hero {
-          display: flex;
-          justify-content: space-between;
-          align-items: stretch;
-          gap: 18px;
-          margin-bottom: 22px;
-        }
+        .hero { display: flex; justify-content: space-between; align-items: stretch; gap: 18px; margin-bottom: 22px; }
+        .back { display: inline-block; margin-bottom: 12px; color: #8c6a3c; font-weight: 900; text-decoration: none; }
+        .eyebrow { margin: 0 0 8px; color: #8c6a3c; font-weight: 900; text-transform: uppercase; letter-spacing: .12em; font-size: 12px; }
+        .eyebrow.small { margin-bottom: 4px; font-size: 11px; }
 
-        .back {
-          display: inline-block;
-          margin-bottom: 12px;
-          color: #8c6a3c;
-          font-weight: 900;
-          text-decoration: none;
-        }
-
-        .eyebrow {
-          margin: 0 0 8px;
-          color: #8c6a3c;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-          font-size: 12px;
-        }
-
-        .eyebrow.small {
-          margin-bottom: 4px;
-          font-size: 11px;
-        }
-
-        h1 {
-          margin: 0;
-          font-size: 44px;
-          color: #101a14;
-          letter-spacing: -1.6px;
-        }
-
-        .hero span {
-          display: block;
-          margin-top: 8px;
-          color: #5f665e;
-          max-width: 860px;
-          line-height: 1.6;
-          font-weight: 700;
-        }
+        h1 { margin: 0; font-size: 44px; color: #101a14; letter-spacing: -1.6px; }
+        .hero span { display: block; margin-top: 8px; color: #5f665e; max-width: 860px; line-height: 1.6; font-weight: 700; }
 
         .walletCard {
           min-width: 290px;
@@ -1666,54 +1586,21 @@ export default function MarketplacePage() {
           box-shadow: 0 24px 56px rgba(36,69,54,.24);
         }
 
-        .walletCard p {
-          margin: 0;
-          color: rgba(255,255,255,.72);
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: .14em;
-          font-size: 12px;
-        }
+        .walletCard p { margin: 0; color: rgba(255,255,255,.72); font-weight: 900; text-transform: uppercase; letter-spacing: .14em; font-size: 12px; }
+        .walletCard strong { display: block; margin-top: 10px; font-size: 30px; }
+        .walletCard small { color: rgba(255,255,255,.72); font-weight: 900; }
 
-        .walletCard strong {
-          display: block;
-          margin-top: 10px;
-          font-size: 30px;
-        }
-
-        .walletCard small {
-          color: rgba(255,255,255,.72);
-          font-weight: 900;
-        }
-
-        .message,
-        .empty,
-        .tabs,
-        .sidebar,
-        .card,
-        .sectionHead {
+        .message, .empty, .tabs, .sidebar, .card, .sectionHead {
           border-radius: 26px;
           background: rgba(255,253,246,.88);
           border: 1px solid rgba(92,70,35,.08);
           box-shadow: 0 18px 42px rgba(82,60,27,.09);
         }
 
-        .message,
-        .empty {
-          padding: 20px;
-          margin-bottom: 18px;
-          color: #31553d;
-          font-weight: 900;
-        }
+        .message, .empty { padding: 20px; margin-bottom: 18px; color: #31553d; font-weight: 900; }
+        .message.success { background: rgba(234, 248, 230, .92); border-color: rgba(49, 125, 72, .20); }
 
-        .tabs {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 12px;
-          padding: 12px;
-          margin-bottom: 18px;
-        }
-
+        .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 12px; margin-bottom: 18px; }
         .tabs button {
           border: 0;
           border-radius: 20px;
@@ -1756,56 +1643,18 @@ export default function MarketplacePage() {
           background: rgba(255,255,255,.08);
         }
 
-        .tabs button span:last-child {
-          display: grid;
-          gap: 3px;
-        }
+        .tabs button span:last-child { display: grid; gap: 3px; }
+        .tabs small { color: inherit; opacity: .68; font-size: 12px; }
 
-        .tabs small {
-          color: inherit;
-          opacity: .68;
-          font-size: 12px;
-        }
+        .content { display: block; }
+        .content.suppliesMode { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
 
-        .content {
-          display: block;
-        }
+        .sidebar { padding: 16px; position: sticky; top: 18px; }
+        .sidebarTitle { padding: 8px 8px 14px; }
+        .sidebarTitle b { display: block; font-size: 18px; color: #10281f; }
+        .sidebarTitle small { display: block; margin-top: 4px; color: #7a7568; font-weight: 800; }
 
-        .content.suppliesMode {
-          display: grid;
-          grid-template-columns: 280px 1fr;
-          gap: 16px;
-          align-items: start;
-        }
-
-        .sidebar {
-          padding: 16px;
-          position: sticky;
-          top: 18px;
-        }
-
-        .sidebarTitle {
-          padding: 8px 8px 14px;
-        }
-
-        .sidebarTitle b {
-          display: block;
-          font-size: 18px;
-          color: #10281f;
-        }
-
-        .sidebarTitle small {
-          display: block;
-          margin-top: 4px;
-          color: #7a7568;
-          font-weight: 800;
-        }
-
-        .categoryList {
-          display: grid;
-          gap: 8px;
-        }
-
+        .categoryList { display: grid; gap: 8px; }
         .categoryList button {
           border: 0;
           border-radius: 16px;
@@ -1820,11 +1669,7 @@ export default function MarketplacePage() {
           text-align: left;
         }
 
-        .categoryList button.active {
-          background: #244536;
-          color: white;
-          box-shadow: 0 16px 30px rgba(36,69,54,.18);
-        }
+        .categoryList button.active { background: #244536; color: white; box-shadow: 0 16px 30px rgba(36,69,54,.18); }
 
         .categoryBadge {
           width: 34px;
@@ -1847,9 +1692,7 @@ export default function MarketplacePage() {
           border-color: rgba(244,213,139,.28);
         }
 
-        .productArea {
-          min-width: 0;
-        }
+        .productArea { min-width: 0; }
 
         .sectionHead {
           padding: 18px;
@@ -1860,11 +1703,7 @@ export default function MarketplacePage() {
           align-items: center;
         }
 
-        .sectionHead h2 {
-          margin: 0;
-          font-size: 28px;
-          color: #101a14;
-        }
+        .sectionHead h2 { margin: 0; font-size: 28px; color: #101a14; }
 
         .modeNote {
           border-radius: 999px;
@@ -1877,23 +1716,9 @@ export default function MarketplacePage() {
           letter-spacing: .06em;
         }
 
-        .grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 18px;
-        }
-
-        .card {
-          padding: 18px;
-          border-radius: 30px;
-          transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-        }
-
-        .card:hover {
-          transform: translateY(-4px);
-          border-color: rgba(179,129,35,.18);
-          box-shadow: 0 28px 64px rgba(82,60,27,.15);
-        }
+        .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+        .card { padding: 18px; border-radius: 30px; transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+        .card:hover { transform: translateY(-4px); border-color: rgba(179,129,35,.18); box-shadow: 0 28px 64px rgba(82,60,27,.15); }
 
         .programCard {
           border-color: rgba(179, 129, 35, .24);
@@ -1902,8 +1727,7 @@ export default function MarketplacePage() {
             rgba(255,253,246,.92);
         }
 
-        .productImage,
-        .modalProductImage {
+        .productImage, .modalProductImage {
           position: relative;
           width: 100%;
           height: 282px;
@@ -1923,14 +1747,9 @@ export default function MarketplacePage() {
           justify-content: center;
         }
 
-        .modalProductImage {
-          width: min(300px, 100%);
-          height: 300px;
-          margin-bottom: 18px;
-        }
+        .modalProductImage { width: min(300px, 100%); height: 300px; margin-bottom: 18px; }
 
-        .productImage:before,
-        .modalProductImage:before {
+        .productImage:before, .modalProductImage:before {
           content: "";
           position: absolute;
           inset: 16px;
@@ -1939,8 +1758,7 @@ export default function MarketplacePage() {
           pointer-events: none;
         }
 
-        .productImage img,
-        .modalProductImage img {
+        .productImage img, .modalProductImage img {
           position: relative;
           z-index: 1;
           width: 100%;
@@ -1966,15 +1784,8 @@ export default function MarketplacePage() {
           z-index: 2;
         }
 
-        .treeImageProduct img {
-          object-fit: cover;
-          filter: none;
-        }
-
-        .packageImageProduct img {
-          max-width: 92%;
-          max-height: 92%;
-        }
+        .treeImageProduct img { object-fit: cover; filter: none; }
+        .packageImageProduct img { max-width: 92%; max-height: 92%; }
 
         .supplyImageProduct {
           padding: 30px;
@@ -1983,34 +1794,7 @@ export default function MarketplacePage() {
             linear-gradient(180deg, #fffdf6, #f2ead8);
         }
 
-        .supplyImageProduct img {
-          max-width: 88%;
-          max-height: 88%;
-        }
-
-        .productImageFallback {
-          width: 100%;
-          height: 100%;
-          display: grid;
-          place-items: center;
-          background:
-            radial-gradient(circle at 50% 20%, rgba(244,213,139,.20), transparent 30%),
-            linear-gradient(135deg, rgba(14,48,31,.92), rgba(6,23,15,.96));
-        }
-
-        .productImageFallback span {
-          width: 64px;
-          height: 64px;
-          border-radius: 999px;
-          display: grid;
-          place-items: center;
-          color: #f4d58b;
-          border: 1px solid rgba(244,213,139,.34);
-          background: rgba(255,255,255,.07);
-          font-weight: 900;
-          font-size: 28px;
-          letter-spacing: -.04em;
-        }
+        .supplyImageProduct img { max-width: 88%; max-height: 88%; }
 
         .productImage em {
           position: absolute;
@@ -2029,16 +1813,9 @@ export default function MarketplacePage() {
           border: 1px solid rgba(36,69,54,.08);
         }
 
-        .cardHead {
-          display: flex;
-          justify-content: space-between;
-          gap: 10px;
-          align-items: center;
-          margin-bottom: 12px;
-        }
+        .cardHead { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
 
-        .cardHead small,
-        .priceRow small {
+        .cardHead small, .priceRow small {
           border-radius: 999px;
           padding: 7px 10px;
           background: rgba(49,85,61,.10);
@@ -2049,62 +1826,17 @@ export default function MarketplacePage() {
           letter-spacing: .08em;
         }
 
-        .card h3 {
-          margin: 0;
-          font-size: 21px;
-          color: #101a14;
-          line-height: 1.2;
-        }
+        .card h3 { margin: 0; font-size: 21px; color: #101a14; line-height: 1.2; }
+        .card p { min-height: 72px; color: #6b6b62; line-height: 1.5; font-weight: 800; }
 
-        .card p {
-          min-height: 72px;
-          color: #6b6b62;
-          line-height: 1.5;
-          font-weight: 800;
-        }
+        .priceRow { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin: 12px 0 14px; }
+        .priceRow b { color: #244536; font-size: 24px; }
 
-        .priceRow {
-          display: flex;
-          justify-content: space-between;
-          gap: 10px;
-          align-items: center;
-          margin: 12px 0 14px;
-        }
+        .forestHint { border-radius: 16px; padding: 12px; margin: 0 0 12px; background: rgba(36,69,54,.08); border: 1px solid rgba(36,69,54,.10); }
+        .forestHint b { display: block; color: #10281f; font-size: 13px; margin-bottom: 3px; }
+        .forestHint span { color: #667064; font-size: 12px; line-height: 1.35; font-weight: 800; }
 
-        .priceRow b {
-          color: #244536;
-          font-size: 24px;
-        }
-
-        .forestHint {
-          border-radius: 16px;
-          padding: 12px;
-          margin: 0 0 12px;
-          background: rgba(36,69,54,.08);
-          border: 1px solid rgba(36,69,54,.10);
-        }
-
-        .forestHint b {
-          display: block;
-          color: #10281f;
-          font-size: 13px;
-          margin-bottom: 3px;
-        }
-
-        .forestHint span {
-          color: #667064;
-          font-size: 12px;
-          line-height: 1.35;
-          font-weight: 800;
-        }
-
-        .programActions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-          margin-bottom: 12px;
-        }
-
+        .programActions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
         .programActions button {
           border: 0;
           border-radius: 14px;
@@ -2117,15 +1849,9 @@ export default function MarketplacePage() {
           cursor: pointer;
         }
 
-        .programActions button:hover {
-          background: #244536;
-          color: white;
-        }
+        .programActions button:hover { background: #244536; color: white; }
 
-        .viewBtn,
-        .buyBtn,
-        .disabledBuy,
-        .careButtons button {
+        .viewBtn, .buyBtn, .disabledBuy, .careButtons button {
           width: 100%;
           border: 0;
           border-radius: 16px;
@@ -2134,22 +1860,17 @@ export default function MarketplacePage() {
           color: white;
           font-weight: 900;
           cursor: pointer;
+          text-align: center;
+          text-decoration: none;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
         }
 
-        .buyBtn {
-          margin-bottom: 8px;
-          background: linear-gradient(135deg, #244536, #10281f);
-        }
-
-        .buyBtn:disabled {
-          opacity: .58;
-          cursor: not-allowed;
-        }
-
-        .modalBuy {
-          margin-top: 4px;
-          margin-bottom: 0;
-        }
+        .buyBtn { margin-bottom: 8px; background: linear-gradient(135deg, #244536, #10281f); }
+        .buyBtn:disabled { opacity: .58; cursor: not-allowed; }
+        .modalBuy { margin-top: 4px; margin-bottom: 0; }
+        .actionLink { margin-top: 4px; }
 
         .modalOverlay {
           position: fixed;
@@ -2191,42 +1912,14 @@ export default function MarketplacePage() {
           font-weight: 900;
         }
 
-        .modal h2 {
-          margin: 0;
-          font-size: 34px;
-          color: #101a14;
-        }
+        .modal h2 { margin: 0; font-size: 34px; color: #101a14; }
+        .modalPrice { margin: 12px 0; color: #244536; font-size: 32px; font-weight: 900; }
+        .modalNote { color: #666257; line-height: 1.6; font-weight: 800; }
 
-        .modalPrice {
-          margin: 12px 0;
-          color: #244536;
-          font-size: 32px;
-          font-weight: 900;
-        }
+        .detailGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 18px 0; }
+        .detailGrid div { border-radius: 18px; padding: 14px; background: #f3ead8; }
 
-        .modalNote {
-          color: #666257;
-          line-height: 1.6;
-          font-weight: 800;
-        }
-
-        .detailGrid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 10px;
-          margin: 18px 0;
-        }
-
-        .detailGrid div {
-          border-radius: 18px;
-          padding: 14px;
-          background: #f3ead8;
-        }
-
-        .detailGrid small,
-        .checkoutSummary small,
-        .packageQuantityBox small,
-        .forestPurchaseHead small {
+        .detailGrid small, .checkoutSummary small, .packageQuantityBox small, .forestPurchaseHead small {
           display: block;
           color: #8c6a3c;
           font-size: 11px;
@@ -2236,9 +1929,7 @@ export default function MarketplacePage() {
           margin-bottom: 5px;
         }
 
-        .detailGrid b {
-          color: #10281f;
-        }
+        .detailGrid b { color: #10281f; }
 
         .forestPurchaseBox {
           border-radius: 26px;
@@ -2250,19 +1941,8 @@ export default function MarketplacePage() {
           border: 1px solid rgba(36,69,54,.12);
         }
 
-        .forestPurchaseHead {
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
-          align-items: flex-start;
-          margin-bottom: 14px;
-        }
-
-        .forestPurchaseHead b {
-          display: block;
-          color: #10281f;
-          font-size: 20px;
-        }
+        .forestPurchaseHead { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+        .forestPurchaseHead b { display: block; color: #10281f; font-size: 20px; }
 
         .forestPurchaseHead span {
           border-radius: 999px;
@@ -2284,8 +1964,7 @@ export default function MarketplacePage() {
           margin: 12px 0;
         }
 
-        .fieldLabel input,
-        .fieldLabel select {
+        .fieldLabel input, .fieldLabel select {
           width: 100%;
           border: 1px solid rgba(36,69,54,.16);
           border-radius: 16px;
@@ -2307,25 +1986,10 @@ export default function MarketplacePage() {
           border: 1px solid rgba(36,69,54,.10);
         }
 
-        .packageQuantityBox b {
-          display: block;
-          color: #10281f;
-          font-size: 22px;
-        }
+        .packageQuantityBox b { display: block; color: #10281f; font-size: 22px; }
+        .packageQuantityBox p { margin: 6px 0 0; min-height: 0; color: #667064; font-weight: 800; }
 
-        .packageQuantityBox p {
-          margin: 6px 0 0;
-          min-height: 0;
-          color: #667064;
-          font-weight: 800;
-        }
-
-        .forestModeGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-          margin: 12px 0;
-        }
+        .forestModeGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
 
         .forestModeGrid button {
           border: 1px solid rgba(36,69,54,.12);
@@ -2337,46 +2001,14 @@ export default function MarketplacePage() {
           text-align: left;
         }
 
-        .forestModeGrid button.active {
-          background: #244536;
-          color: white;
-          border-color: #244536;
-        }
+        .forestModeGrid button.active { background: #244536; color: white; border-color: #244536; }
+        .forestModeGrid button:disabled { opacity: .45; cursor: not-allowed; }
+        .forestModeGrid strong { display: block; font-size: 14px; margin-bottom: 4px; }
+        .forestModeGrid span { font-size: 12px; font-weight: 800; opacity: .78; }
 
-        .forestModeGrid button:disabled {
-          opacity: .45;
-          cursor: not-allowed;
-        }
-
-        .forestModeGrid strong {
-          display: block;
-          font-size: 14px;
-          margin-bottom: 4px;
-        }
-
-        .forestModeGrid span {
-          font-size: 12px;
-          font-weight: 800;
-          opacity: .78;
-        }
-
-        .checkoutSummary {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-          margin-top: 14px;
-        }
-
-        .checkoutSummary div {
-          border-radius: 18px;
-          padding: 14px;
-          background: rgba(255,253,246,.76);
-          border: 1px solid rgba(36,69,54,.10);
-        }
-
-        .checkoutSummary b {
-          color: #10281f;
-        }
+        .checkoutSummary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+        .checkoutSummary div { border-radius: 18px; padding: 14px; background: rgba(255,253,246,.76); border: 1px solid rgba(36,69,54,.10); }
+        .checkoutSummary b { color: #10281f; }
 
         .selectedActionBox {
           border-radius: 22px;
@@ -2398,11 +2030,7 @@ export default function MarketplacePage() {
           margin-bottom: 6px;
         }
 
-        .selectedActionBox b {
-          display: block;
-          color: #10281f;
-          font-size: 22px;
-        }
+        .selectedActionBox b { display: block; color: #10281f; font-size: 22px; }
 
         .allowedBox {
           border-color: rgba(49, 125, 72, .24);
@@ -2418,43 +2046,12 @@ export default function MarketplacePage() {
             linear-gradient(135deg, rgba(160,72,48,.14), rgba(160,72,48,.05));
         }
 
-        .selectedActionBox p {
-          margin: 8px 0 0;
-          color: #5f665e;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .programModalGrid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-          margin: 18px 0;
-        }
-
-        .programInfoBox {
-          border-radius: 22px;
-          padding: 16px;
-          background: #f3ead8;
-        }
-
-        .programInfoBox b {
-          display: block;
-          color: #10281f;
-          margin-bottom: 10px;
-        }
-
-        .programInfoBox ul {
-          margin: 0;
-          padding-left: 18px;
-          color: #5f665e;
-          font-weight: 800;
-          line-height: 1.7;
-        }
-
-        .programInfoBox li {
-          margin-bottom: 4px;
-        }
+        .selectedActionBox p { margin: 8px 0 0; color: #5f665e; font-weight: 800; line-height: 1.5; }
+        .programModalGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+        .programInfoBox { border-radius: 22px; padding: 16px; background: #f3ead8; }
+        .programInfoBox b { display: block; color: #10281f; margin-bottom: 10px; }
+        .programInfoBox ul { margin: 0; padding-left: 18px; color: #5f665e; font-weight: 800; line-height: 1.7; }
+        .programInfoBox li { margin-bottom: 4px; }
 
         .requirementsBox {
           border: 1px solid rgba(36,69,54,.12);
@@ -2471,17 +2068,8 @@ export default function MarketplacePage() {
           border: 1px solid rgba(160,72,48,.18);
         }
 
-        .missingBox strong {
-          color: #6f2f1f;
-        }
-
-        .missingBox ul {
-          margin: 10px 0 14px;
-          padding-left: 18px;
-          color: #6f2f1f;
-          font-weight: 900;
-          line-height: 1.6;
-        }
+        .missingBox strong { color: #6f2f1f; }
+        .missingBox ul { margin: 10px 0 14px; padding-left: 18px; color: #6f2f1f; font-weight: 900; line-height: 1.6; }
 
         .buyMissingBtn {
           display: inline-flex;
@@ -2504,64 +2092,22 @@ export default function MarketplacePage() {
           color: white;
         }
 
-        .durationBox b,
-        .durationBox strong,
-        .durationBox p {
-          color: white;
-        }
+        .durationBox b, .durationBox strong, .durationBox p { color: white; }
+        .durationBox strong { display: block; font-size: 26px; margin-bottom: 8px; }
+        .durationBox p { margin: 0; opacity: .82; font-weight: 800; line-height: 1.5; }
 
-        .durationBox strong {
-          display: block;
-          font-size: 26px;
-          margin-bottom: 8px;
-        }
-
-        .durationBox p {
-          margin: 0;
-          opacity: .82;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .careBox {
-          border-radius: 22px;
-          padding: 16px;
-          background: rgba(36,69,54,.08);
-          margin-bottom: 16px;
-        }
-
-        .careBox b {
-          color: #10281f;
-        }
-
-        .careBox p {
-          color: #5f665e;
-          font-weight: 800;
-          line-height: 1.5;
-        }
-
-        .careButtons {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
-        }
-
-        .careButtons button,
-        .disabledBuy:disabled {
-          opacity: .6;
-          cursor: not-allowed;
-        }
+        .careBox { border-radius: 22px; padding: 16px; background: rgba(36,69,54,.08); margin-bottom: 16px; }
+        .careBox b { color: #10281f; }
+        .careBox p { color: #5f665e; font-weight: 800; line-height: 1.5; }
+        .careButtons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .careButtons button, .disabledBuy:disabled { opacity: .72; }
 
         @media (max-width: 1120px) {
-          .grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
+          .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 880px) {
-          .page {
-            padding: 18px;
-          }
+          .page { padding: 18px; }
 
           .hero,
           .tabs,
@@ -2578,22 +2124,10 @@ export default function MarketplacePage() {
             grid-template-columns: 1fr;
           }
 
-          h1 {
-            font-size: 34px;
-          }
-
-          .walletCard {
-            min-width: 0;
-          }
-
-          .sidebar {
-            position: static;
-          }
-
-          .sectionHead,
-          .forestPurchaseHead {
-            align-items: start;
-          }
+          h1 { font-size: 34px; }
+          .walletCard { min-width: 0; }
+          .sidebar { position: static; }
+          .sectionHead, .forestPurchaseHead { align-items: start; }
         }
       `}</style>
     </main>
