@@ -85,14 +85,6 @@ type EvidenceRow = Row & {
   updated_at?: string | null;
 };
 
-type TimelineItem = {
-  id: string;
-  title: string;
-  description: string;
-  date: string | null;
-  href: string;
-  type: string;
-};
 
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
@@ -130,6 +122,14 @@ function getHourGreeting() {
   if (hour < 18) return "Good afternoon";
   return "Good evening";
 }
+
+
+const referenceTreeImages = [
+  "/images/arganwood-reference/tree-card-reference-1.png",
+  "/images/arganwood-reference/tree-card-reference-2.png",
+  "/images/arganwood-reference/tree-card-reference-3.png",
+  "/images/arganwood-reference/tree-card-reference-4.png",
+];
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
@@ -335,14 +335,8 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
-  }
-
   const displayName = profile?.full_name || profile?.email || "Arganwood Investor";
   const firstName = displayName.split(" ").filter(Boolean)[0] || "Investor";
-  const initials = getInitials(displayName);
   const membershipStatus = normalize(profile?.membership_status || "INACTIVE");
   const walletBalance = Number(wallet?.balance || 0);
 
@@ -388,194 +382,6 @@ export default function DashboardPage() {
 
     return "Healthy";
   }, [photoEvidence.length, gpsEvidence.length, healthEvidence.length, latestHealth]);
-
-  const selectedTree = trees[0] || null;
-  const activeOperation = operationRequests.find((operation) =>
-    ["PENDING", "ASSIGNED", "IN_PROGRESS", "REQUESTED", "PAID", "PROCESSING"].includes(
-      normalize(operation.status || operation.assignment_status)
-    )
-  );
-
-  const treeCarePlan = useMemo(() => {
-    if (!selectedTree) {
-      return {
-        stage: "No tree selected yet",
-        condition: "No condition report yet",
-        recommendedAction: "Buy Tree",
-        reason: "Start by buying or selecting a tree to activate its care plan.",
-        hasTree: false,
-      };
-    }
-
-    const stage = selectedTree.stage || "Early Establishment";
-    const condition = latestHealth?.health_status || latestHealth?.issue_summary || "No condition report yet";
-
-    let recommendedAction = "Regular Watering / Care Check";
-
-    if (activeOperation) {
-      recommendedAction =
-        activeOperation.service_name ||
-        activeOperation.operation_type ||
-        activeOperation.service_type ||
-        activeOperation.request_type ||
-        "Track Service";
-    } else if (gpsEvidence.length === 0) {
-      recommendedAction = "GPS Verification";
-    } else if (photoEvidence.length === 0) {
-      recommendedAction = "Photo Update";
-    }
-
-    return {
-      stage,
-      condition,
-      recommendedAction,
-      reason: careReason(recommendedAction),
-      hasTree: true,
-    };
-  }, [selectedTree, latestHealth, activeOperation, gpsEvidence.length, photoEvidence.length]);
-
-  const timelineItems = useMemo<TimelineItem[]>(() => {
-    const photos = photoEvidence.map((row) => ({
-      id: `photo-${row.id}`,
-      title: "Photo Update approved",
-      description: treeLabel(findTree(row.tree_id, trees)),
-      date: row.created_at || row.updated_at || null,
-      href: "/dashboard/my-trees",
-      type: "PHOTO",
-    }));
-
-    const gps = gpsEvidence.map((row) => ({
-      id: `gps-${row.id}`,
-      title: "GPS Verification completed",
-      description: treeLabel(findTree(row.tree_id, trees)),
-      date: row.created_at || row.updated_at || null,
-      href: "/dashboard/my-trees",
-      type: "GPS",
-    }));
-
-    const health = healthEvidence.map((row) => ({
-      id: `health-${row.id}`,
-      title: "Health Check completed",
-      description: row.health_status || row.issue_summary || treeLabel(findTree(row.tree_id, trees)),
-      date: row.created_at || row.updated_at || null,
-      href: "/dashboard/my-trees",
-      type: "HEALTH",
-    }));
-
-    const completedOperations = operationRequests
-      .filter((row) => normalize(row.status) === "COMPLETED")
-      .map((row) => ({
-        id: `operation-${row.id}`,
-        title: `${cleanLabel(row.service_name || row.operation_type || row.service_type || row.request_type)} completed`,
-        description: row.notes || "Tree operation approved by Admin",
-        date: row.completed_at || row.created_at || null,
-        href: "/dashboard/tree-operations",
-        type: "OPERATION",
-      }));
-
-    const qrItems = trees
-      .filter((tree) => ["INSTALLED", "VERIFIED"].includes(normalize(tree.qr_tag_status)))
-      .map((tree) => ({
-        id: `qr-${tree.id}`,
-        title: `QR Tag ${cleanLabel(tree.qr_tag_status)}`,
-        description: treeLabel(tree),
-        date: tree.updated_at || tree.created_at || null,
-        href: "/dashboard/my-trees",
-        type: "QR",
-      }));
-
-    return [...photos, ...gps, ...health, ...completedOperations, ...qrItems]
-      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
-      .slice(0, 7);
-  }, [photoEvidence, gpsEvidence, healthEvidence, operationRequests, trees]);
-
-  const smartActions = useMemo(() => {
-    const actions: {
-      title: string;
-      text: string;
-      href: string;
-      icon: ReactNode;
-      priority: number;
-    }[] = [
-      {
-        title: "View My Trees",
-        text: "Open your owned tree portfolio.",
-        href: "/dashboard/my-trees",
-        icon: <TreeIcon />,
-        priority: 5,
-      },
-      {
-        title: "Request Tree Service",
-        text: "Book care, GPS, photo, or health updates.",
-        href: "/dashboard/tree-operations",
-        icon: <ServiceIcon />,
-        priority: trees.length > 0 && !activeOperation ? 3 : 7,
-      },
-      {
-        title: "Buy More Trees",
-        text: "Expand your Arganwood portfolio.",
-        href: "/dashboard/marketplace",
-        icon: <MarketIcon />,
-        priority: trees.length === 0 ? 1 : 6,
-      },
-      {
-        title: "Sell Tree",
-        text: "Request sale review for eligible trees.",
-        href: "/dashboard/sell-tree",
-        icon: <SellIcon />,
-        priority: 8,
-      },
-      {
-        title: walletBalance <= 0 ? "Add Funds / Wallet" : "Open Wallet",
-        text: "Manage investment balance and wallet records.",
-        href: "/dashboard/wallet",
-        icon: <WalletIcon />,
-        priority: walletBalance <= 0 ? 2 : 9,
-      },
-      {
-        title: "Manage Membership",
-        text: "Keep annual customer access active.",
-        href: "/dashboard/membership",
-        icon: <MembershipIcon />,
-        priority: membershipStatus !== "ACTIVE" ? 0 : 10,
-      },
-      {
-        title: "Contact Support",
-        text: "Get help with your account or plantation records.",
-        href: "/dashboard/support",
-        icon: <SupportIcon />,
-        priority: 11,
-      },
-    ];
-
-    if (activeOperation) {
-      actions.push({
-        title: "Track Service",
-        text: cleanLabel(activeOperation.service_name || activeOperation.operation_type || "Active request"),
-        href: "/dashboard/tree-operations",
-        icon: <TrackIcon />,
-        priority: 1,
-      });
-    } else if (trees.length > 0 && gpsEvidence.length === 0) {
-      actions.push({
-        title: "Request GPS Verification",
-        text: "Protect ownership with verified tree location.",
-        href: "/dashboard/tree-operations",
-        icon: <PinIcon />,
-        priority: 1,
-      });
-    } else if (trees.length > 0 && photoEvidence.length === 0) {
-      actions.push({
-        title: "Request Photo Update",
-        text: "Get visual proof from the plantation.",
-        href: "/dashboard/tree-operations",
-        icon: <CameraIcon />,
-        priority: 1,
-      });
-    }
-
-    return actions.sort((a, b) => a.priority - b.priority).slice(0, 7);
-  }, [trees.length, activeOperation, walletBalance, membershipStatus, gpsEvidence.length, photoEvidence.length]);
 
   const missionSummary = useMemo(() => {
     const counts = {
@@ -632,56 +438,56 @@ export default function DashboardPage() {
         title: "Marketplace",
         text: "Buy trees, packages, and care supplies.",
         href: "/dashboard/marketplace",
-        image: "/images/marketplace-care-package.png",
+        image: "/images/arganwood-reference/explore-marketplace.png",
         icon: <MarketIcon />,
       },
       {
         title: "My Trees",
         text: "Open your owned plantation portfolio.",
         href: "/dashboard/my-trees",
-        image: "/images/agarwood-real-tree.jpg",
+        image: "/images/arganwood-reference/explore-my-trees.png",
         icon: <TreeIcon />,
       },
       {
         title: "Tree Services",
         text: "Request GPS, photo, health, or field work.",
         href: "/dashboard/tree-operations",
-        image: "/images/agarwood-seedling-nursery.png",
+        image: "/images/arganwood-reference/explore-tree-services.png",
         icon: <ServiceIcon />,
       },
       {
         title: "Membership",
         text: "Manage customer access and renewals.",
         href: "/dashboard/membership",
-        image: "/images/arganwood-membership.png",
+        image: "/images/arganwood-reference/explore-membership.png",
         icon: <MembershipIcon />,
       },
       {
         title: "Wallet",
         text: "Manage balance, cash-in, and withdrawals.",
         href: "/dashboard/wallet",
-        image: "/images/arganwood-wallet.png",
+        image: "/images/arganwood-reference/explore-wallet.png",
         icon: <WalletIcon />,
       },
       {
         title: "Investments",
         text: "Track investment balance and portfolio value.",
         href: "/dashboard/investments",
-        image: "/images/arganwood-investment.png",
+        image: "/images/arganwood-reference/explore-investments.png",
         icon: <PulseIcon />,
       },
       {
         title: "Support",
         text: "Contact support for account help.",
         href: "/dashboard/support",
-        image: "/images/arganwood-support.png",
+        image: "/images/arganwood-reference/explore-support.png",
         icon: <SupportIcon />,
       },
       {
         title: "Sell Tree",
         text: "Request review for eligible tree sale.",
         href: "/dashboard/sell-tree",
-        image: "/images/arganwood-sell-tree.png",
+        image: "/images/arganwood-reference/explore-sell-tree.png",
         icon: <SellIcon />,
       },
     ],
@@ -689,42 +495,51 @@ export default function DashboardPage() {
   );
 
   const recentActivity = useMemo(() => {
-    const walletRows = walletTransactions.map((tx) => ({
-      id: `wallet-${tx.id}`,
-      title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
-      detail: `${peso(Number(tx.amount || 0))} • ${normalize(tx.status || "COMPLETED")}`,
-      date: tx.created_at,
-      href: "/dashboard/wallet",
-    }));
-
-    const membershipRows = membershipOrders.map((order) => ({
-      id: `membership-${order.id}`,
-      title: "Membership Order",
-      detail: `${peso(Number(order.amount || order.annual_fee || 0))} • ${normalize(order.status || "PENDING")}`,
-      date: order.created_at || order.submitted_at,
-      href: "/dashboard/membership",
-    }));
-
-    const sellRows = sellTreeRequests.map((row) => ({
-      id: `sell-${row.id}`,
-      title: "Sell Tree Request",
-      detail: normalize(row.status || row.offer_status || "PENDING").replaceAll("_", " "),
-      date: row.created_at || row.updated_at,
-      href: "/dashboard/sell-tree",
-    }));
-
-    const operationRows = operationRequests.slice(0, 5).map((row) => ({
-      id: `request-${row.id}`,
-      title: cleanLabel(row.service_name || row.operation_type || row.service_type || row.request_type || "Tree Operation"),
-      detail: normalize(row.status || row.assignment_status || "PENDING").replaceAll("_", " "),
-      date: row.created_at || row.requested_at,
-      href: "/dashboard/tree-operations",
-    }));
-
-    return [...walletRows, ...membershipRows, ...sellRows, ...operationRows]
+    return walletTransactions
+      .map((tx) => ({
+        id: `wallet-${tx.id}`,
+        title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
+        detail: `${peso(Number(tx.amount || 0))} • ${normalize(tx.status || "COMPLETED")}`,
+        date: tx.created_at,
+        href: "/dashboard/wallet",
+      }))
       .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
       .slice(0, 6);
-  }, [walletTransactions, membershipOrders, sellTreeRequests, operationRequests]);
+  }, [walletTransactions]);
+
+
+  const latestMembershipOrder = useMemo(() => {
+    return [...membershipOrders].sort(
+      (a, b) => new Date(b.created_at || b.submitted_at || 0).getTime() - new Date(a.created_at || a.submitted_at || 0).getTime(),
+    )[0] || null;
+  }, [membershipOrders]);
+
+  const latestSellTreeRequest = useMemo(() => {
+    return [...sellTreeRequests].sort(
+      (a, b) => new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime(),
+    )[0] || null;
+  }, [sellTreeRequests]);
+
+  const pendingMembershipOrdersCount = useMemo(() => {
+    return membershipOrders.filter((order) => normalize(order.status || "PENDING") === "PENDING").length;
+  }, [membershipOrders]);
+
+  const activeSellTreeRequestsCount = useMemo(() => {
+    return sellTreeRequests.filter((request) => {
+      const status = normalize(request.status || request.offer_status || "PENDING");
+      return !["PAID", "COMPLETED", "CANCELLED", "CANCELED", "REJECTED"].includes(status);
+    }).length;
+  }, [sellTreeRequests]);
+
+  const latestWalletTransaction = walletTransactions[0] || null;
+  const latestWalletTransactionText = latestWalletTransaction
+    ? `${cleanLabel(latestWalletTransaction.transaction_type || "Wallet Transaction")} • ${peso(Number(latestWalletTransaction.amount || 0))}`
+    : "No transaction yet";
+  const latestMembershipOrderStatus = cleanLabel(latestMembershipOrder?.status || "No membership order yet");
+  const latestMembershipOrderDate = latestMembershipOrder?.created_at || latestMembershipOrder?.submitted_at || null;
+  const latestSellTreeRequestStatus = cleanLabel(latestSellTreeRequest?.status || latestSellTreeRequest?.offer_status || "No sell tree request yet");
+  const latestSellTreeAmount = Number(latestSellTreeRequest?.net_receive || latestSellTreeRequest?.tree_value || 0);
+  const latestSellTreeAmountText = latestSellTreeAmount > 0 ? peso(latestSellTreeAmount) : "No amount yet";
 
   if (loading) {
     return (
@@ -737,33 +552,6 @@ export default function DashboardPage() {
 
   return (
     <main className="dashboardPage">
-      <aside className="sideNav">
-        <div className="brandBlock">
-          <div className="brandMark">A</div>
-          <div>
-            <strong>Arganwood</strong>
-            <span>Investor Portal</span>
-          </div>
-        </div>
-
-        <nav>
-          <SideLink href="/dashboard" icon={<GridIcon />} label="Dashboard" active />
-          <SideLink href="/dashboard/my-trees" icon={<TreeIcon />} label="My Trees" />
-          <SideLink href="/dashboard/marketplace" icon={<MarketIcon />} label="Marketplace" />
-          <SideLink href="/dashboard/tree-operations" icon={<ServiceIcon />} label="Tree Services" />
-          <SideLink href="/dashboard/sell-tree" icon={<SellIcon />} label="Market Listing" />
-          <SideLink href="/dashboard/wallet" icon={<WalletIcon />} label="Investment Balance" />
-          <SideLink href="/dashboard/membership" icon={<MembershipIcon />} label="Membership" />
-          <SideLink href="/dashboard/support" icon={<SupportIcon />} label="Support" />
-          <SideLink href="/dashboard/settings" icon={<SettingsIcon />} label="Settings" />
-        </nav>
-
-        <button className="logoutButton" type="button" onClick={handleLogout}>
-          <LogoutIcon />
-          Logout
-        </button>
-      </aside>
-
       <section className="contentShell">
         <header className="hero">
           <div>
@@ -786,6 +574,69 @@ export default function DashboardPage() {
           <OverviewCard label="Plantations" value={String(groups.length || uniqueGroupCount(trees))} note="Forest groups" icon={<PlantationIcon />} />
           <OverviewCard label="Overall Status" value={overallStatus} note="Based on approved evidence" icon={<PulseIcon />} />
           <OverviewCard label="Latest Update" value={formatDate(latestEvidenceDate)} note="Farm proof or operation" icon={<ClockIcon />} />
+        </section>
+
+        <section className="panel financeSummaryPanel">
+          <div className="panelTop">
+            <div>
+              <p className="eyebrow">Finance Summary</p>
+              <h2>Live Wallet Snapshot</h2>
+            </div>
+            <Link className="smallLink" href="/dashboard/wallet">Open Wallet</Link>
+          </div>
+
+          <div className="missionSummaryGrid">
+            <OverviewCard label="Wallet Balance" value={peso(walletBalance)} note="From wallets.balance" icon={<WalletIcon />} />
+            <OverviewCard label="Latest Transaction" value={latestWalletTransactionText} note={latestWalletTransaction ? formatDate(latestWalletTransaction.created_at) : "No wallet activity"} icon={<PulseIcon />} />
+            <OverviewCard label="Pending Membership Orders" value={String(pendingMembershipOrdersCount)} note="From membership_orders" icon={<MembershipIcon />} />
+            <OverviewCard label="Active Sell Tree Requests" value={String(activeSellTreeRequestsCount)} note="From sell_tree_requests" icon={<SellIcon />} />
+          </div>
+        </section>
+
+        <section className="splitGrid statusSplitGrid">
+          <article className="panel">
+            <div className="panelTop">
+              <div>
+                <p className="eyebrow">Latest Membership Activity</p>
+                <h2>Membership Status</h2>
+              </div>
+              <Link className="smallLink" href="/dashboard/membership">View Membership</Link>
+            </div>
+
+            {!latestMembershipOrder ? (
+              <EmptyState text="No membership order yet" />
+            ) : (
+              <Link className="recentRow" href="/dashboard/membership">
+                <div>
+                  <strong>{latestMembershipOrderStatus}</strong>
+                  <p>{peso(Number(latestMembershipOrder.amount || latestMembershipOrder.annual_fee || 0))}</p>
+                </div>
+                <span>{formatDate(latestMembershipOrderDate)}</span>
+              </Link>
+            )}
+          </article>
+
+          <article className="panel">
+            <div className="panelTop">
+              <div>
+                <p className="eyebrow">Sell Tree Status</p>
+                <h2>Latest Sell Request</h2>
+              </div>
+              <Link className="smallLink" href="/dashboard/sell-tree">View Sell Tree</Link>
+            </div>
+
+            {!latestSellTreeRequest ? (
+              <EmptyState text="No sell tree request yet" />
+            ) : (
+              <Link className="recentRow" href="/dashboard/sell-tree">
+                <div>
+                  <strong>{latestSellTreeRequestStatus}</strong>
+                  <p>{latestSellTreeAmountText}</p>
+                </div>
+                <span>{formatDate(latestSellTreeRequest.created_at || latestSellTreeRequest.updated_at)}</span>
+              </Link>
+            )}
+          </article>
         </section>
 
         <section className="panel missionSummaryPanel">
@@ -819,17 +670,13 @@ export default function DashboardPage() {
               <EmptyState text="No trees in your portfolio yet. Start by buying a tree from the marketplace." />
             ) : (
               <div className="treeGrid">
-                {trees.slice(0, 4).map((tree) => {
-                  const treeImageUrl = getTreeImageUrl(tree);
+                {trees.slice(0, 4).map((tree, index) => {
+                  const treeImageUrl = getTreeImageUrl(tree) || referenceTreeImages[index % referenceTreeImages.length];
 
                   return (
                     <Link className="treeCard" href="/dashboard/my-trees" key={tree.id}>
                       <div className="treeImage">
-                        {treeImageUrl ? (
-                          <img src={treeImageUrl} alt={treeLabel(tree)} />
-                        ) : (
-                          <TreeIcon />
-                        )}
+                        <img src={treeImageUrl} alt={treeLabel(tree)} />
                       </div>
                       <div>
                         <span>{tree.tree_code || "Tree Code Pending"}</span>
@@ -881,6 +728,32 @@ export default function DashboardPage() {
               </div>
             )}
           </article>
+        </section>
+
+        <section className="panel recentFinancePanel">
+          <div className="panelTop">
+            <div>
+              <p className="eyebrow">Finance Sync</p>
+              <h2>Recent Finance Activity</h2>
+            </div>
+            <Link className="smallLink" href="/dashboard/wallet">Open Wallet</Link>
+          </div>
+
+          {recentActivity.length === 0 ? (
+            <EmptyState text="No wallet transactions yet. Cash-in approvals, purchases, and withdrawals will appear here." />
+          ) : (
+            <div className="recentList">
+              {recentActivity.map((activity) => (
+                <Link className="recentRow" href={activity.href} key={activity.id}>
+                  <div>
+                    <strong>{activity.title}</strong>
+                    <p>{activity.detail}</p>
+                  </div>
+                  <span>{formatDate(activity.date)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="panel explorePanel">
@@ -962,18 +835,7 @@ function OverviewCard({
   );
 }
 
-function CareInfo({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className={`careInfo ${highlight ? "highlight" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
 
-function StatusPill({ value }: { value: string }) {
-  return <span className="statusPill">{value}</span>;
-}
 
 function MissionStatusPill({ value }: { value: string }) {
   return <span className={`missionStatus ${normalize(value).toLowerCase()}`}>{cleanLabel(value)}</span>;
@@ -983,13 +845,6 @@ function EmptyState({ text }: { text: string }) {
   return <div className="emptyState">{text}</div>;
 }
 
-function TimelineIcon({ type }: { type: string }) {
-  if (type === "GPS") return <PinIcon />;
-  if (type === "PHOTO") return <CameraIcon />;
-  if (type === "HEALTH") return <PulseIcon />;
-  if (type === "QR") return <QrIcon />;
-  return <ServiceIcon />;
-}
 
 function IconShell({ children }: { children: ReactNode }) {
   return <svg viewBox="0 0 24 24">{children}</svg>;
@@ -1180,23 +1035,13 @@ function careReason(action: string) {
   return "Keeps your plantation record current and helps Admin coordinate the next field action.";
 }
 
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
-
 const styles = `
   * { box-sizing: border-box; }
 
   .dashboardPage {
     min-height: 100vh;
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-columns: 1fr;
     background:
       radial-gradient(circle at 20% 0%, rgba(214,178,94,.18), transparent 28%),
       radial-gradient(circle at 92% 8%, rgba(64,130,86,.18), transparent 34%),
@@ -1336,7 +1181,7 @@ const styles = `
     margin-bottom: 18px;
     background:
       linear-gradient(rgba(2,20,12,.72), rgba(2,20,12,.88)),
-      url('/images/agarwood-real-tree.jpg');
+      url('/images/arganwood-reference/hero-forest-reference.jpg');
     background-size: cover;
     background-position: center;
   }
@@ -1828,7 +1673,9 @@ const styles = `
   }
 
 
-  .missionSummaryPanel {
+  .missionSummaryPanel,
+  .financeSummaryPanel,
+  .statusSplitGrid {
     margin-bottom: 18px;
   }
 
@@ -1958,10 +1805,11 @@ const styles = `
   }
 
   .exploreImage img {
+    display: block;
     width: 100%;
     height: 118px;
     object-fit: cover;
-    opacity: .88;
+    opacity: .92;
   }
 
   .exploreImage span {
