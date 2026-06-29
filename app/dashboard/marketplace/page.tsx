@@ -108,8 +108,70 @@ function getMarketplaceImageFallback(product: MarketplaceProduct): string {
   const category = normalize(product.category);
   const name = normalize(product.name);
 
-  if (type.includes("tree") || category.includes("tree") || name.includes("tree")) {
-    return "/images/arganwood-reference/tree-card-reference-1.png";
+  if (
+    name.includes("100") &&
+    (name.includes("tree package") || name.includes("package"))
+  ) {
+    return "/images/arganwood-reference/marketplace-100-tree-package.png";
+  }
+
+  if (
+    name.includes("50") &&
+    (name.includes("tree package") || name.includes("package"))
+  ) {
+    return "/images/arganwood-reference/marketplace-50-tree-package.png";
+  }
+
+  if (
+    name.includes("10") &&
+    (name.includes("tree package") || name.includes("package"))
+  ) {
+    return "/images/arganwood-reference/marketplace-10-tree-package.png";
+  }
+
+  if (
+    name.includes("seedling package") ||
+    name.includes("tree seedling") ||
+    name.includes("seedling")
+  ) {
+    return "/images/arganwood-reference/marketplace-tree-seedling-package.png";
+  }
+
+  if (name.includes("organic fertilizer") || category.includes("fertilizer")) {
+    return "/images/arganwood-reference/marketplace-organic-fertilizer.png";
+  }
+
+  if (
+    name.includes("nutrient") ||
+    name.includes("booster") ||
+    category.includes("nutrient") ||
+    category.includes("booster")
+  ) {
+    return "/images/arganwood-reference/marketplace-nutrient.png";
+  }
+
+  if (name.includes("fungicide") || category.includes("fungicide")) {
+    return "/images/arganwood-reference/marketplace-fungicide.png";
+  }
+
+  if (
+    name.includes("pest") ||
+    name.includes("insecticide") ||
+    category.includes("pest")
+  ) {
+    return "/images/arganwood-reference/marketplace-pest-control.png";
+  }
+
+  if (name.includes("soil") || category.includes("soil")) {
+    return "/images/arganwood-reference/marketplace-premium-soil.png";
+  }
+
+  if (
+    name.includes("tree booster") ||
+    name.includes("booster") ||
+    category.includes("tree health")
+  ) {
+    return "/images/arganwood-reference/marketplace-tree-booster.png";
   }
 
   if (
@@ -125,6 +187,14 @@ function getMarketplaceImageFallback(product: MarketplaceProduct): string {
     return "/images/arganwood-reference/explore-membership.png";
   }
 
+  if (type.includes("package") || category.includes("package")) {
+    return "/images/arganwood-reference/marketplace-tree-seedling-package.png";
+  }
+
+  if (type.includes("tree") || category.includes("tree") || name.includes("tree")) {
+    return "/images/arganwood-reference/young-agarwood-tree.png";
+  }
+
   return "/images/arganwood-reference/explore-marketplace.png";
 }
 
@@ -134,6 +204,33 @@ function getProductImageUrl(product: MarketplaceProduct): string {
   }
 
   return getMarketplaceImageFallback(product);
+}
+
+function getProductImageClass(product: MarketplaceProduct): string {
+  const type = getProductType(product);
+  const category = normalize(product.category);
+  const name = normalize(product.name);
+
+  if (type === "TREE" || category.includes("tree") || name.includes("tree only")) {
+    return "productImage treeImageProduct";
+  }
+
+  if (type === "TREE_PACKAGE" || type === "PACKAGE" || name.includes("package")) {
+    return "productImage packageImageProduct";
+  }
+
+  if (
+    category.includes("fertilizer") ||
+    category.includes("nutrient") ||
+    category.includes("booster") ||
+    category.includes("fungicide") ||
+    category.includes("pest") ||
+    category.includes("soil")
+  ) {
+    return "productImage supplyImageProduct";
+  }
+
+  return "productImage";
 }
 
 function getProductInitial(product: MarketplaceProduct): string {
@@ -1118,11 +1215,11 @@ export default function MarketplacePage() {
                   const isProgram = category === "Tree Care Programs";
                   const treePurchase = isTreePurchaseProduct(product);
                   const productImageUrl = getProductImageUrl(product);
-                  const isTreeVisual = type === "TREE";
+                  const imageClassName = getProductImageClass(product);
 
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
-                      <div className={isTreeVisual ? "productImage treeImageProduct" : "productImage"}>
+                      <div className={imageClassName}>
                         <img
                           src={productImageUrl}
                           alt={product.name || "Marketplace product"}
@@ -1742,17 +1839,19 @@ export default function MarketplacePage() {
         .grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
+          gap: 18px;
         }
 
         .card {
           padding: 18px;
-          transition: transform .18s ease, box-shadow .18s ease;
+          border-radius: 30px;
+          transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
         }
 
         .card:hover {
-          transform: translateY(-3px);
-          box-shadow: 0 24px 56px rgba(82,60,27,.13);
+          transform: translateY(-4px);
+          border-color: rgba(179,129,35,.18);
+          box-shadow: 0 28px 64px rgba(82,60,27,.15);
         }
 
         .programCard {
@@ -1766,35 +1865,86 @@ export default function MarketplacePage() {
         .modalProductImage {
           position: relative;
           width: 100%;
-          height: 260px;
-          padding: 18px;
-          border-radius: 22px;
+          height: 282px;
+          padding: 22px;
+          border-radius: 28px;
           overflow: hidden;
-          background: #f8f4e8;
+          background:
+            radial-gradient(circle at 50% 0%, rgba(244,213,139,.22), transparent 34%),
+            linear-gradient(180deg, #fffaf0 0%, #f8f4e8 100%);
           border: 1px solid rgba(92,70,35,.10);
-          margin-bottom: 16px;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.60);
+          margin-bottom: 18px;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.72),
+            0 16px 36px rgba(82,60,27,.08);
           display: flex;
           align-items: center;
           justify-content: center;
         }
 
         .modalProductImage {
-          width: min(260px, 100%);
+          width: min(300px, 100%);
+          height: 300px;
           margin-bottom: 18px;
+        }
+
+        .productImage:before,
+        .modalProductImage:before {
+          content: "";
+          position: absolute;
+          inset: 16px;
+          border-radius: 22px;
+          border: 1px solid rgba(36,69,54,.055);
+          pointer-events: none;
         }
 
         .productImage img,
         .modalProductImage img {
+          position: relative;
+          z-index: 1;
           width: 100%;
           height: 100%;
           object-fit: contain;
           object-position: center;
           display: block;
+          filter: drop-shadow(0 14px 18px rgba(36,69,54,.14));
+        }
+
+        .treeImageProduct {
+          padding: 0;
+          background:
+            linear-gradient(180deg, rgba(10,38,25,.08), rgba(10,38,25,.02)),
+            #edf3e8;
+        }
+
+        .treeImageProduct:before {
+          inset: 0;
+          border-radius: 28px;
+          border: 0;
+          background: linear-gradient(180deg, transparent 45%, rgba(5,24,15,.38));
+          z-index: 2;
         }
 
         .treeImageProduct img {
           object-fit: cover;
+          filter: none;
+        }
+
+        .packageImageProduct img {
+          max-width: 92%;
+          max-height: 92%;
+        }
+
+        .supplyImageProduct {
+          padding: 30px;
+          background:
+            radial-gradient(circle at 50% 20%, rgba(255,255,255,.92), transparent 34%),
+            linear-gradient(180deg, #fffdf6, #f2ead8);
+        }
+
+        .supplyImageProduct img {
+          max-width: 88%;
+          max-height: 88%;
         }
 
         .productImageFallback {
@@ -1823,17 +1973,19 @@ export default function MarketplacePage() {
 
         .productImage em {
           position: absolute;
-          top: 12px;
-          right: 12px;
+          z-index: 3;
+          top: 14px;
+          right: 14px;
           border-radius: 999px;
-          padding: 7px 10px;
-          background: rgba(255,253,246,.86);
+          padding: 8px 11px;
+          background: rgba(255,253,246,.92);
           color: #244536;
           font-size: 10px;
-          font-weight: 900;
+          font-weight: 1000;
           font-style: normal;
           letter-spacing: .08em;
-          box-shadow: 0 8px 18px rgba(16,40,31,.16);
+          box-shadow: 0 10px 24px rgba(16,40,31,.16);
+          border: 1px solid rgba(36,69,54,.08);
         }
 
         .cardHead {
