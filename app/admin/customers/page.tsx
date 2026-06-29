@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
 type CustomerProfile = {
@@ -15,7 +14,42 @@ type CustomerProfile = {
   created_at: string | null;
 };
 
-type RoleMap = Record<string, "ADMIN" | "GARDENER" | "CUSTOMER">;
+type BackendRole = "ADMIN" | "GARDENER" | "CUSTOMER";
+type RoleMap = Record<string, BackendRole>;
+
+function normalize(value: string | null | undefined) {
+  return String(value || "UNKNOWN").trim().toUpperCase();
+}
+
+function formatDate(dateValue: string | null) {
+  if (!dateValue) return "—";
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function badgeClass(value: string | null | undefined) {
+  const status = normalize(value);
+
+  if (["ACTIVE", "APPROVED", "VERIFIED", "ADMIN", "GARDENER", "CUSTOMER"].includes(status)) {
+    return "badge approved";
+  }
+
+  if (status === "PENDING" || status === "REVIEW") {
+    return "badge pending";
+  }
+
+  if (status === "REJECTED" || status === "SUSPENDED" || status === "INACTIVE") {
+    return "badge rejected";
+  }
+
+  return "badge neutral";
+}
 
 export default function AdminCustomersPage() {
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
@@ -28,6 +62,7 @@ export default function AdminCustomersPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [kycFilter, setKycFilter] = useState("ALL");
   const [membershipFilter, setMembershipFilter] = useState("ALL");
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerProfile | null>(null);
 
   useEffect(() => {
     loadCustomers();
@@ -57,24 +92,15 @@ export default function AdminCustomersPage() {
   }
 
   async function loadRoles(rows: CustomerProfile[]) {
-    const emails = rows
-      .map((item) => item.email?.trim().toLowerCase())
-      .filter(Boolean) as string[];
+    const emails = rows.map((item) => item.email?.trim().toLowerCase()).filter(Boolean) as string[];
 
     if (emails.length === 0) {
       setRoles({});
       return;
     }
 
-    const { data: adminRows } = await supabase
-      .from("admins")
-      .select("email, status")
-      .in("email", emails);
-
-    const { data: caretakerRows } = await supabase
-      .from("caretakers")
-      .select("email, status")
-      .in("email", emails);
+    const { data: adminRows } = await supabase.from("admins").select("email, status").in("email", emails);
+    const { data: caretakerRows } = await supabase.from("caretakers").select("email, status").in("email", emails);
 
     const nextRoles: RoleMap = {};
 
@@ -85,13 +111,13 @@ export default function AdminCustomersPage() {
       const isAdmin = (adminRows || []).some(
         (item: any) =>
           String(item.email || "").trim().toLowerCase() === email &&
-          String(item.status || "").toUpperCase() === "ACTIVE"
+          String(item.status || "").toUpperCase() === "ACTIVE",
       );
 
       const isGardener = (caretakerRows || []).some(
         (item: any) =>
           String(item.email || "").trim().toLowerCase() === email &&
-          String(item.status || "").toUpperCase() === "ACTIVE"
+          String(item.status || "").toUpperCase() === "ACTIVE",
       );
 
       nextRoles[email] = isAdmin ? "ADMIN" : isGardener ? "GARDENER" : "CUSTOMER";
@@ -108,34 +134,19 @@ export default function AdminCustomersPage() {
       const email = customer.email?.toLowerCase() || "";
       const phone = customer.phone?.toLowerCase() || "";
 
-      const matchesSearch =
-        !keyword || name.includes(keyword) || email.includes(keyword) || phone.includes(keyword);
-
-      const matchesStatus =
-        statusFilter === "ALL" ||
-        (customer.account_status || "").toUpperCase() === statusFilter;
-
-      const matchesKyc =
-        kycFilter === "ALL" || (customer.kyc_status || "").toUpperCase() === kycFilter;
-
-      const matchesMembership =
-        membershipFilter === "ALL" ||
-        (customer.membership_status || "").toUpperCase() === membershipFilter;
+      const matchesSearch = !keyword || name.includes(keyword) || email.includes(keyword) || phone.includes(keyword);
+      const matchesStatus = statusFilter === "ALL" || normalize(customer.account_status) === statusFilter;
+      const matchesKyc = kycFilter === "ALL" || normalize(customer.kyc_status) === kycFilter;
+      const matchesMembership = membershipFilter === "ALL" || normalize(customer.membership_status) === membershipFilter;
 
       return matchesSearch && matchesStatus && matchesKyc && matchesMembership;
     });
   }, [customers, search, statusFilter, kycFilter, membershipFilter]);
 
   const totalCustomers = customers.length;
-  const activeCustomers = customers.filter(
-    (item) => (item.account_status || "").toUpperCase() === "ACTIVE"
-  ).length;
-  const approvedKyc = customers.filter(
-    (item) => (item.kyc_status || "").toUpperCase() === "APPROVED"
-  ).length;
-  const activeMembers = customers.filter(
-    (item) => (item.membership_status || "").toUpperCase() === "ACTIVE"
-  ).length;
+  const activeCustomers = customers.filter((item) => normalize(item.account_status) === "ACTIVE").length;
+  const approvedKyc = customers.filter((item) => normalize(item.kyc_status) === "APPROVED").length;
+  const activeMembers = customers.filter((item) => normalize(item.membership_status) === "ACTIVE").length;
 
   function cleanEmail(customer: CustomerProfile) {
     return customer.email?.trim().toLowerCase() || "";
@@ -145,391 +156,255 @@ export default function AdminCustomersPage() {
     return customer.full_name?.trim() || customer.email?.trim() || "User";
   }
 
-  async function makeAdmin(customer: CustomerProfile) {
+  function currentRole(customer: CustomerProfile): BackendRole {
     const email = cleanEmail(customer);
-    if (!email) return setErrorText("Customer email is required.");
+    return roles[email] || "CUSTOMER";
+  }
+
+  async function changeRole(customer: CustomerProfile, nextRole: BackendRole) {
+    const email = cleanEmail(customer);
+
+    if (!email) {
+      setErrorText("Customer email is required.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Change ${cleanName(customer)} backend role to ${nextRole}?`);
+    if (!confirmed) return;
 
     setProcessingEmail(email);
     setErrorText("");
     setSuccessText("");
 
-    const { data: existingAdmin } = await supabase
-      .from("admins")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (existingAdmin?.id) {
-      const { error } = await supabase
-        .from("admins")
-        .update({
-          full_name: cleanName(customer),
-          admin_profile_id: customer.id,
-          status: "ACTIVE",
-        })
-        .eq("id", existingAdmin.id);
-
-      if (error) {
-        setErrorText(error.message);
-        setProcessingEmail("");
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("admins").insert({
-        full_name: cleanName(customer),
-        email,
-        admin_profile_id: customer.id,
-        status: "ACTIVE",
+    try {
+      const { error } = await supabase.rpc("change_user_backend_role", {
+        p_profile_id: customer.id,
+        p_email: email,
+        p_full_name: cleanName(customer),
+        p_backend_role: nextRole,
       });
 
-      if (error) {
-        setErrorText(error.message);
-        setProcessingEmail("");
-        return;
-      }
+      if (error) throw error;
+
+      setSuccessText(`${email} is now ${nextRole}.`);
+      await loadCustomers();
+      setSelectedCustomer((current) => (current?.id === customer.id ? { ...customer } : current));
+    } catch (error: any) {
+      setErrorText(error?.message || "Backend role update failed.");
+    } finally {
+      setProcessingEmail("");
     }
-
-    await supabase.from("caretakers").update({ status: "INACTIVE" }).eq("email", email);
-
-    setSuccessText(`${email} is now ADMIN.`);
-    setProcessingEmail("");
-    await loadCustomers();
-  }
-
-  async function makeGardener(customer: CustomerProfile) {
-    const email = cleanEmail(customer);
-    if (!email) return setErrorText("Customer email is required.");
-
-    setProcessingEmail(email);
-    setErrorText("");
-    setSuccessText("");
-
-    const { data: existingCaretaker } = await supabase
-      .from("caretakers")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (existingCaretaker?.id) {
-      const { error } = await supabase
-        .from("caretakers")
-        .update({
-          full_name: cleanName(customer),
-          caretaker_profile_id: customer.id,
-          status: "ACTIVE",
-          assigned_area: "Main Plantation",
-        })
-        .eq("id", existingCaretaker.id);
-
-      if (error) {
-        setErrorText(error.message);
-        setProcessingEmail("");
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("caretakers").insert({
-        full_name: cleanName(customer),
-        email,
-        caretaker_profile_id: customer.id,
-        status: "ACTIVE",
-        assigned_area: "Main Plantation",
-      });
-
-      if (error) {
-        setErrorText(error.message);
-        setProcessingEmail("");
-        return;
-      }
-    }
-
-    await supabase.from("admins").update({ status: "INACTIVE" }).eq("email", email);
-
-    setSuccessText(`${email} is now GARDENER.`);
-    setProcessingEmail("");
-    await loadCustomers();
-  }
-
-  async function makeCustomer(customer: CustomerProfile) {
-    const email = cleanEmail(customer);
-    if (!email) return setErrorText("Customer email is required.");
-
-    setProcessingEmail(email);
-    setErrorText("");
-    setSuccessText("");
-
-    await supabase.from("admins").update({ status: "INACTIVE" }).eq("email", email);
-    await supabase.from("caretakers").update({ status: "INACTIVE" }).eq("email", email);
-
-    setSuccessText(`${email} is now CUSTOMER.`);
-    setProcessingEmail("");
-    await loadCustomers();
-  }
-
-  function badgeClass(value: string | null) {
-    const status = (value || "UNKNOWN").toUpperCase();
-
-    if (["ACTIVE", "APPROVED", "VERIFIED", "ADMIN", "GARDENER", "CUSTOMER"].includes(status)) {
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
-    }
-
-    if (status === "PENDING" || status === "REVIEW") {
-      return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
-    }
-
-    if (status === "REJECTED" || status === "SUSPENDED" || status === "INACTIVE") {
-      return "bg-red-500/20 text-red-200 border-red-400/30";
-    }
-
-    return "bg-white/10 text-white/60 border-white/10";
-  }
-
-  function formatDate(dateValue: string | null) {
-    if (!dateValue) return "—";
-
-    return new Date(dateValue).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
   }
 
   return (
-    <main className="min-h-screen text-white p-8">
-      <div className="max-w-7xl mx-auto space-y-8 rounded-3xl bg-[#071f16]/75 p-8 backdrop-blur-md border border-white/10 shadow-2xl">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <main className="page">
+      <section className="shell">
+        <header className="hero">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-              Admin Center
-            </p>
-            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Customer Management
-            </h1>
-            <p className="mt-2 text-white/70">
-              View customers and assign backend access as Customer, Gardener, or Admin.
-            </p>
+            <p className="eyebrow">Admin Center</p>
+            <h1>Customer Management</h1>
+            <p>View customer profiles. Click a card to open customer details and role controls.</p>
           </div>
 
-          <button
-            onClick={loadCustomers}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25"
-          >
-            Refresh Customers
+          <button onClick={loadCustomers} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh Customers"}
           </button>
-        </div>
+        </header>
 
-        {errorText && (
-          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">
-            {errorText}
-          </div>
-        )}
+        {errorText && <div className="errorBox">{errorText}</div>}
+        {successText && <div className="successBox">{successText}</div>}
 
-        {successText && (
-          <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
-            {successText}
-          </div>
-        )}
-
-        <section className="grid gap-4 md:grid-cols-4">
+        <section className="stats">
           <Stat label="Total Profiles" value={totalCustomers} />
           <Stat label="Active Accounts" value={activeCustomers} />
           <Stat label="Approved KYC" value={approvedKyc} />
           <Stat label="Active Members" value={activeMembers} />
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
-          <div className="grid gap-3 lg:grid-cols-4">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name, email, or phone"
-              className="rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none placeholder:text-white/40"
-            />
+        <section className="filters">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, email, or phone" />
 
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none"
-            >
-              <option value="ALL">All Account Status</option>
-              <option value="ACTIVE">Active</option>
-              <option value="VERIFIED">Verified</option>
-              <option value="PENDING">Pending</option>
-              <option value="SUSPENDED">Suspended</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="ALL">All Account Status</option>
+            <option value="ACTIVE">Active</option>
+            <option value="VERIFIED">Verified</option>
+            <option value="PENDING">Pending</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="INACTIVE">Inactive</option>
+          </select>
 
-            <select
-              value={kycFilter}
-              onChange={(event) => setKycFilter(event.target.value)}
-              className="rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none"
-            >
-              <option value="ALL">All KYC Status</option>
-              <option value="APPROVED">Approved</option>
-              <option value="PENDING">Pending</option>
-              <option value="REJECTED">Rejected</option>
-            </select>
+          <select value={kycFilter} onChange={(event) => setKycFilter(event.target.value)}>
+            <option value="ALL">All KYC Status</option>
+            <option value="APPROVED">Approved</option>
+            <option value="PENDING">Pending</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
 
-            <select
-              value={membershipFilter}
-              onChange={(event) => setMembershipFilter(event.target.value)}
-              className="rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none"
-            >
-              <option value="ALL">All Membership</option>
-              <option value="ACTIVE">Active</option>
-              <option value="PENDING">Pending</option>
-              <option value="INACTIVE">Inactive</option>
-            </select>
-          </div>
+          <select value={membershipFilter} onChange={(event) => setMembershipFilter(event.target.value)}>
+            <option value="ALL">All Membership</option>
+            <option value="ACTIVE">Active</option>
+            <option value="PENDING">Pending</option>
+            <option value="INACTIVE">Inactive</option>
+          </select>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
-          <div className="border-b border-white/10 px-5 py-4">
-            <h2 className="text-xl font-bold text-[#d9b45f]">
-              User Records
-            </h2>
-            <p className="text-sm text-white/60">
-              Showing {filteredCustomers.length} of {totalCustomers} profiles.
-            </p>
+        <section className="panel">
+          <div className="panelHead">
+            <div>
+              <h2>User Records</h2>
+              <p>Showing {filteredCustomers.length} of {totalCustomers} profiles.</p>
+            </div>
           </div>
 
           {loading ? (
-            <div className="p-8 text-white/70">Loading customers...</div>
+            <div className="empty">Loading customers...</div>
           ) : filteredCustomers.length === 0 ? (
-            <div className="p-8 text-white/70">No customer records found.</div>
+            <div className="empty">No customer records found.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1250px] text-left text-sm">
-                <thead className="bg-[#071f16]/80 text-white/70">
-                  <tr>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Contact</th>
-                    <th className="px-5 py-4">Backend Role</th>
-                    <th className="px-5 py-4">Account</th>
-                    <th className="px-5 py-4">KYC</th>
-                    <th className="px-5 py-4">Membership</th>
-                    <th className="px-5 py-4">Created</th>
-                    <th className="px-5 py-4">Actions</th>
-                  </tr>
-                </thead>
+            <div className="customerGrid">
+              {filteredCustomers.map((customer) => {
+                const role = currentRole(customer);
 
-                <tbody>
-                  {filteredCustomers.map((customer) => {
-                    const email = cleanEmail(customer);
-                    const currentRole = roles[email] || "CUSTOMER";
-                    const isProcessing = processingEmail === email;
+                return (
+                  <button className="customerCard" key={customer.id} onClick={() => setSelectedCustomer(customer)}>
+                    <div className="avatar">{cleanName(customer).slice(0, 1).toUpperCase()}</div>
 
-                    return (
-                      <tr key={customer.id} className="border-t border-white/10 hover:bg-white/5">
-                        <td className="px-5 py-4">
-                          <div className="font-semibold text-white">
-                            {customer.full_name || "Unnamed Customer"}
-                          </div>
-                          <div className="mt-1 text-xs text-white/40">{customer.id}</div>
-                        </td>
+                    <div className="customerMain">
+                      <strong>{customer.full_name || "Unnamed Customer"}</strong>
+                      <span>{customer.email || "No email"}</span>
+                      <small>{customer.phone || "No phone"}</small>
+                    </div>
 
-                        <td className="px-5 py-4">
-                          <div>{customer.email || "—"}</div>
-                          <div className="mt-1 text-xs text-white/50">
-                            {customer.phone || "No phone"}
-                          </div>
-                        </td>
+                    <div className="badges">
+                      <span className={badgeClass(role)}>{role}</span>
+                      <span className={badgeClass(customer.account_status)}>{normalize(customer.account_status)}</span>
+                      <span className={badgeClass(customer.kyc_status)}>KYC {normalize(customer.kyc_status)}</span>
+                      <span className={badgeClass(customer.membership_status)}>MEM {normalize(customer.membership_status)}</span>
+                    </div>
 
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              currentRole
-                            )}`}
-                          >
-                            {currentRole}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              customer.account_status
-                            )}`}
-                          >
-                            {(customer.account_status || "UNKNOWN").toUpperCase()}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              customer.kyc_status
-                            )}`}
-                          >
-                            {(customer.kyc_status || "UNKNOWN").toUpperCase()}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              customer.membership_status
-                            )}`}
-                          >
-                            {(customer.membership_status || "UNKNOWN").toUpperCase()}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4 text-white/70">
-                          {formatDate(customer.created_at)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="flex flex-wrap gap-2">
-                            <Link
-                              href={`/admin/customers/${customer.id}`}
-                              className="rounded-xl border border-[#d9b45f]/40 px-3 py-2 text-xs font-semibold text-[#f7d774] hover:bg-[#d9b45f]/15"
-                            >
-                              View
-                            </Link>
-
-                            <button
-                              onClick={() => makeAdmin(customer)}
-                              disabled={isProcessing || !email}
-                              className="rounded-xl border border-purple-300/30 bg-purple-500/10 px-3 py-2 text-xs font-semibold text-purple-100 disabled:opacity-40"
-                            >
-                              Admin
-                            </button>
-
-                            <button
-                              onClick={() => makeGardener(customer)}
-                              disabled={isProcessing || !email}
-                              className="rounded-xl border border-emerald-300/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-100 disabled:opacity-40"
-                            >
-                              Gardener
-                            </button>
-
-                            <button
-                              onClick={() => makeCustomer(customer)}
-                              disabled={isProcessing || !email}
-                              className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
-                            >
-                              Customer
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    <div className="cardFooter">
+                      <span>Created {formatDate(customer.created_at)}</span>
+                      <b>Open →</b>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </section>
-      </div>
+      </section>
+
+      {selectedCustomer && (
+        <section className="drawerBackdrop">
+          <div className="drawer">
+            <header className="drawerHead">
+              <div>
+                <p className="eyebrow">Customer Detail</p>
+                <h2>{cleanName(selectedCustomer)}</h2>
+                <span>{selectedCustomer.email || "No email"}</span>
+              </div>
+
+              <button onClick={() => setSelectedCustomer(null)}>Close</button>
+            </header>
+
+            <section className="detailGrid">
+              <Info label="Profile ID" value={selectedCustomer.id} />
+              <Info label="Phone" value={selectedCustomer.phone || "—"} />
+              <Info label="Created" value={formatDate(selectedCustomer.created_at)} />
+              <Info label="Backend Role" value={currentRole(selectedCustomer)} />
+              <Info label="Account" value={normalize(selectedCustomer.account_status)} />
+              <Info label="KYC" value={normalize(selectedCustomer.kyc_status)} />
+              <Info label="Membership" value={normalize(selectedCustomer.membership_status)} />
+            </section>
+
+            <section className="rolePanel">
+              <div>
+                <h3>Backend Access</h3>
+                <p>Role changes now use change_user_backend_role RPC only.</p>
+              </div>
+
+              <div className="roleButtons">
+                <button disabled={processingEmail === cleanEmail(selectedCustomer)} onClick={() => changeRole(selectedCustomer, "ADMIN")}>Make Admin</button>
+                <button disabled={processingEmail === cleanEmail(selectedCustomer)} onClick={() => changeRole(selectedCustomer, "GARDENER")}>Make Gardener</button>
+                <button disabled={processingEmail === cleanEmail(selectedCustomer)} onClick={() => changeRole(selectedCustomer, "CUSTOMER")}>Make Customer</button>
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+
+      <style>{styles}</style>
     </main>
   );
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
-      <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-3xl font-bold text-[#d9b45f]">{value}</p>
+    <article className="stat">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </article>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="info">
+      <p>{label}</p>
+      <strong>{value}</strong>
     </div>
   );
 }
+
+const styles = `
+* { box-sizing: border-box; }
+.page { min-height: 100vh; padding: 28px; color: #f8f1d8; font-family: Arial, Helvetica, sans-serif; background: radial-gradient(circle at 18% 0%, rgba(214,178,94,.18), transparent 24%), linear-gradient(180deg, #06110d, #0b2117 52%, #06110d); }
+.shell { max-width: 1450px; margin: 0 auto; border: 1px solid rgba(214,178,94,.18); background: rgba(255,255,255,.07); border-radius: 30px; padding: 24px; box-shadow: 0 26px 70px rgba(0,0,0,.32); }
+.hero { display: flex; justify-content: space-between; gap: 18px; align-items: start; margin-bottom: 18px; }
+.eyebrow { margin: 0 0 8px; color: #d6b25e; font-size: 12px; font-weight: 950; text-transform: uppercase; letter-spacing: .18em; }
+h1, h2, h3 { margin: 0; color: #fff8dc; }
+h1 { font-size: 42px; color: #d6b25e; }
+.hero p, .panelHead p, .rolePanel p, .drawerHead span { color: rgba(248,241,216,.68); line-height: 1.55; }
+button, input, select { font-family: inherit; }
+button { border: 0; border-radius: 999px; padding: 12px 16px; background: linear-gradient(135deg, #d6b25e, #8c6a3c); color: #07140f; font-weight: 950; cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.errorBox, .successBox, .filters, .panel, .stat, .drawer, .empty { border: 1px solid rgba(214,178,94,.16); background: rgba(0,0,0,.20); border-radius: 22px; }
+.errorBox, .successBox, .empty { padding: 16px; margin-bottom: 16px; font-weight: 900; }
+.errorBox { color: #ffc4c4; border-color: rgba(255,80,80,.3); }
+.successBox { color: #b7f7c8; border-color: rgba(46,204,113,.3); }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { padding: 16px; }
+.stat p { margin: 0; color: rgba(248,241,216,.58); font-size: 11px; font-weight: 950; text-transform: uppercase; letter-spacing: .12em; }
+.stat h3 { margin-top: 8px; color: #d6b25e; font-size: 30px; }
+.filters { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; gap: 12px; padding: 16px; margin-bottom: 16px; }
+input, select { border: 1px solid rgba(214,178,94,.22); border-radius: 16px; padding: 12px 14px; background: rgba(0,0,0,.28); color: #fff8dc; outline: none; }
+option { color: #07140f; }
+.panel { padding: 18px; }
+.panelHead { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.customerGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.customerCard { width: 100%; text-align: left; color: inherit; border-radius: 24px; padding: 18px; display: grid; gap: 14px; background: rgba(255,255,255,.07); border: 1px solid rgba(214,178,94,.14); transition: transform .15s ease, border-color .15s ease; }
+.customerCard:hover { transform: translateY(-2px); border-color: rgba(214,178,94,.38); }
+.avatar { width: 48px; height: 48px; border-radius: 18px; display: grid; place-items: center; color: #07140f; background: linear-gradient(135deg, #d6b25e, #8c6a3c); font-size: 22px; font-weight: 950; }
+.customerMain { display: grid; gap: 4px; }
+.customerMain strong { color: #fff8dc; font-size: 18px; }
+.customerMain span, .customerMain small, .cardFooter span { color: rgba(248,241,216,.62); word-break: break-word; }
+.badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.badge { width: fit-content; border: 1px solid; border-radius: 999px; padding: 7px 10px; font-size: 11px; font-weight: 950; }
+.approved { color: #b7f7c8; background: rgba(46,204,113,.15); border-color: rgba(46,204,113,.35); }
+.pending { color: #ffe49a; background: rgba(214,178,94,.14); border-color: rgba(214,178,94,.35); }
+.rejected { color: #ffc4c4; background: rgba(255,80,80,.14); border-color: rgba(255,80,80,.35); }
+.neutral { color: rgba(248,241,216,.72); background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); }
+.cardFooter { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-top: 1px solid rgba(214,178,94,.12); padding-top: 12px; }
+.cardFooter b { color: #d6b25e; }
+.drawerBackdrop { position: fixed; inset: 0; z-index: 50; padding: 24px; background: rgba(0,0,0,.72); overflow: auto; }
+.drawer { max-width: 900px; margin: 0 auto; padding: 24px; }
+.drawerHead { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.detailGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.info { border-radius: 16px; padding: 12px; background: rgba(255,255,255,.06); border: 1px solid rgba(214,178,94,.11); }
+.info p { margin: 0 0 6px; color: rgba(248,241,216,.52); font-size: 10px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }
+.info strong { color: #fff8dc; word-break: break-word; }
+.rolePanel { border-radius: 22px; padding: 16px; border: 1px solid rgba(214,178,94,.16); background: rgba(255,255,255,.06); }
+.roleButtons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+@media (max-width: 1050px) { .customerGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 720px) { .hero, .drawerHead { display: grid; } .stats, .customerGrid, .filters, .detailGrid, .roleButtons { grid-template-columns: 1fr; } }
+`;

@@ -1,4 +1,3 @@
-// app/admin/membership/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -38,12 +37,24 @@ function formatMoney(value: number | null | undefined) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
 
-  return new Date(value).toLocaleDateString("en-PH", {
+  return date.toLocaleDateString("en-PH", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
+}
+
+function badgeClass(value: string | null | undefined) {
+  const status = normalize(value);
+
+  if (status === "APPROVED" || status === "ACTIVE" || status === "PAID") return "badge approved";
+  if (status === "PENDING") return "badge pending";
+  if (status === "REJECTED" || status === "FAILED" || status === "INACTIVE") return "badge rejected";
+
+  return "badge neutral";
 }
 
 export default function AdminMembershipPage() {
@@ -53,7 +64,9 @@ export default function AdminMembershipPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
   const [message, setMessage] = useState("");
-  const [filter, setFilter] = useState("ALL");
+  const [filter, setFilter] = useState("PENDING");
+  const [selectedOrder, setSelectedOrder] = useState<MembershipOrder | null>(null);
+  const [reviewNotes, setReviewNotes] = useState("");
 
   useEffect(() => {
     loadData();
@@ -98,10 +111,7 @@ export default function AdminMembershipPage() {
       .maybeSingle();
 
     if (adminByProfileError) throw adminByProfileError;
-
-    if (adminByProfile?.admin_profile_id) {
-      return adminByProfile.admin_profile_id as string;
-    }
+    if (adminByProfile?.admin_profile_id) return adminByProfile.admin_profile_id as string;
 
     const { data: adminByEmail, error: adminByEmailError } = await supabase
       .from("admins")
@@ -111,10 +121,7 @@ export default function AdminMembershipPage() {
       .maybeSingle();
 
     if (adminByEmailError) throw adminByEmailError;
-
-    if (adminByEmail?.admin_profile_id) {
-      return adminByEmail.admin_profile_id as string;
-    }
+    if (adminByEmail?.admin_profile_id) return adminByEmail.admin_profile_id as string;
 
     throw new Error("Active admin profile not found.");
   }
@@ -129,18 +136,13 @@ export default function AdminMembershipPage() {
 
       const { data: orderRows, error: orderError } = await supabase
         .from("membership_orders")
-        .select(
-          "id, profile_id, plan_name, annual_fee, amount, status, payment_status, submitted_at, approved_at, created_at, plan_id"
-        )
+        .select("id, profile_id, plan_name, annual_fee, amount, status, payment_status, submitted_at, approved_at, created_at, plan_id")
         .order("created_at", { ascending: false });
 
       if (orderError) throw orderError;
 
       const nextOrders = (orderRows || []) as MembershipOrder[];
-
-      const profileIds = Array.from(
-        new Set(nextOrders.map((item) => item.profile_id).filter(Boolean))
-      ) as string[];
+      const profileIds = Array.from(new Set(nextOrders.map((item) => item.profile_id).filter(Boolean))) as string[];
 
       let profileRows: ProfileRow[] = [];
 
@@ -182,22 +184,14 @@ export default function AdminMembershipPage() {
     return profiles.find((profile) => profile.id === profileId) || null;
   }
 
-  function badgeClass(value: string | null | undefined) {
-    const status = normalize(value);
+  function openReview(order: MembershipOrder) {
+    setSelectedOrder(order);
+    setReviewNotes("");
+  }
 
-    if (status === "APPROVED" || status === "ACTIVE" || status === "PAID") {
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
-    }
-
-    if (status === "PENDING") {
-      return "bg-yellow-500/20 text-yellow-200 border-yellow-400/30";
-    }
-
-    if (status === "REJECTED" || status === "FAILED") {
-      return "bg-red-500/20 text-red-200 border-red-400/30";
-    }
-
-    return "bg-white/10 text-white/60 border-white/10";
+  function closeReview() {
+    setSelectedOrder(null);
+    setReviewNotes("");
   }
 
   async function approveOrder(order: MembershipOrder) {
@@ -213,10 +207,7 @@ export default function AdminMembershipPage() {
       return;
     }
 
-    const confirmed = window.confirm(
-      "Approve this membership order? This will activate membership through the audited RPC."
-    );
-
+    const confirmed = window.confirm("Approve this membership order through the audited RPC?");
     if (!confirmed) return;
 
     setActionLoading(order.id);
@@ -231,7 +222,9 @@ export default function AdminMembershipPage() {
       if (error) throw error;
 
       setMessage("Membership approved. Profile, membership record, and treasury were synced by RPC.");
+      closeReview();
       await loadData();
+      setFilter("PENDING");
     } catch (error: any) {
       setMessage(error?.message || "Membership approval failed.");
     } finally {
@@ -242,27 +235,25 @@ export default function AdminMembershipPage() {
   async function rejectOrder(order: MembershipOrder) {
     if (!order.id) return;
 
-    const confirmed = window.confirm("Reject this membership order?");
+    const confirmed = window.confirm("Reject this membership order through the audited RPC?");
     if (!confirmed) return;
 
     setActionLoading(order.id);
     setMessage("");
 
     try {
-      const { error } = await supabase
-        .from("membership_orders")
-        .update({
-          status: "REJECTED",
-          payment_status: "REJECTED",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", order.id)
-        .eq("status", "PENDING");
+      const { error } = await supabase.rpc("reject_membership_order", {
+        p_order_id: order.id,
+        p_admin_profile_id: adminProfileId || null,
+        p_admin_notes: reviewNotes.trim() || null,
+      });
 
       if (error) throw error;
 
-      setMessage("Membership order rejected.");
+      setMessage("Membership order rejected by RPC.");
+      closeReview();
       await loadData();
+      setFilter("PENDING");
     } catch (error: any) {
       setMessage(error?.message || "Membership rejection failed.");
     } finally {
@@ -271,37 +262,23 @@ export default function AdminMembershipPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#03130d] p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <main className="page">
+      <section className="shell">
+        <header className="hero">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-              Admin Forest Command
-            </p>
-            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Membership Center
-            </h1>
-            <p className="mt-2 text-white/70">
-              Review Arganwood Annual Membership orders. Approval uses the audited
-              approve_membership_order RPC only.
-            </p>
+            <p className="eyebrow">Admin Forest Command</p>
+            <h1>Membership Center</h1>
+            <p>Review Arganwood Annual Membership orders. Actions happen only inside Open Review.</p>
           </div>
 
-          <button
-            onClick={loadData}
-            className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25"
-          >
-            Refresh
+          <button onClick={loadData} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh"}
           </button>
-        </div>
+        </header>
 
-        {message && (
-          <div className="rounded-2xl border border-[#d9b45f]/25 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe49a]">
-            {message}
-          </div>
-        )}
+        {message && <div className="message">{message}</div>}
 
-        <section className="grid gap-4 md:grid-cols-5">
+        <section className="stats">
           <StatCard label="Pending" value={String(pendingCount)} />
           <StatCard label="Approved" value={String(approvedCount)} />
           <StatCard label="Rejected" value={String(rejectedCount)} />
@@ -309,160 +286,173 @@ export default function AdminMembershipPage() {
           <StatCard label="Revenue" value={formatMoney(revenue)} />
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/10 p-5">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-[#d9b45f]">
-                Membership Orders
-              </h2>
-              <p className="text-sm text-white/60">
-                Showing {filteredOrders.length} of {orders.length} orders.
-              </p>
-            </div>
-
-            <select
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-              className="rounded-xl border border-white/10 bg-[#071f16]/70 px-4 py-3 text-sm text-white outline-none"
-            >
-              <option value="ALL">All</option>
-              <option value="PENDING">Pending</option>
-              <option value="APPROVED">Approved</option>
-              <option value="REJECTED">Rejected</option>
-              <option value="EXPIRED">Expired</option>
-            </select>
+        <section className="toolbar">
+          <div>
+            <h2>Membership Orders</h2>
+            <p>Showing {filteredOrders.length} of {orders.length} orders.</p>
           </div>
+
+          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+            <option value="PENDING">Pending</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+            <option value="ALL">All</option>
+            <option value="EXPIRED">Expired</option>
+          </select>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/10">
+        <section className="panel">
           {loading ? (
-            <div className="p-8 text-white/70">Loading membership orders...</div>
+            <div className="empty">Loading membership orders...</div>
           ) : filteredOrders.length === 0 ? (
-            <div className="p-8 text-white/70">No membership orders found.</div>
+            <div className="empty">No membership orders found.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] text-left text-sm">
-                <thead className="bg-[#071f16]/80 text-white/70">
-                  <tr>
-                    <th className="px-5 py-4">Customer</th>
-                    <th className="px-5 py-4">Plan</th>
-                    <th className="px-5 py-4">Amount</th>
-                    <th className="px-5 py-4">Order Status</th>
-                    <th className="px-5 py-4">Payment</th>
-                    <th className="px-5 py-4">Submitted</th>
-                    <th className="px-5 py-4">Approved</th>
-                    <th className="px-5 py-4">Action</th>
-                  </tr>
-                </thead>
+            <div className="orderGrid">
+              {filteredOrders.map((order) => {
+                const profile = getProfile(order.profile_id);
+                return (
+                  <article className="orderCard" key={order.id}>
+                    <div>
+                      <p className="eyebrow small">Customer</p>
+                      <h3>{profile?.full_name || "Unknown Customer"}</h3>
+                      <span>{profile?.email || "No email"}</span>
+                    </div>
 
-                <tbody>
-                  {filteredOrders.map((order) => {
-                    const profile = getProfile(order.profile_id);
-                    const isPending = normalize(order.status) === "PENDING";
+                    <div className="cardMeta">
+                      <Info label="Plan" value={order.plan_name || "Arganwood Annual Membership"} />
+                      <Info label="Amount" value={formatMoney(order.amount || order.annual_fee)} />
+                      <Info label="Submitted" value={formatDate(order.submitted_at || order.created_at)} />
+                      <Info label="Approved" value={formatDate(order.approved_at)} />
+                    </div>
 
-                    return (
-                      <tr
-                        key={order.id}
-                        className="border-t border-white/10 hover:bg-white/5"
-                      >
-                        <td className="px-5 py-4">
-                          <div className="font-semibold text-white">
-                            {profile?.full_name || "Unknown Customer"}
-                          </div>
-                          <div className="mt-1 text-xs text-white/50">
-                            {profile?.email || "No email"}
-                          </div>
-                          <div className="mt-1 text-xs text-emerald-200/70">
-                            Membership: {profile?.membership_status || "INACTIVE"}
-                          </div>
-                        </td>
+                    <div className="statusLine">
+                      <span className={badgeClass(order.status)}>{normalize(order.status || "UNKNOWN")}</span>
+                      <span className={badgeClass(order.payment_status)}>{normalize(order.payment_status || "UNKNOWN")}</span>
+                    </div>
 
-                        <td className="px-5 py-4">
-                          <div>
-                            {order.plan_name || "Arganwood Annual Membership"}
-                          </div>
-                          <div className="mt-1 text-xs text-white/40">
-                            {order.plan_id || "No plan id"}
-                          </div>
-                        </td>
-
-                        <td className="px-5 py-4 font-semibold text-[#f7d774]">
-                          {formatMoney(order.amount || order.annual_fee)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              order.status
-                            )}`}
-                          >
-                            {normalize(order.status || "UNKNOWN")}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClass(
-                              order.payment_status
-                            )}`}
-                          >
-                            {normalize(order.payment_status || "UNKNOWN")}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4 text-white/70">
-                          {formatDate(order.submitted_at || order.created_at)}
-                        </td>
-
-                        <td className="px-5 py-4 text-white/70">
-                          {formatDate(order.approved_at)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {isPending ? (
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => approveOrder(order)}
-                                disabled={actionLoading === order.id}
-                                className="rounded-xl bg-emerald-500/20 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
-                              >
-                                {actionLoading === order.id
-                                  ? "Working..."
-                                  : "Approve"}
-                              </button>
-
-                              <button
-                                onClick={() => rejectOrder(order)}
-                                disabled={actionLoading === order.id}
-                                className="rounded-xl bg-red-500/20 px-4 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-50"
-                              >
-                                Reject
-                              </button>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-white/50">
-                              No action
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    <button className="openBtn" onClick={() => openReview(order)}>
+                      Open Review
+                    </button>
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
-      </div>
+      </section>
+
+      {selectedOrder && (
+        <section className="drawerBackdrop">
+          <div className="drawer">
+            <header className="drawerHead">
+              <div>
+                <p className="eyebrow">Membership Review</p>
+                <h2>{getProfile(selectedOrder.profile_id)?.full_name || "Unknown Customer"}</h2>
+                <span>{getProfile(selectedOrder.profile_id)?.email || "No email"}</span>
+              </div>
+
+              <button onClick={closeReview}>Close</button>
+            </header>
+
+            <div className="reviewGrid">
+              <Info label="Plan" value={selectedOrder.plan_name || "Arganwood Annual Membership"} />
+              <Info label="Plan ID" value={selectedOrder.plan_id || "—"} />
+              <Info label="Amount" value={formatMoney(selectedOrder.amount || selectedOrder.annual_fee)} />
+              <Info label="Order Status" value={normalize(selectedOrder.status || "UNKNOWN")} />
+              <Info label="Payment Status" value={normalize(selectedOrder.payment_status || "UNKNOWN")} />
+              <Info label="Submitted" value={formatDate(selectedOrder.submitted_at || selectedOrder.created_at)} />
+            </div>
+
+            <label className="notesLabel">
+              Admin Notes
+              <textarea value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} placeholder="Optional rejection note..." />
+            </label>
+
+            {normalize(selectedOrder.status) === "PENDING" ? (
+              <div className="drawerActions">
+                <button className="approveBtn" onClick={() => approveOrder(selectedOrder)} disabled={actionLoading === selectedOrder.id}>
+                  {actionLoading === selectedOrder.id ? "Working..." : "Approve Membership"}
+                </button>
+                <button className="rejectBtn" onClick={() => rejectOrder(selectedOrder)} disabled={actionLoading === selectedOrder.id}>
+                  Reject Membership
+                </button>
+              </div>
+            ) : (
+              <div className="empty small">This membership order is already reviewed.</div>
+            )}
+          </div>
+        </section>
+      )}
+
+      <style>{styles}</style>
     </main>
   );
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/10 p-5">
-      <p className="text-sm text-white/70">{label}</p>
-      <p className="mt-3 text-2xl font-bold text-[#d9b45f]">{value}</p>
+    <article className="stat">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </article>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="info">
+      <p>{label}</p>
+      <strong>{value}</strong>
     </div>
   );
 }
+
+const styles = `
+* { box-sizing: border-box; }
+.page { min-height: 100vh; padding: 28px; color: #f8f1d8; font-family: Arial, Helvetica, sans-serif; background: radial-gradient(circle at 18% 0%, rgba(214,178,94,.18), transparent 24%), linear-gradient(180deg, #06110d, #0b2117 52%, #06110d); }
+.shell { max-width: 1400px; margin: 0 auto; border: 1px solid rgba(214,178,94,.18); background: rgba(255,255,255,.07); border-radius: 30px; padding: 24px; box-shadow: 0 26px 70px rgba(0,0,0,.32); }
+.hero { display: flex; justify-content: space-between; gap: 18px; align-items: start; margin-bottom: 18px; }
+.eyebrow { margin: 0 0 8px; color: #d6b25e; font-size: 12px; font-weight: 950; text-transform: uppercase; letter-spacing: .18em; }
+.eyebrow.small { font-size: 10px; }
+h1, h2, h3 { margin: 0; color: #fff8dc; }
+h1 { font-size: 42px; color: #d6b25e; }
+.hero p, .toolbar p, .orderCard span, .drawerHead span { color: rgba(248,241,216,.68); line-height: 1.55; }
+button, select, textarea { font-family: inherit; }
+button { border: 0; border-radius: 999px; padding: 12px 16px; background: linear-gradient(135deg, #d6b25e, #8c6a3c); color: #07140f; font-weight: 950; cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.message, .toolbar, .panel, .stat, .orderCard, .drawer, .empty { border: 1px solid rgba(214,178,94,.16); background: rgba(0,0,0,.20); border-radius: 22px; }
+.message, .empty { padding: 16px; margin-bottom: 16px; color: #ffe49a; font-weight: 900; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { padding: 16px; }
+.stat p { margin: 0; color: rgba(248,241,216,.58); font-size: 11px; font-weight: 950; text-transform: uppercase; letter-spacing: .12em; }
+.stat h3 { margin-top: 8px; color: #d6b25e; font-size: 24px; }
+.toolbar { padding: 16px; display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 16px; }
+select, textarea { border: 1px solid rgba(214,178,94,.22); border-radius: 16px; padding: 12px 14px; background: rgba(0,0,0,.28); color: #fff8dc; outline: none; }
+option { color: #07140f; }
+.panel { padding: 16px; }
+.orderGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.orderCard { padding: 18px; display: grid; gap: 14px; transition: transform .15s ease, border-color .15s ease; }
+.orderCard:hover { transform: translateY(-2px); border-color: rgba(214,178,94,.35); }
+.cardMeta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.info { border-radius: 16px; padding: 12px; background: rgba(255,255,255,.06); border: 1px solid rgba(214,178,94,.11); }
+.info p { margin: 0 0 6px; color: rgba(248,241,216,.52); font-size: 10px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }
+.info strong { color: #fff8dc; word-break: break-word; }
+.statusLine { display: flex; flex-wrap: wrap; gap: 8px; }
+.badge { width: fit-content; border: 1px solid; border-radius: 999px; padding: 7px 10px; font-size: 11px; font-weight: 950; }
+.approved { color: #b7f7c8; background: rgba(46,204,113,.15); border-color: rgba(46,204,113,.35); }
+.pending { color: #ffe49a; background: rgba(214,178,94,.14); border-color: rgba(214,178,94,.35); }
+.rejected { color: #ffc4c4; background: rgba(255,80,80,.14); border-color: rgba(255,80,80,.35); }
+.neutral { color: rgba(248,241,216,.72); background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); }
+.openBtn { width: 100%; }
+.drawerBackdrop { position: fixed; inset: 0; z-index: 50; padding: 24px; background: rgba(0,0,0,.72); overflow: auto; }
+.drawer { max-width: 900px; margin: 0 auto; padding: 24px; }
+.drawerHead { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.reviewGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.notesLabel { display: grid; gap: 8px; color: rgba(248,241,216,.65); font-size: 12px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 14px; }
+textarea { min-height: 120px; resize: vertical; }
+.drawerActions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.approveBtn { background: linear-gradient(135deg, #2ecc71, #168a48); color: white; }
+.rejectBtn { background: linear-gradient(135deg, #ff6b6b, #a83232); color: white; }
+.small { margin: 0; color: rgba(248,241,216,.68); }
+@media (max-width: 900px) { .hero, .toolbar, .drawerHead { display: grid; } .stats, .orderGrid, .cardMeta, .reviewGrid, .drawerActions { grid-template-columns: 1fr; } }
+`;

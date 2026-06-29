@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type PlatformSettings = {
-  id: string;
+  id?: string | null;
   platform_fee_percent: number | string;
   withdrawal_fee_percent: number | string;
   tree_sale_fee_percent: number | string;
@@ -14,17 +14,33 @@ type PlatformSettings = {
   updated_at?: string | null;
 };
 
-const DEFAULT_SETTINGS = {
+const DEFAULT_SETTINGS: PlatformSettings = {
+  id: null,
   platform_fee_percent: 2,
   withdrawal_fee_percent: 2,
   tree_sale_fee_percent: 2,
   auto_renew_enabled: true,
   support_email: "support@arganwood.com",
   support_mobile: "",
+  updated_at: null,
 };
 
+function formatDate(value?: string | null) {
+  if (!value) return "Not synced yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not synced yet";
+
+  return date.toLocaleString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<PlatformSettings | null>(null);
+  const [settings, setSettings] = useState<PlatformSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -40,246 +56,223 @@ export default function AdminSettingsPage() {
     const { data, error } = await supabase
       .from("platform_settings")
       .select("*")
-      .order("updated_at", { ascending: true })
+      .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (error) {
-      setMessage(error.message);
+      setMessage(`Settings read blocked or unavailable: ${error.message}. You can still save through RPC.`);
+      setSettings(DEFAULT_SETTINGS);
       setLoading(false);
       return;
     }
 
     if (!data) {
-      const { data: inserted, error: insertError } = await supabase
-        .from("platform_settings")
-        .insert({
-          ...DEFAULT_SETTINGS,
-          updated_at: new Date().toISOString(),
-        })
-        .select("*")
-        .single();
-
-      if (insertError) {
-        setMessage(insertError.message);
-        setLoading(false);
-        return;
-      }
-
-      setSettings(inserted);
+      setMessage("No platform settings row found yet. Save once to create/update through RPC.");
+      setSettings(DEFAULT_SETTINGS);
       setLoading(false);
       return;
     }
 
-    setSettings(data);
+    setSettings({
+      id: data.id,
+      platform_fee_percent: data.platform_fee_percent ?? DEFAULT_SETTINGS.platform_fee_percent,
+      withdrawal_fee_percent: data.withdrawal_fee_percent ?? DEFAULT_SETTINGS.withdrawal_fee_percent,
+      tree_sale_fee_percent: data.tree_sale_fee_percent ?? DEFAULT_SETTINGS.tree_sale_fee_percent,
+      auto_renew_enabled: Boolean(data.auto_renew_enabled),
+      support_email: data.support_email || DEFAULT_SETTINGS.support_email,
+      support_mobile: data.support_mobile || "",
+      updated_at: data.updated_at || null,
+    });
+
     setLoading(false);
   }
 
-  function updateField<K extends keyof PlatformSettings>(
-    key: K,
-    value: PlatformSettings[K]
-  ) {
-    setSettings((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        [key]: value,
-      };
-    });
+  function updateField<K extends keyof PlatformSettings>(key: K, value: PlatformSettings[K]) {
+    setSettings((current) => ({
+      ...current,
+      [key]: value,
+    }));
   }
 
   async function saveSettings() {
-    if (!settings?.id) return;
-
     setSaving(true);
     setMessage("");
 
-    const { error } = await supabase
-      .from("platform_settings")
-      .update({
-        platform_fee_percent: Number(settings.platform_fee_percent || 0),
-        withdrawal_fee_percent: Number(settings.withdrawal_fee_percent || 0),
-        tree_sale_fee_percent: Number(settings.tree_sale_fee_percent || 0),
-        auto_renew_enabled: Boolean(settings.auto_renew_enabled),
-        support_email: settings.support_email || "support@arganwood.com",
-        support_mobile: settings.support_mobile || "",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", settings.id);
+    try {
+      const { error } = await supabase.rpc("update_platform_settings_rpc", {
+        p_platform_fee_percent: Number(settings.platform_fee_percent || 0),
+        p_withdrawal_fee_percent: Number(settings.withdrawal_fee_percent || 0),
+        p_tree_sale_fee_percent: Number(settings.tree_sale_fee_percent || 0),
+        p_auto_renew_enabled: Boolean(settings.auto_renew_enabled),
+        p_support_email: settings.support_email || "support@arganwood.com",
+        p_support_mobile: settings.support_mobile || "",
+      });
 
-    if (error) {
-      setMessage(error.message);
+      if (error) throw error;
+
+      setMessage("Platform settings saved by RPC.");
+      await loadSettings();
+    } catch (error: any) {
+      setMessage(error?.message || "Platform settings save failed.");
+    } finally {
       setSaving(false);
-      return;
     }
-
-    setMessage("Platform settings saved.");
-    setSaving(false);
-    await loadSettings();
   }
 
   return (
-    <main className="min-h-screen p-8 text-white">
-      <div className="mx-auto max-w-7xl space-y-8 rounded-3xl border border-white/10 bg-[#071f16]/80 p-8 shadow-2xl backdrop-blur-md">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <main className="page">
+      <section className="shell">
+        <header className="hero">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#d9b45f]/80">
-              Admin Control Center
-            </p>
-
-            <h1 className="mt-2 text-4xl font-bold text-[#d9b45f]">
-              Platform Settings
-            </h1>
-
-            <p className="mt-2 text-white/70">
-              Manage platform fees, withdrawal fees, tree sale fees, auto-renew,
-              and support contact details.
-            </p>
+            <p className="eyebrow">Admin Control Center</p>
+            <h1>Platform Settings</h1>
+            <p>Manage platform fees, withdrawal fees, tree sale fees, auto-renew, and support contact details.</p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={loadSettings}
-              disabled={loading || saving}
-              className="rounded-2xl border border-[#d9b45f]/40 bg-[#d9b45f]/15 px-5 py-3 text-sm font-semibold text-[#f7d774] hover:bg-[#d9b45f]/25 disabled:opacity-50"
-            >
+          <div className="headerActions">
+            <button onClick={loadSettings} disabled={loading || saving}>
               {loading ? "Refreshing..." : "Refresh"}
             </button>
 
-            <button
-              onClick={saveSettings}
-              disabled={loading || saving || !settings}
-              className="rounded-2xl bg-[#d9b45f] px-5 py-3 text-sm font-black text-[#071f16] disabled:opacity-50"
-            >
+            <button onClick={saveSettings} disabled={loading || saving}>
               {saving ? "Saving..." : "Save Settings"}
             </button>
           </div>
-        </div>
+        </header>
 
-        {message && (
-          <div className="rounded-2xl border border-[#d9b45f]/20 bg-[#d9b45f]/10 p-4 text-sm font-semibold text-[#ffe8a3]">
-            {message}
-          </div>
-        )}
+        {message && <div className="message">{message}</div>}
+
+        <section className="summary">
+          <Stat label="Platform Fee" value={`${settings.platform_fee_percent || 0}%`} />
+          <Stat label="Withdrawal Fee" value={`${settings.withdrawal_fee_percent || 0}%`} />
+          <Stat label="Tree Sale Fee" value={`${settings.tree_sale_fee_percent || 0}%`} />
+          <Stat label="Auto Renew" value={settings.auto_renew_enabled ? "Enabled" : "Disabled"} />
+        </section>
 
         {loading ? (
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-8 text-white/70">
-            Loading platform settings...
-          </div>
-        ) : !settings ? (
-          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-8 text-red-100">
-            Unable to load platform settings.
-          </div>
+          <div className="empty">Loading platform settings...</div>
         ) : (
-          <section className="grid gap-5 lg:grid-cols-2">
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Platform Fee %
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Default platform fee for revenue-generating transactions.
-              </p>
+          <section className="settingsGrid">
+            <SettingCard title="Platform Fee %" text="Default platform fee for revenue-generating transactions.">
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={settings.platform_fee_percent}
-                onChange={(e) =>
-                  updateField("platform_fee_percent", e.target.value)
-                }
-                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                onChange={(event) => updateField("platform_fee_percent", event.target.value)}
               />
-            </div>
+            </SettingCard>
 
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Withdrawal Fee %
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Processing fee deducted from withdrawal requests.
-              </p>
+            <SettingCard title="Withdrawal Fee %" text="Processing fee deducted from withdrawal requests.">
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={settings.withdrawal_fee_percent}
-                onChange={(e) =>
-                  updateField("withdrawal_fee_percent", e.target.value)
-                }
-                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                onChange={(event) => updateField("withdrawal_fee_percent", event.target.value)}
               />
-            </div>
+            </SettingCard>
 
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Tree Sale Fee %
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Fee deducted when a customer sells a tree.
-              </p>
+            <SettingCard title="Tree Sale Fee %" text="Fee deducted when a customer sells a tree.">
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={settings.tree_sale_fee_percent}
-                onChange={(e) =>
-                  updateField("tree_sale_fee_percent", e.target.value)
-                }
-                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                onChange={(event) => updateField("tree_sale_fee_percent", event.target.value)}
               />
-            </div>
+            </SettingCard>
 
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Auto Renew Enabled
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Controls global care program auto-renew availability.
-              </p>
+            <SettingCard title="Auto Renew Enabled" text="Controls global care program auto-renew availability.">
               <select
                 value={settings.auto_renew_enabled ? "true" : "false"}
-                onChange={(e) =>
-                  updateField("auto_renew_enabled", e.target.value === "true")
-                }
-                className="mt-5 w-full rounded-xl border border-white/10 bg-[#071f16] px-4 py-3 text-white outline-none"
+                onChange={(event) => updateField("auto_renew_enabled", event.target.value === "true")}
               >
                 <option value="true">Enabled</option>
                 <option value="false">Disabled</option>
               </select>
-            </div>
+            </SettingCard>
 
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Support Email
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Primary customer support email.
-              </p>
+            <SettingCard title="Support Email" text="Primary customer support email.">
               <input
                 value={settings.support_email || ""}
-                onChange={(e) => updateField("support_email", e.target.value)}
-                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                onChange={(event) => updateField("support_email", event.target.value)}
                 placeholder="support@arganwood.com"
               />
-            </div>
+            </SettingCard>
 
-            <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-6">
-              <h2 className="text-xl font-bold text-[#ffe49a]">
-                Support Mobile
-              </h2>
-              <p className="mt-2 text-sm text-white/60">
-                Primary customer support mobile number.
-              </p>
+            <SettingCard title="Support Mobile" text="Primary customer support mobile number.">
               <input
                 value={settings.support_mobile || ""}
-                onChange={(e) => updateField("support_mobile", e.target.value)}
-                className="mt-5 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white outline-none placeholder:text-white/40"
+                onChange={(event) => updateField("support_mobile", event.target.value)}
                 placeholder="+63..."
               />
-            </div>
+            </SettingCard>
+
+            <section className="syncCard">
+              <p className="eyebrow">Sync Status</p>
+              <h2>RPC Protected Settings</h2>
+              <p>
+                Saving uses update_platform_settings_rpc only. The frontend does not insert or update
+                platform_settings directly.
+              </p>
+              <strong>Last Updated: {formatDate(settings.updated_at)}</strong>
+            </section>
           </section>
         )}
-      </div>
+      </section>
+
+      <style>{styles}</style>
     </main>
   );
 }
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <article className="stat">
+      <p>{label}</p>
+      <h3>{value}</h3>
+    </article>
+  );
+}
+
+function SettingCard({ title, text, children }: { title: string; text: string; children: React.ReactNode }) {
+  return (
+    <section className="settingCard">
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <div className="control">{children}</div>
+    </section>
+  );
+}
+
+const styles = `
+* { box-sizing: border-box; }
+.page { min-height: 100vh; padding: 28px; color: #f8f1d8; font-family: Arial, Helvetica, sans-serif; background: radial-gradient(circle at 18% 0%, rgba(214,178,94,.18), transparent 24%), linear-gradient(180deg, #06110d, #0b2117 52%, #06110d); }
+.shell { max-width: 1350px; margin: 0 auto; border: 1px solid rgba(214,178,94,.18); background: rgba(255,255,255,.07); border-radius: 30px; padding: 24px; box-shadow: 0 26px 70px rgba(0,0,0,.32); }
+.hero { display: flex; justify-content: space-between; gap: 18px; align-items: start; margin-bottom: 18px; }
+.eyebrow { margin: 0 0 8px; color: #d6b25e; font-size: 12px; font-weight: 950; text-transform: uppercase; letter-spacing: .18em; }
+h1, h2 { margin: 0; color: #fff8dc; }
+h1 { font-size: 42px; color: #d6b25e; }
+.hero p, .settingCard p, .syncCard p { color: rgba(248,241,216,.68); line-height: 1.55; }
+.headerActions { display: flex; flex-wrap: wrap; gap: 10px; }
+button, input, select { font-family: inherit; }
+button { border: 0; border-radius: 999px; padding: 12px 16px; background: linear-gradient(135deg, #d6b25e, #8c6a3c); color: #07140f; font-weight: 950; cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.message, .settingCard, .stat, .syncCard, .empty { border: 1px solid rgba(214,178,94,.16); background: rgba(0,0,0,.20); border-radius: 22px; }
+.message, .empty { padding: 16px; margin-bottom: 16px; color: #ffe49a; font-weight: 900; }
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { padding: 16px; }
+.stat p { margin: 0; color: rgba(248,241,216,.58); font-size: 11px; font-weight: 950; text-transform: uppercase; letter-spacing: .12em; }
+.stat h3 { margin-top: 8px; color: #d6b25e; font-size: 26px; }
+.settingsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.settingCard, .syncCard { padding: 20px; }
+.settingCard h2 { color: #ffe49a; font-size: 22px; }
+.control { margin-top: 16px; }
+input, select { width: 100%; border: 1px solid rgba(214,178,94,.22); border-radius: 16px; padding: 13px 14px; background: rgba(0,0,0,.28); color: #fff8dc; outline: none; }
+option { color: #07140f; }
+.syncCard { grid-column: 1 / -1; background: radial-gradient(circle at 90% 10%, rgba(214,178,94,.15), transparent 30%), rgba(0,0,0,.24); }
+.syncCard strong { display: block; margin-top: 12px; color: #d6b25e; }
+@media (max-width: 900px) { .hero { display: grid; } .summary, .settingsGrid { grid-template-columns: 1fr; } }
+`;

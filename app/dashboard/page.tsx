@@ -85,6 +85,22 @@ type EvidenceRow = Row & {
   updated_at?: string | null;
 };
 
+type FeedItem = {
+  id: string;
+  title: string;
+  detail: string;
+  date: string | null;
+  href: string;
+  icon: ReactNode;
+  amount?: string;
+};
+
+const referenceTreeImages = [
+  "/images/arganwood-reference/tree-card-reference-1.png",
+  "/images/arganwood-reference/tree-card-reference-2.png",
+  "/images/arganwood-reference/tree-card-reference-3.png",
+  "/images/arganwood-reference/tree-card-reference-4.png",
+];
 
 function peso(value: number) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", {
@@ -106,7 +122,9 @@ function cleanLabel(value: any) {
 
 function formatDate(value: any) {
   if (!value) return "No update yet";
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return "No update yet";
 
   return date.toLocaleDateString("en-PH", {
@@ -116,20 +134,29 @@ function formatDate(value: any) {
   });
 }
 
-function getHourGreeting() {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
+function formatDateTime(value: any) {
+  if (!value) return "No date";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "No date";
+
+  return date.toLocaleString("en-PH", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
+function getHourGreeting() {
+  const hour = new Date().getHours();
 
-const referenceTreeImages = [
-  "/images/arganwood-reference/tree-card-reference-1.png",
-  "/images/arganwood-reference/tree-card-reference-2.png",
-  "/images/arganwood-reference/tree-card-reference-3.png",
-  "/images/arganwood-reference/tree-card-reference-4.png",
-];
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+
+  return "Good evening";
+}
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
@@ -222,27 +249,24 @@ export default function DashboardPage() {
             .select("id, profile_id, balance, created_at")
             .eq("profile_id", activeProfile.id)
             .order("created_at", { ascending: false })
-            .limit(1)
+            .limit(1),
         ),
-
         safeRows(
           "trees",
           supabase
             .from("trees")
             .select("*")
             .or(profileFilter)
-            .order("created_at", { ascending: false })
+            .order("created_at", { ascending: false }),
         ),
-
         safeRows(
           "tree_groups",
           supabase
             .from("tree_groups")
             .select("*")
             .or(profileFilter)
-            .order("created_at", { ascending: false })
+            .order("created_at", { ascending: false }),
         ),
-
         safeRows(
           "tree_operation_requests",
           supabase
@@ -250,9 +274,8 @@ export default function DashboardPage() {
             .select("*")
             .or(profileFilter)
             .order("created_at", { ascending: false })
-            .limit(20)
+            .limit(20),
         ),
-
         safeRows(
           "wallet_transactions",
           supabase
@@ -260,9 +283,8 @@ export default function DashboardPage() {
             .select("id, transaction_type, amount, status, description, created_at")
             .eq("profile_id", activeProfile.id)
             .order("created_at", { ascending: false })
-            .limit(8)
+            .limit(8),
         ),
-
         safeRows(
           "membership_orders",
           supabase
@@ -270,9 +292,8 @@ export default function DashboardPage() {
             .select("*")
             .eq("profile_id", activeProfile.id)
             .order("created_at", { ascending: false })
-            .limit(6)
+            .limit(6),
         ),
-
         safeRows(
           "sell_tree_requests",
           supabase
@@ -280,9 +301,8 @@ export default function DashboardPage() {
             .select("*")
             .or(profileFilter)
             .order("created_at", { ascending: false })
-            .limit(6)
+            .limit(6),
         ),
-
         safeRows(
           "tree_photo_updates",
           supabase
@@ -291,9 +311,8 @@ export default function DashboardPage() {
             .eq("customer_profile_id", activeProfile.id)
             .in("status", ["APPROVED", "COMPLETED"])
             .order("created_at", { ascending: false })
-            .limit(10)
+            .limit(10),
         ),
-
         safeRows(
           "tree_gps_logs",
           supabase
@@ -302,9 +321,8 @@ export default function DashboardPage() {
             .eq("customer_profile_id", activeProfile.id)
             .in("status", ["APPROVED", "COMPLETED"])
             .order("created_at", { ascending: false })
-            .limit(10)
+            .limit(10),
         ),
-
         safeRows(
           "tree_health_reports",
           supabase
@@ -313,7 +331,7 @@ export default function DashboardPage() {
             .eq("customer_profile_id", activeProfile.id)
             .in("status", ["APPROVED", "COMPLETED"])
             .order("created_at", { ascending: false })
-            .limit(10)
+            .limit(10),
         ),
       ]);
 
@@ -337,14 +355,18 @@ export default function DashboardPage() {
 
   const displayName = profile?.full_name || profile?.email || "Arganwood Investor";
   const firstName = displayName.split(" ").filter(Boolean)[0] || "Investor";
+  const initials = getInitials(displayName);
   const membershipStatus = normalize(profile?.membership_status || "INACTIVE");
+  const kycStatus = normalize(profile?.kyc_status || "PENDING");
   const walletBalance = Number(wallet?.balance || 0);
 
   const groupMap = useMemo(() => {
     const map = new Map<string, Row>();
+
     groups.forEach((group) => {
       if (group.id) map.set(String(group.id), group);
     });
+
     return map;
   }, [groups]);
 
@@ -352,6 +374,9 @@ export default function DashboardPage() {
   const latestPhoto = photoEvidence[0] || null;
   const latestGps = gpsEvidence[0] || null;
   const latestOperation = operationRequests[0] || null;
+  const latestTransaction = walletTransactions[0] || null;
+  const latestMembership = membershipOrders[0] || null;
+  const latestSellTree = sellTreeRequests[0] || null;
 
   const latestEvidenceDate = latestDate([
     latestHealth?.created_at,
@@ -363,25 +388,6 @@ export default function DashboardPage() {
     latestOperation?.completed_at,
     latestOperation?.created_at,
   ]);
-
-  const overallStatus = useMemo(() => {
-    const hasEvidence = photoEvidence.length > 0 || gpsEvidence.length > 0 || healthEvidence.length > 0;
-    if (!hasEvidence) return "Pending Evidence";
-
-    const health = normalize(latestHealth?.health_status || latestHealth?.issue_severity || latestHealth?.issue_summary);
-    if (
-      health.includes("CRITICAL") ||
-      health.includes("MONITOR") ||
-      health.includes("TREATMENT") ||
-      health.includes("DISEASE") ||
-      health.includes("PEST") ||
-      health.includes("NEEDS")
-    ) {
-      return "Needs Attention";
-    }
-
-    return "Healthy";
-  }, [photoEvidence.length, gpsEvidence.length, healthEvidence.length, latestHealth]);
 
   const missionSummary = useMemo(() => {
     const counts = {
@@ -408,7 +414,13 @@ export default function DashboardPage() {
     return counts;
   }, [operationRequests]);
 
-  const missionLogs = useMemo(() => {
+  const totalMissions =
+    missionSummary.pending + missionSummary.assigned + missionSummary.active + missionSummary.completed;
+
+  const completedMissionRate =
+    totalMissions > 0 ? Math.round((missionSummary.completed / totalMissions) * 100) : 0;
+
+  const recentMissionLogs = useMemo(() => {
     return operationRequests
       .map((operation) => {
         const tree = findTree(operation.tree_id, trees);
@@ -432,6 +444,63 @@ export default function DashboardPage() {
       .slice(0, 5);
   }, [operationRequests, trees]);
 
+  const pendingMembershipOrders = membershipOrders.filter(
+    (order) => normalize(order.status || order.payment_status) === "PENDING",
+  ).length;
+
+  const activeSellTreeRequests = sellTreeRequests.filter((request) =>
+    ["PENDING", "OFFER_SENT", "ACCEPTED", "PROCESSING"].includes(
+      normalize(request.status || request.offer_status),
+    ),
+  ).length;
+
+  const activityFeed = useMemo<FeedItem[]>(() => {
+    const walletRows = walletTransactions.slice(0, 4).map((tx) => ({
+      id: `wallet-${tx.id}`,
+      title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
+      detail: tx.description || normalize(tx.status || "COMPLETED").replaceAll("_", " "),
+      date: tx.created_at,
+      href: "/dashboard/wallet",
+      icon: <WalletIcon />,
+      amount: peso(Number(tx.amount || 0)),
+    }));
+
+    const missionRows = recentMissionLogs.slice(0, 3).map((log) => ({
+      id: `mission-${log.id}`,
+      title: log.mission,
+      detail: `${log.tree} • ${cleanLabel(log.status)}`,
+      date: log.date,
+      href: "/dashboard/tree-operations",
+      icon: <ServiceIcon />,
+    }));
+
+    const membershipRows = membershipOrders.slice(0, 2).map((order) => ({
+      id: `membership-${order.id}`,
+      title: "Membership Activity",
+      detail: `${cleanLabel(order.status || "Pending")} • ${peso(Number(order.amount || order.annual_fee || 0))}`,
+      date: order.created_at || order.submitted_at,
+      href: "/dashboard/membership",
+      icon: <MembershipIcon />,
+    }));
+
+    const sellRows = sellTreeRequests.slice(0, 2).map((request) => ({
+      id: `sell-${request.id}`,
+      title: "Sell Tree Activity",
+      detail: cleanLabel(request.status || request.offer_status || "Pending"),
+      date: request.created_at || request.updated_at,
+      href: "/dashboard/sell-tree",
+      icon: <SellIcon />,
+      amount:
+        request.net_receive || request.tree_value || request.offer_price
+          ? peso(Number(request.net_receive || request.tree_value || request.offer_price || 0))
+          : undefined,
+    }));
+
+    return [...walletRows, ...missionRows, ...membershipRows, ...sellRows]
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 10);
+  }, [walletTransactions, recentMissionLogs, membershipOrders, sellTreeRequests]);
+
   const exploreActions = useMemo(
     () => [
       {
@@ -442,325 +511,311 @@ export default function DashboardPage() {
         icon: <MarketIcon />,
       },
       {
-        title: "My Trees",
-        text: "Open your owned plantation portfolio.",
-        href: "/dashboard/my-trees",
-        image: "/images/arganwood-reference/explore-my-trees.png",
-        icon: <TreeIcon />,
-      },
-      {
-        title: "Tree Services",
-        text: "Request GPS, photo, health, or field work.",
+        title: "Tree Operations",
+        text: "Request GPS, photos, health checks, and field care.",
         href: "/dashboard/tree-operations",
         image: "/images/arganwood-reference/explore-tree-services.png",
         icon: <ServiceIcon />,
       },
       {
+        title: "My Trees",
+        text: "View your owned forest portfolio and proof updates.",
+        href: "/dashboard/my-trees",
+        image: "/images/arganwood-reference/explore-my-trees.png",
+        icon: <TreeIcon />,
+      },
+      {
         title: "Membership",
-        text: "Manage customer access and renewals.",
+        text: "Manage annual access and platform status.",
         href: "/dashboard/membership",
         image: "/images/arganwood-reference/explore-membership.png",
         icon: <MembershipIcon />,
       },
       {
         title: "Wallet",
-        text: "Manage balance, cash-in, and withdrawals.",
+        text: "Cash-in, withdraw, and review transactions.",
         href: "/dashboard/wallet",
         image: "/images/arganwood-reference/explore-wallet.png",
         icon: <WalletIcon />,
       },
       {
-        title: "Investments",
-        text: "Track investment balance and portfolio value.",
-        href: "/dashboard/investments",
-        image: "/images/arganwood-reference/explore-investments.png",
-        icon: <PulseIcon />,
-      },
-      {
         title: "Support",
-        text: "Contact support for account help.",
+        text: "Chat with support about account concerns.",
         href: "/dashboard/support",
         image: "/images/arganwood-reference/explore-support.png",
         icon: <SupportIcon />,
-      },
-      {
-        title: "Sell Tree",
-        text: "Request review for eligible tree sale.",
-        href: "/dashboard/sell-tree",
-        image: "/images/arganwood-reference/explore-sell-tree.png",
-        icon: <SellIcon />,
       },
     ],
     [],
   );
 
-  const recentActivity = useMemo(() => {
-    return walletTransactions
-      .map((tx) => ({
-        id: `wallet-${tx.id}`,
-        title: cleanLabel(tx.transaction_type || "Wallet Transaction"),
-        detail: `${peso(Number(tx.amount || 0))} • ${normalize(tx.status || "COMPLETED")}`,
-        date: tx.created_at,
-        href: "/dashboard/wallet",
-      }))
-      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
-      .slice(0, 6);
-  }, [walletTransactions]);
-
-
-  const latestMembershipOrder = useMemo(() => {
-    return [...membershipOrders].sort(
-      (a, b) => new Date(b.created_at || b.submitted_at || 0).getTime() - new Date(a.created_at || a.submitted_at || 0).getTime(),
-    )[0] || null;
-  }, [membershipOrders]);
-
-  const latestSellTreeRequest = useMemo(() => {
-    return [...sellTreeRequests].sort(
-      (a, b) => new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime(),
-    )[0] || null;
-  }, [sellTreeRequests]);
-
-  const pendingMembershipOrdersCount = useMemo(() => {
-    return membershipOrders.filter((order) => normalize(order.status || "PENDING") === "PENDING").length;
-  }, [membershipOrders]);
-
-  const activeSellTreeRequestsCount = useMemo(() => {
-    return sellTreeRequests.filter((request) => {
-      const status = normalize(request.status || request.offer_status || "PENDING");
-      return !["PAID", "COMPLETED", "CANCELLED", "CANCELED", "REJECTED"].includes(status);
-    }).length;
-  }, [sellTreeRequests]);
-
-  const latestWalletTransaction = walletTransactions[0] || null;
-  const latestWalletTransactionText = latestWalletTransaction
-    ? `${cleanLabel(latestWalletTransaction.transaction_type || "Wallet Transaction")} • ${peso(Number(latestWalletTransaction.amount || 0))}`
-    : "No transaction yet";
-  const latestMembershipOrderStatus = cleanLabel(latestMembershipOrder?.status || "No membership order yet");
-  const latestMembershipOrderDate = latestMembershipOrder?.created_at || latestMembershipOrder?.submitted_at || null;
-  const latestSellTreeRequestStatus = cleanLabel(latestSellTreeRequest?.status || latestSellTreeRequest?.offer_status || "No sell tree request yet");
-  const latestSellTreeAmount = Number(latestSellTreeRequest?.net_receive || latestSellTreeRequest?.tree_value || 0);
-  const latestSellTreeAmountText = latestSellTreeAmount > 0 ? peso(latestSellTreeAmount) : "No amount yet";
-
   if (loading) {
     return (
-      <main className="dashboardPage">
-        <div className="loadingBox">Loading customer dashboard...</div>
+      <main className="appPage">
+        <div className="loadingCard">
+          <div className="loadingMark">A</div>
+          <strong>Loading your Arganwood app...</strong>
+          <span>Syncing wallet, trees, missions, and activity.</span>
+        </div>
         <style>{styles}</style>
       </main>
     );
   }
 
   return (
-    <main className="dashboardPage">
-      <section className="contentShell">
-        <header className="hero">
-          <div>
-            <p className="eyebrow">{getHourGreeting()}</p>
-            <h1>
-              Welcome back, <span>{firstName}</span>
-            </h1>
-            <p>Your Arganwood portfolio connects you to the plantation from anywhere.</p>
-            {errorMessage && <div className="errorBox">{errorMessage}</div>}
+    <main className="appPage">
+      <section className="appShell">
+        <header className="topBar">
+          <div className="greetingBlock">
+            <span className="miniEyebrow">{getHourGreeting()}</span>
+            <h1>Hi, {firstName}</h1>
+            <p>Your Arganwood home is live, synced, and ready.</p>
           </div>
 
-          <div className="heroCards">
-            <MiniCard label="Membership" value={membershipStatus.replaceAll("_", " ")} />
-            <MiniCard label="Investment Balance" value={peso(walletBalance)} />
+          <div className="topActions">
+            <Link className="walletMini" href="/dashboard/wallet">
+              <span>Wallet</span>
+              <strong>{peso(walletBalance)}</strong>
+            </Link>
+
+            <Link className="topIcon" href="/dashboard/transactions" aria-label="Notifications and transactions">
+              <BellIcon />
+            </Link>
+
+            <Link className="profilePill" href="/dashboard/profile">
+              <span>{initials}</span>
+              <div>
+                <strong>{displayName}</strong>
+                <small>KYC {cleanLabel(kycStatus)}</small>
+              </div>
+            </Link>
           </div>
         </header>
 
-        <section className="overviewGrid">
-          <OverviewCard label="Total Trees" value={String(trees.length)} note="Owned seedlings" icon={<TreeIcon />} />
-          <OverviewCard label="Plantations" value={String(groups.length || uniqueGroupCount(trees))} note="Forest groups" icon={<PlantationIcon />} />
-          <OverviewCard label="Overall Status" value={overallStatus} note="Based on approved evidence" icon={<PulseIcon />} />
-          <OverviewCard label="Latest Update" value={formatDate(latestEvidenceDate)} note="Farm proof or operation" icon={<ClockIcon />} />
-        </section>
+        {errorMessage && <div className="alert">{errorMessage}</div>}
 
-        <section className="panel financeSummaryPanel">
-          <div className="panelTop">
+        <section className="walletHero">
+          <div className="walletGlow" />
+          <div className="walletPattern" />
+
+          <div className="walletInfo">
+            <p>Available Balance</p>
+            <h2>{peso(walletBalance)}</h2>
+            <span>
+              {membershipStatus === "ACTIVE"
+                ? "Membership active • Your forest wallet is ready"
+                : "Membership needs attention • Tap Membership to continue"}
+            </span>
+          </div>
+
+          <div className="walletStatusStack">
             <div>
-              <p className="eyebrow">Finance Summary</p>
-              <h2>Live Wallet Snapshot</h2>
+              <small>Membership</small>
+              <strong>{cleanLabel(membershipStatus)}</strong>
             </div>
-            <Link className="smallLink" href="/dashboard/wallet">Open Wallet</Link>
-          </div>
-
-          <div className="missionSummaryGrid">
-            <OverviewCard label="Wallet Balance" value={peso(walletBalance)} note="From wallets.balance" icon={<WalletIcon />} />
-            <OverviewCard label="Latest Transaction" value={latestWalletTransactionText} note={latestWalletTransaction ? formatDate(latestWalletTransaction.created_at) : "No wallet activity"} icon={<PulseIcon />} />
-            <OverviewCard label="Pending Membership Orders" value={String(pendingMembershipOrdersCount)} note="From membership_orders" icon={<MembershipIcon />} />
-            <OverviewCard label="Active Sell Tree Requests" value={String(activeSellTreeRequestsCount)} note="From sell_tree_requests" icon={<SellIcon />} />
-          </div>
-        </section>
-
-        <section className="splitGrid statusSplitGrid">
-          <article className="panel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Latest Membership Activity</p>
-                <h2>Membership Status</h2>
-              </div>
-              <Link className="smallLink" href="/dashboard/membership">View Membership</Link>
-            </div>
-
-            {!latestMembershipOrder ? (
-              <EmptyState text="No membership order yet" />
-            ) : (
-              <Link className="recentRow" href="/dashboard/membership">
-                <div>
-                  <strong>{latestMembershipOrderStatus}</strong>
-                  <p>{peso(Number(latestMembershipOrder.amount || latestMembershipOrder.annual_fee || 0))}</p>
-                </div>
-                <span>{formatDate(latestMembershipOrderDate)}</span>
-              </Link>
-            )}
-          </article>
-
-          <article className="panel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Sell Tree Status</p>
-                <h2>Latest Sell Request</h2>
-              </div>
-              <Link className="smallLink" href="/dashboard/sell-tree">View Sell Tree</Link>
-            </div>
-
-            {!latestSellTreeRequest ? (
-              <EmptyState text="No sell tree request yet" />
-            ) : (
-              <Link className="recentRow" href="/dashboard/sell-tree">
-                <div>
-                  <strong>{latestSellTreeRequestStatus}</strong>
-                  <p>{latestSellTreeAmountText}</p>
-                </div>
-                <span>{formatDate(latestSellTreeRequest.created_at || latestSellTreeRequest.updated_at)}</span>
-              </Link>
-            )}
-          </article>
-        </section>
-
-        <section className="panel missionSummaryPanel">
-          <div className="panelTop">
             <div>
-              <p className="eyebrow">Mission Summary</p>
-              <h2>Mission Engine</h2>
+              <small>KYC</small>
+              <strong>{cleanLabel(kycStatus)}</strong>
             </div>
-            <Link className="smallLink" href="/dashboard/tree-operations">View All Missions</Link>
-          </div>
-
-          <div className="missionSummaryGrid">
-            <OverviewCard label="Pending Missions" value={String(missionSummary.pending)} note="Awaiting admin action" icon={<ServiceIcon />} />
-            <OverviewCard label="Assigned Missions" value={String(missionSummary.assigned)} note="Assigned to gardener" icon={<SupportIcon />} />
-            <OverviewCard label="Active Missions" value={String(missionSummary.active)} note="In progress field work" icon={<TrackIcon />} />
-            <OverviewCard label="Completed Missions" value={String(missionSummary.completed)} note="Approved field work" icon={<PulseIcon />} />
           </div>
         </section>
 
-        <section className="splitGrid">
-          <article className="panel">
-            <div className="panelTop">
+        <section className="quickActions" aria-label="Quick actions">
+          <Link href="/dashboard/wallet">
+            <span><WalletIcon /></span>
+            <strong>Add Funds</strong>
+          </Link>
+
+          <Link href="/dashboard/wallet">
+            <span><SellIcon /></span>
+            <strong>Withdraw</strong>
+          </Link>
+
+          <Link href="/dashboard/wallet">
+            <span><BellIcon /></span>
+            <strong>Transactions</strong>
+          </Link>
+
+          <Link href="/dashboard/marketplace">
+            <span><MarketIcon /></span>
+            <strong>Marketplace</strong>
+          </Link>
+        </section>
+
+        <section className="missionSpotlight">
+          <div className="missionCopy">
+            <p className="miniEyebrow">Mission Progress</p>
+            <h2>{completedMissionRate}% complete</h2>
+            <span>
+              {totalMissions > 0
+                ? `${missionSummary.completed} of ${totalMissions} care mission(s) completed.`
+                : "No care missions yet. Start a care request from Tree Operations."}
+            </span>
+          </div>
+
+          <div className="missionTrack">
+            <span style={{ width: `${completedMissionRate}%` }} />
+          </div>
+
+          <div className="missionStats">
+            <InfoChip label="Pending" value={String(missionSummary.pending)} />
+            <InfoChip label="Assigned" value={String(missionSummary.assigned)} />
+            <InfoChip label="Active" value={String(missionSummary.active)} />
+            <InfoChip label="Done" value={String(missionSummary.completed)} />
+          </div>
+
+          <Link className="missionCta" href="/dashboard/tree-operations">
+            Open Tree Operations
+          </Link>
+        </section>
+
+        <section className="metricGrid">
+          <MetricCard
+            title="Trees"
+            value={String(trees.length)}
+            note={`${groups.length || uniqueGroupCount(trees)} forest group(s)`}
+            href="/dashboard/my-trees"
+            icon={<TreeIcon />}
+          />
+
+          <MetricCard
+            title="Missions"
+            value={String(totalMissions)}
+            note={`${completedMissionRate}% completed`}
+            href="/dashboard/tree-operations"
+            icon={<ServiceIcon />}
+          />
+
+          <MetricCard
+            title="Earnings"
+            value={latestTransaction ? peso(Number(latestTransaction.amount || 0)) : peso(0)}
+            note={latestTransaction ? cleanLabel(latestTransaction.transaction_type) : "No transaction yet"}
+            href="/dashboard/wallet"
+            icon={<WalletIcon />}
+          />
+
+          <MetricCard
+            title="Membership"
+            value={cleanLabel(membershipStatus)}
+            note={`${pendingMembershipOrders} pending order(s)`}
+            href="/dashboard/membership"
+            icon={<MembershipIcon />}
+          />
+        </section>
+
+        <section className="contentGrid">
+          <section className="feedPanel">
+            <div className="sectionHead">
               <div>
-                <p className="eyebrow">Your Trees</p>
-                <h2>Portfolio Preview</h2>
+                <p className="miniEyebrow">Live Feed</p>
+                <h2>What changed recently</h2>
               </div>
-              <Link className="smallLink" href="/dashboard/my-trees">View All Trees</Link>
+              <Link href="/dashboard/wallet">View wallet</Link>
             </div>
 
-            {trees.length === 0 ? (
-              <EmptyState text="No trees in your portfolio yet. Start by buying a tree from the marketplace." />
+            {activityFeed.length === 0 ? (
+              <EmptyState text="No activity yet. Wallet transactions, missions, membership, and sell tree updates will appear here." />
             ) : (
-              <div className="treeGrid">
-                {trees.slice(0, 4).map((tree, index) => {
-                  const treeImageUrl = getTreeImageUrl(tree) || referenceTreeImages[index % referenceTreeImages.length];
+              <div className="feedList">
+                {activityFeed.map((item) => (
+                  <Link className="feedItem" href={item.href} key={item.id}>
+                    <span className="feedIcon">{item.icon}</span>
 
-                  return (
-                    <Link className="treeCard" href="/dashboard/my-trees" key={tree.id}>
-                      <div className="treeImage">
-                        <img src={treeImageUrl} alt={treeLabel(tree)} />
-                      </div>
-                      <div>
-                        <span>{tree.tree_code || "Tree Code Pending"}</span>
-                        <h3>{treeLabel(tree)}</h3>
-                        <p>{forestName(tree, groupMap)}</p>
-                      </div>
-                      <div className="treeMeta">
-                        <b>{treeStatus(tree, healthEvidence)}</b>
-                        <small>{formatDate(latestTreeUpdate(tree, photoEvidence, gpsEvidence, healthEvidence))}</small>
-                        <small>QR: {cleanLabel(tree.qr_tag_status || (tree.tree_qr_url ? "Available" : "Pending"))}</small>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </article>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.detail}</p>
+                      <small>{formatDateTime(item.date)}</small>
+                    </div>
 
-          <article className="panel missionLogsPanel">
-            <div className="panelTop">
-              <div>
-                <p className="eyebrow">Mission Logs</p>
-                <h2>Operation History</h2>
-              </div>
-              <Link className="smallLink" href="/dashboard/tree-operations">View All Logs</Link>
-            </div>
-
-            {missionLogs.length === 0 ? (
-              <EmptyState text="No mission logs yet. Requested tree services will appear here." />
-            ) : (
-              <div className="missionLogTable">
-                <div className="missionLogHeader">
-                  <span>Mission</span>
-                  <span>Tree / Plantation</span>
-                  <span>Status</span>
-                  <span>Date</span>
-                  <span>Action</span>
-                </div>
-
-                {missionLogs.map((log) => (
-                  <Link className="missionRow" href="/dashboard/tree-operations" key={log.id}>
-                    <strong>{log.mission}</strong>
-                    <span>{log.tree}</span>
-                    <MissionStatusPill value={log.status} />
-                    <span>{formatDate(log.date)}</span>
-                    <span className="viewMission">View</span>
+                    {item.amount && <b>{item.amount}</b>}
                   </Link>
                 ))}
               </div>
             )}
-          </article>
+          </section>
+
+          <aside className="sideStack">
+            <section className="statusCard">
+              <p className="miniEyebrow">Account Health</p>
+              <h2>{cleanLabel(membershipStatus)}</h2>
+              <p>Your account status controls withdrawals, sell tree access, and platform privileges.</p>
+
+              <div className="statusRows">
+                <InfoChip label="KYC" value={cleanLabel(kycStatus)} />
+                <InfoChip label="Latest proof" value={formatDate(latestEvidenceDate)} />
+                <InfoChip
+                  label="Sell requests"
+                  value={activeSellTreeRequests > 0 ? `${activeSellTreeRequests} active` : "None active"}
+                />
+              </div>
+
+              <Link href="/dashboard/profile">Manage profile</Link>
+            </section>
+
+            <section className="miniMissionLog">
+              <div className="sectionHead compact">
+                <div>
+                  <p className="miniEyebrow">Mission Logs</p>
+                  <h2>Field updates</h2>
+                </div>
+                <Link href="/dashboard/tree-operations">Open</Link>
+              </div>
+
+              <div className="missionMiniList">
+                {recentMissionLogs.slice(0, 4).map((log) => (
+                  <Link href="/dashboard/tree-operations" key={log.id}>
+                    <strong>{log.mission}</strong>
+                    <span>{cleanLabel(log.status)} • {formatDate(log.date)}</span>
+                  </Link>
+                ))}
+
+                {recentMissionLogs.length === 0 && (
+                  <div className="softEmpty">No mission logs yet.</div>
+                )}
+              </div>
+            </section>
+          </aside>
         </section>
 
-        <section className="panel recentFinancePanel">
-          <div className="panelTop">
+        <section className="treePreviewPanel">
+          <div className="sectionHead">
             <div>
-              <p className="eyebrow">Finance Sync</p>
-              <h2>Recent Finance Activity</h2>
+              <p className="miniEyebrow">Forest Preview</p>
+              <h2>Your living portfolio</h2>
             </div>
-            <Link className="smallLink" href="/dashboard/wallet">Open Wallet</Link>
+            <Link href="/dashboard/my-trees">View all trees</Link>
           </div>
 
-          {recentActivity.length === 0 ? (
-            <EmptyState text="No wallet transactions yet. Cash-in approvals, purchases, and withdrawals will appear here." />
+          {trees.length === 0 ? (
+            <EmptyState text="No trees yet. Start from Marketplace to activate your forest portfolio." />
           ) : (
-            <div className="recentList">
-              {recentActivity.map((activity) => (
-                <Link className="recentRow" href={activity.href} key={activity.id}>
-                  <div>
-                    <strong>{activity.title}</strong>
-                    <p>{activity.detail}</p>
-                  </div>
-                  <span>{formatDate(activity.date)}</span>
-                </Link>
-              ))}
+            <div className="treeScroller">
+              {trees.slice(0, 6).map((tree, index) => {
+                const treeImageUrl = getTreeImageUrl(tree) || referenceTreeImages[index % referenceTreeImages.length];
+
+                return (
+                  <Link className="treeCard" href="/dashboard/my-trees" key={tree.id}>
+                    <div className="treeImage">
+                      <img src={treeImageUrl} alt={treeLabel(tree)} />
+                    </div>
+
+                    <div>
+                      <small>{tree.tree_code || "Tree Code Pending"}</small>
+                      <strong>{treeLabel(tree)}</strong>
+                      <span>{forestName(tree, groupMap)}</span>
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           )}
         </section>
 
-        <section className="panel explorePanel">
-          <div className="panelTop">
+        <section className="explorePanel">
+          <div className="sectionHead">
             <div>
-              <p className="eyebrow">Explore</p>
-              <h2>Discover Your Arganwood Tools</h2>
+              <p className="miniEyebrow">Explore Arganwood</p>
+              <h2>Everything you can do next</h2>
             </div>
           </div>
 
@@ -784,82 +839,54 @@ export default function DashboardPage() {
   );
 }
 
-function SideLink({
+function MetricCard({
+  title,
+  value,
+  note,
   href,
   icon,
-  label,
-  active,
 }: {
+  title: string;
+  value: string;
+  note: string;
   href: string;
   icon: ReactNode;
-  label: string;
-  active?: boolean;
 }) {
   return (
-    <Link className={`sideLink ${active ? "active" : ""}`} href={href}>
-      {icon}
-      <span>{label}</span>
+    <Link className="metricCard" href={href}>
+      <span>{icon}</span>
+      <div>
+        <p>{title}</p>
+        <strong>{value}</strong>
+        <small>{note}</small>
+      </div>
     </Link>
   );
 }
 
-function MiniCard({ label, value }: { label: string; value: string }) {
+function InfoChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="miniCard">
-      <p>{label}</p>
+    <div className="infoChip">
+      <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
-}
-
-function OverviewCard({
-  label,
-  value,
-  note,
-  icon,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  icon: ReactNode;
-}) {
-  return (
-    <article className="overviewCard">
-      <span>{icon}</span>
-      <div>
-        <p>{label}</p>
-        <h3>{value}</h3>
-        <small>{note}</small>
-      </div>
-    </article>
-  );
-}
-
-
-
-function MissionStatusPill({ value }: { value: string }) {
-  return <span className={`missionStatus ${normalize(value).toLowerCase()}`}>{cleanLabel(value)}</span>;
 }
 
 function EmptyState({ text }: { text: string }) {
   return <div className="emptyState">{text}</div>;
 }
 
-
 function IconShell({ children }: { children: ReactNode }) {
   return <svg viewBox="0 0 24 24">{children}</svg>;
 }
 
-function GridIcon() {
-  return <IconShell><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" /></IconShell>;
+function BellIcon() {
+  return <IconShell><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></IconShell>;
 }
 
 function TreeIcon() {
   return <IconShell><path d="M12 3c-3 3-5 6-5 9a5 5 0 0 0 10 0c0-3-2-6-5-9Z" /><path d="M12 14v7M8 21h8" /></IconShell>;
-}
-
-function PlantationIcon() {
-  return <IconShell><path d="M4 18c4-5 12-5 16 0" /><path d="M7 15c3-4 7-4 10 0" /><path d="M12 3v12" /><path d="M8 7c2-3 6-3 8 0" /></IconShell>;
 }
 
 function MarketIcon() {
@@ -884,38 +911,6 @@ function MembershipIcon() {
 
 function SupportIcon() {
   return <IconShell><path d="M5 12a7 7 0 0 1 14 0v5a2 2 0 0 1-2 2h-3" /><path d="M7 13v-2M17 13v-2" /><path d="M10 19h4" /></IconShell>;
-}
-
-function SettingsIcon() {
-  return <IconShell><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.8-1L14.4 3h-4.8l-.3 3.1a7 7 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 1.8 1l.3 3.1h4.8l.3-3.1a7 7 0 0 0 1.8-1l2.4 1 2-3.4-2-1.5c.1-.3.1-.7.1-1Z" /></IconShell>;
-}
-
-function LogoutIcon() {
-  return <IconShell><path d="M10 4H5v16h5" /><path d="M14 8l4 4-4 4" /><path d="M18 12H9" /></IconShell>;
-}
-
-function PulseIcon() {
-  return <IconShell><path d="M4 13h4l2-6 4 10 2-4h4" /></IconShell>;
-}
-
-function ClockIcon() {
-  return <IconShell><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></IconShell>;
-}
-
-function PinIcon() {
-  return <IconShell><path d="M12 21s7-6 7-12a7 7 0 0 0-14 0c0 6 7 12 7 12Z" /><circle cx="12" cy="9" r="2.5" /></IconShell>;
-}
-
-function CameraIcon() {
-  return <IconShell><path d="M4 7h4l1.5-2h5L16 7h4v12H4V7Z" /><circle cx="12" cy="13" r="3.5" /></IconShell>;
-}
-
-function QrIcon() {
-  return <IconShell><path d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Z" /><path d="M14 14h2v2h-2v-2Zm4 0h2v6h-2v-6Zm-4 4h2v2h-2v-2Z" /></IconShell>;
-}
-
-function TrackIcon() {
-  return <IconShell><path d="M4 18V6" /><path d="M4 6h8l1 3h7v8h-8l-1-3H4" /></IconShell>;
 }
 
 function findTree(treeId: any, trees: TreeRow[]) {
@@ -967,30 +962,6 @@ function forestName(tree: TreeRow, groupMap: Map<string, Row>) {
   return group?.forest_name || group?.group_name || group?.block_name || tree.tree_group_name || "Customer Plantation";
 }
 
-function treeStatus(tree: TreeRow, healthRows: EvidenceRow[]) {
-  const relatedHealth = healthRows.find((row) => row.tree_id && String(row.tree_id) === String(tree.id));
-  const health = normalize(relatedHealth?.health_status || tree.health_status || tree.status);
-
-  if (!relatedHealth && !tree.health_status) return "Pending Evidence";
-  if (health.includes("CRITICAL") || health.includes("TREATMENT") || health.includes("MONITOR") || health.includes("NEEDS")) {
-    return "Needs Attention";
-  }
-  if (health.includes("PENDING")) return "Monitoring";
-  return "Healthy";
-}
-
-function latestTreeUpdate(tree: TreeRow, photos: EvidenceRow[], gps: EvidenceRow[], health: EvidenceRow[]) {
-  const values = [
-    tree.updated_at,
-    tree.created_at,
-    ...photos.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
-    ...gps.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
-    ...health.filter((row) => String(row.tree_id || "") === String(tree.id)).map((row) => row.created_at || row.updated_at),
-  ];
-
-  return latestDate(values);
-}
-
 function latestDate(values: any[]) {
   const dates = values
     .filter(Boolean)
@@ -998,6 +969,7 @@ function latestDate(values: any[]) {
     .filter((date) => !Number.isNaN(date.getTime()));
 
   if (dates.length === 0) return null;
+
   return dates.sort((a, b) => b.getTime() - a.getTime())[0].toISOString();
 }
 
@@ -1005,50 +977,30 @@ function uniqueGroupCount(trees: TreeRow[]) {
   return new Set(trees.map((tree) => tree.group_id).filter(Boolean)).size;
 }
 
-function careReason(action: string) {
-  const text = normalize(action);
-
-  if (text.includes("GPS")) {
-    return "Verifies the physical tree location and protects the customer’s ownership record.";
-  }
-
-  if (text.includes("PHOTO")) {
-    return "Creates visual proof of the tree’s current condition.";
-  }
-
-  if (text.includes("WATER")) {
-    return "Supports healthy establishment and reduces stress during early growth.";
-  }
-
-  if (text.includes("FERTILIZER")) {
-    return "Supports root development and long-term growth.";
-  }
-
-  if (text.includes("HEALTH")) {
-    return "Detects early signs of stress, disease, or treatment needs.";
-  }
-
-  if (text.includes("BUY")) {
-    return "Start by buying or selecting a tree to activate its care plan.";
-  }
-
-  return "Keeps your plantation record current and helps Admin coordinate the next field action.";
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 }
 
 const styles = `
-  * { box-sizing: border-box; }
+  * {
+    box-sizing: border-box;
+  }
 
-  .dashboardPage {
+  .appPage {
     min-height: 100vh;
-    display: grid;
-    grid-template-columns: 1fr;
-    background:
-      radial-gradient(circle at 20% 0%, rgba(214,178,94,.18), transparent 28%),
-      radial-gradient(circle at 92% 8%, rgba(64,130,86,.18), transparent 34%),
-      linear-gradient(180deg, #06110d 0%, #0b1f17 48%, #04100b 100%);
-    color: #f8f1d8;
+    padding: 16px;
+    color: #15291e;
     font-family: Arial, Helvetica, sans-serif;
-    overflow-x: hidden;
+    background:
+      radial-gradient(circle at 12% -4%, rgba(214, 178, 94, .22), transparent 28%),
+      radial-gradient(circle at 92% 0%, rgba(34, 113, 70, .16), transparent 30%),
+      linear-gradient(180deg, #fffaf0 0%, #f7f0df 42%, #eef5e9 100%);
   }
 
   svg {
@@ -1061,506 +1013,646 @@ const styles = `
     stroke-linejoin: round;
   }
 
-  .sideNav {
-    min-height: 100vh;
-    padding: 22px;
-    border-right: 1px solid rgba(214,178,94,.16);
-    background: rgba(0,0,0,.22);
-    backdrop-filter: blur(18px);
+  .appShell {
+    max-width: 1380px;
+    margin: 0 auto;
+    display: grid;
+    gap: 18px;
+  }
+
+  .topBar {
     position: sticky;
     top: 0;
-  }
-
-  .brandBlock {
+    z-index: 20;
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
-  }
-
-  .brandMark,
-  .avatarMark {
-    width: 42px;
-    height: 42px;
-    display: grid;
-    place-items: center;
-    border-radius: 14px;
-    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
-    color: #07140f;
-    font-weight: 950;
-  }
-
-  .brandBlock strong {
-    display: block;
-    color: #fff8dc;
-  }
-
-  .brandBlock span {
-    display: block;
-    margin-top: 2px;
-    color: rgba(248,241,216,.52);
-    font-size: 12px;
-    font-weight: 800;
-  }
-
-  .sideNav nav {
-    display: grid;
-    gap: 8px;
-  }
-
-  .sideLink,
-  .logoutButton {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    border: 1px solid transparent;
-    border-radius: 16px;
-    padding: 12px 13px;
-    color: rgba(248,241,216,.70);
-    text-decoration: none;
-    background: transparent;
-    font-weight: 850;
-    cursor: pointer;
-  }
-
-  .sideLink:hover,
-  .sideLink.active {
-    color: #fff8dc;
-    border-color: rgba(214,178,94,.20);
-    background: rgba(214,178,94,.10);
-  }
-
-  .logoutButton {
-    margin-top: 22px;
-    border-color: rgba(214,178,94,.12);
-  }
-
-  .contentShell {
-    min-width: 0;
-    padding: 24px;
-    max-width: 1500px;
-    width: 100%;
-    margin: 0 auto;
-  }
-
-  .loadingBox {
-    grid-column: 1 / -1;
-    margin: 28px;
-    min-height: 70vh;
-    display: grid;
-    place-items: center;
-    border-radius: 28px;
-    border: 1px solid rgba(214,178,94,.20);
-    background: rgba(255,255,255,.075);
-    color: #fff8dc;
-    font-weight: 950;
-  }
-
-  .hero,
-  .overviewCard,
-  .carePlanPanel,
-  .plantationPanel,
-  .panel,
-  .miniCard,
-  .errorBox,
-  .emptyState {
-    border: 1px solid rgba(214,178,94,.18);
-    background: rgba(255,255,255,.075);
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 0 6px;
+    background: linear-gradient(180deg, rgba(255,250,240,.92), rgba(255,250,240,.54));
     backdrop-filter: blur(18px);
-    box-shadow: 0 24px 70px rgba(0,0,0,.30);
   }
 
-  .hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 420px;
-    gap: 18px;
-    align-items: stretch;
-    border-radius: 30px;
-    padding: 28px;
-    margin-bottom: 18px;
-    background:
-      linear-gradient(rgba(2,20,12,.72), rgba(2,20,12,.88)),
-      url('/images/arganwood-reference/hero-forest-reference.jpg');
-    background-size: cover;
-    background-position: center;
-  }
-
-  .eyebrow {
-    margin: 0 0 10px;
-    color: #d6b25e;
-    font-weight: 950;
-    text-transform: uppercase;
-    letter-spacing: .16em;
-    font-size: 12px;
-  }
-
-  .hero h1 {
+  .greetingBlock h1 {
     margin: 0;
-    color: #fff8dc;
-    font-size: clamp(36px, 5vw, 58px);
-    line-height: .95;
-    letter-spacing: -2px;
+    color: #10251a;
+    font-size: clamp(30px, 4vw, 48px);
+    line-height: .98;
+    letter-spacing: -1.6px;
   }
 
-  .hero h1 span {
-    color: #d6b25e;
+  .greetingBlock p {
+    margin: 6px 0 0;
+    color: #647166;
+    font-weight: 780;
   }
 
-  .hero p {
-    max-width: 760px;
-    margin: 16px 0 0;
-    color: rgba(248,241,216,.76);
-    line-height: 1.65;
-    font-weight: 750;
-  }
-
-  .heroCards {
-    display: grid;
-    gap: 12px;
-  }
-
-  .miniCard {
-    border-radius: 22px;
-    padding: 18px;
-    background: rgba(0,0,0,.24);
-  }
-
-  .miniCard p {
-    margin: 0;
-    color: rgba(248,241,216,.55);
+  .miniEyebrow {
+    display: block;
+    color: #9a7738;
     font-size: 11px;
     font-weight: 950;
-    text-transform: uppercase;
     letter-spacing: .14em;
+    text-transform: uppercase;
   }
 
-  .miniCard strong {
-    display: block;
-    margin-top: 10px;
-    color: #fff8dc;
-    font-size: clamp(20px, 3vw, 27px);
-    overflow-wrap: anywhere;
-  }
-
-  .errorBox {
-    margin-top: 14px;
-    border-radius: 16px;
-    padding: 14px;
-    color: #ffd5cd;
-    background: rgba(125,35,25,.26);
-  }
-
-  .overviewGrid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-    margin-bottom: 18px;
-  }
-
-  .overviewCard {
-    min-width: 0;
-    border-radius: 24px;
-    padding: 18px;
+  .topActions {
     display: flex;
-    gap: 14px;
-    align-items: flex-start;
+    align-items: center;
+    gap: 10px;
   }
 
-  .overviewCard > span,
-  .actionCard > span,
-  .timelineItem > span {
-    width: 42px;
-    height: 42px;
+  .walletMini,
+  .topIcon,
+  .profilePill {
+    color: #173225;
+    text-decoration: none;
+    border: 1px solid rgba(32, 71, 50, .10);
+    background: rgba(255, 255, 255, .78);
+    box-shadow: 0 14px 34px rgba(31, 57, 38, .09);
+    backdrop-filter: blur(12px);
+  }
+
+  .walletMini {
+    display: grid;
+    gap: 3px;
+    border-radius: 20px;
+    padding: 9px 13px;
+    min-width: 150px;
+  }
+
+  .walletMini span {
+    color: #768073;
+    font-size: 11px;
+    font-weight: 950;
+    letter-spacing: .10em;
+    text-transform: uppercase;
+  }
+
+  .walletMini strong {
+    color: #173f2a;
+    font-size: 15px;
+  }
+
+  .topIcon {
+    width: 48px;
+    height: 48px;
+    display: grid;
+    place-items: center;
+    border-radius: 18px;
+  }
+
+  .profilePill {
+    min-width: 220px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    border-radius: 22px;
+    padding: 8px 11px;
+  }
+
+  .profilePill > span {
+    width: 38px;
+    height: 38px;
     border-radius: 15px;
     display: grid;
     place-items: center;
-    color: #d6b25e;
-    background: rgba(214,178,94,.13);
-    border: 1px solid rgba(214,178,94,.16);
-    flex: 0 0 auto;
-  }
-
-  .overviewCard p {
-    margin: 0;
-    color: rgba(248,241,216,.54);
-    font-size: 11px;
-    font-weight: 950;
-    text-transform: uppercase;
-    letter-spacing: .12em;
-  }
-
-  .overviewCard h3 {
-    margin: 8px 0 4px;
     color: #fff8dc;
-    font-size: 25px;
-    overflow-wrap: anywhere;
+    background: linear-gradient(135deg, #214c34, #0d2b1b);
+    font-weight: 950;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22);
   }
 
-  .overviewCard small {
-    color: #d6b25e;
+  .profilePill strong,
+  .profilePill small {
+    display: block;
+    max-width: 145px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .profilePill strong {
+    font-size: 13px;
+  }
+
+  .profilePill small {
+    color: #778272;
+    font-size: 11px;
     font-weight: 850;
   }
 
-  .mainGrid,
-  .splitGrid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
-    gap: 18px;
-    margin-bottom: 18px;
+  .alert {
+    border-radius: 22px;
+    padding: 15px 17px;
+    color: #7a241c;
+    background: #ffe8df;
+    border: 1px solid rgba(145, 42, 28, .12);
+    font-weight: 900;
   }
 
-  .splitGrid.bottom {
+  .walletHero {
+    position: relative;
+    min-height: 330px;
+    overflow: hidden;
+    border-radius: 38px;
+    padding: clamp(26px, 5vw, 46px);
+    color: white;
+    background:
+      radial-gradient(circle at 84% 12%, rgba(255, 225, 150, .44), transparent 28%),
+      radial-gradient(circle at 6% 100%, rgba(97, 202, 136, .22), transparent 32%),
+      linear-gradient(135deg, #194b31 0%, #0a2417 56%, #06150e 100%);
+    box-shadow:
+      0 36px 90px rgba(24, 67, 42, .28),
+      inset 0 1px 0 rgba(255,255,255,.12);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    align-items: end;
+    gap: 18px;
+  }
+
+  .walletHero:before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(120deg, rgba(255,255,255,.10), transparent 34%),
+      repeating-linear-gradient(115deg, rgba(255,255,255,.035) 0 1px, transparent 1px 13px);
+    pointer-events: none;
+  }
+
+  .walletGlow {
+    position: absolute;
+    right: -120px;
+    top: -160px;
+    width: 480px;
+    height: 480px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(214,178,94,.34), transparent 62%);
+    filter: blur(2px);
+  }
+
+  .walletPattern {
+    position: absolute;
+    right: 24px;
+    bottom: -120px;
+    width: 340px;
+    height: 340px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.12);
+    background: radial-gradient(circle, rgba(255,255,255,.08), transparent 63%);
+  }
+
+  .walletInfo,
+  .walletStatusStack {
+    position: relative;
+    z-index: 1;
+  }
+
+  .walletInfo p {
+    margin: 0;
+    color: rgba(255,255,255,.72);
+    font-size: 12px;
+    font-weight: 950;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+
+  .walletInfo h2 {
+    margin: 12px 0 8px;
+    font-size: clamp(48px, 10vw, 86px);
+    line-height: .9;
+    letter-spacing: -3.2px;
+  }
+
+  .walletInfo span {
+    color: #ffe49a;
+    font-weight: 900;
+  }
+
+  .walletStatusStack {
+    display: grid;
+    gap: 10px;
+    align-self: stretch;
+    align-content: end;
+  }
+
+  .walletStatusStack div {
+    border-radius: 22px;
+    padding: 16px;
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(255,255,255,.14);
+    backdrop-filter: blur(14px);
+  }
+
+  .walletStatusStack small {
+    display: block;
+    color: rgba(255,255,255,.62);
+    font-size: 11px;
+    font-weight: 950;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+
+  .walletStatusStack strong {
+    display: block;
+    margin-top: 6px;
+    color: #fff8dc;
+  }
+
+  .quickActions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .quickActions a {
+    min-height: 92px;
+    color: #173225;
+    text-decoration: none;
+    border-radius: 28px;
+    padding: 16px;
+    background: rgba(255,255,255,.86);
+    border: 1px solid rgba(32,71,50,.10);
+    box-shadow: 0 18px 45px rgba(31,57,38,.10);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .quickActions a:first-child {
+    background: linear-gradient(135deg, #fff8dc, #f2dfae);
+  }
+
+  .quickActions span {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 auto;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    color: #fff8dc;
+    background: linear-gradient(135deg, #214c34, #0d2b1b);
+  }
+
+  .quickActions strong {
+    font-size: 15px;
+  }
+
+  .missionSpotlight {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px auto;
+    gap: 18px;
+    align-items: center;
+    border-radius: 32px;
+    padding: 22px;
+    background: rgba(255,255,255,.84);
+    border: 1px solid rgba(32,71,50,.10);
+    box-shadow: 0 18px 45px rgba(31,57,38,.10);
+  }
+
+  .missionCopy h2 {
+    margin: 2px 0 6px;
+    color: #10251a;
+    font-size: 34px;
+    letter-spacing: -1px;
+  }
+
+  .missionCopy span {
+    color: #647166;
+    font-weight: 800;
+  }
+
+  .missionTrack {
+    height: 14px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #dfe8d7;
+  }
+
+  .missionTrack span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #1f6b43, #d6b25e);
+  }
+
+  .missionStats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(74px, 1fr));
+    gap: 10px;
+  }
+
+  .missionCta {
+    grid-column: 1 / -1;
+    justify-self: start;
+    color: #173f2a;
+    text-decoration: none;
+    border-radius: 999px;
+    padding: 11px 15px;
+    background: #ecf5e8;
+    border: 1px solid rgba(23,63,42,.10);
+    font-weight: 950;
+  }
+
+  .metricGrid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .metricCard,
+  .feedPanel,
+  .statusCard,
+  .miniMissionLog,
+  .treePreviewPanel,
+  .explorePanel,
+  .emptyState,
+  .loadingCard {
+    border: 1px solid rgba(32, 71, 50, .10);
+    background: rgba(255, 255, 255, .82);
+    box-shadow: 0 18px 45px rgba(31, 57, 38, .10);
+    backdrop-filter: blur(18px);
+  }
+
+  .metricCard {
+    position: relative;
+    overflow: hidden;
+    min-height: 150px;
+    border-radius: 30px;
+    padding: 19px;
+    color: inherit;
+    text-decoration: none;
+    display: grid;
+    align-content: space-between;
+  }
+
+  .metricCard:after {
+    content: "";
+    position: absolute;
+    left: 19px;
+    right: 19px;
+    bottom: 15px;
+    height: 5px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1f6b43, #d6b25e);
+    opacity: .85;
+  }
+
+  .metricCard > span {
+    width: 46px;
+    height: 46px;
+    display: grid;
+    place-items: center;
+    border-radius: 18px;
+    color: #173f2a;
+    background: #ecf5e8;
+    border: 1px solid rgba(23, 63, 42, .10);
+    margin-bottom: 14px;
+  }
+
+  .metricCard p {
+    margin: 0;
+    color: #6c756c;
+    font-size: 12px;
+    font-weight: 950;
+    letter-spacing: .10em;
+    text-transform: uppercase;
+  }
+
+  .metricCard strong {
+    display: block;
+    margin-top: 8px;
+    color: #11251a;
+    font-size: 30px;
+    line-height: 1.05;
+    word-break: break-word;
+  }
+
+  .metricCard small {
+    display: block;
+    margin-top: 8px;
+    padding-bottom: 10px;
+    color: #9a7738;
+    font-weight: 850;
+  }
+
+  .contentGrid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    gap: 16px;
     align-items: start;
   }
 
-  .carePlanPanel,
-  .plantationPanel,
-  .panel {
-    border-radius: 30px;
+  .feedPanel,
+  .statusCard,
+  .miniMissionLog,
+  .treePreviewPanel,
+  .explorePanel {
+    border-radius: 32px;
     padding: 22px;
-    min-width: 0;
-    overflow: hidden;
   }
 
-  .panelTop {
+  .sideStack {
+    display: grid;
+    gap: 16px;
+  }
+
+  .sectionHead {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
     gap: 14px;
-    margin-bottom: 18px;
+    align-items: flex-start;
+    margin-bottom: 16px;
   }
 
-  .panelTop h2 {
+  .sectionHead.compact {
+    margin-bottom: 12px;
+  }
+
+  .sectionHead h2,
+  .statusCard h2 {
     margin: 0;
-    color: #fff8dc;
-    font-size: clamp(24px, 3vw, 34px);
-    letter-spacing: -.8px;
+    color: #11251a;
+    font-size: 27px;
+    letter-spacing: -.7px;
   }
 
-  .smallLink,
-  .buttonRow a {
-    border-radius: 999px;
-    padding: 11px 14px;
-    color: #07140f;
-    background: linear-gradient(135deg, #d6b25e, #8c6a3c);
+  .sectionHead p,
+  .exploreCard p,
+  .feedItem p,
+  .statusCard p {
+    color: #637165;
+  }
+
+  .sectionHead a,
+  .statusCard a {
     text-decoration: none;
+    border-radius: 999px;
+    padding: 10px 13px;
+    color: #173f2a;
+    background: #ecf5e8;
+    border: 1px solid rgba(23,63,42,.10);
     font-weight: 950;
     white-space: nowrap;
   }
 
-  .statusPill {
-    border-radius: 999px;
-    padding: 9px 12px;
-    color: #ffe49a;
-    background: rgba(214,178,94,.12);
-    border: 1px solid rgba(214,178,94,.22);
-    font-size: 12px;
-    font-weight: 950;
-  }
-
-  .carePlanBody {
+  .feedList {
     display: grid;
     gap: 12px;
   }
 
-  .careInfo,
-  .whyBox,
-  .treeCard,
-  .timelineItem,
-  .actionCard,
-  .recentRow {
-    border-radius: 18px;
-    background: rgba(0,0,0,.22);
-    border: 1px solid rgba(214,178,94,.12);
+  .feedItem {
+    display: grid;
+    grid-template-columns: 50px minmax(0, 1fr) auto;
+    gap: 13px;
+    align-items: center;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 26px;
+    padding: 14px;
+    background: #fffaf0;
+    border: 1px solid rgba(32, 71, 50, .08);
   }
 
-  .careInfo {
-    padding: 15px;
+  .feedIcon {
+    width: 50px;
+    height: 50px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border-radius: 20px;
+    color: #173f2a;
+    background: #ecf5e8;
+    border: 1px solid rgba(23, 63, 42, .10);
   }
 
-  .careInfo span {
+  .feedItem strong {
+    color: #11251a;
+    font-size: 15px;
+  }
+
+  .feedItem p {
+    margin: 4px 0 0;
+    line-height: 1.35;
+    font-size: 13px;
+  }
+
+  .feedItem small {
     display: block;
-    color: rgba(248,241,216,.55);
+    margin-top: 5px;
+    color: #8a9686;
+    font-weight: 800;
+  }
+
+  .feedItem b {
+    color: #173f2a;
+    font-size: 14px;
+    border-radius: 999px;
+    padding: 8px 10px;
+    background: #edf5e9;
+  }
+
+  .statusRows {
+    display: grid;
+    gap: 10px;
+    margin-top: 15px;
+  }
+
+  .infoChip {
+    border-radius: 19px;
+    padding: 13px;
+    background: #fffaf0;
+    border: 1px solid rgba(32, 71, 50, .08);
+  }
+
+  .infoChip span {
+    display: block;
+    color: #748071;
     font-size: 11px;
     font-weight: 950;
-    letter-spacing: .12em;
+    letter-spacing: .10em;
     text-transform: uppercase;
   }
 
-  .careInfo strong {
+  .infoChip strong {
     display: block;
-    margin-top: 7px;
-    color: #fff8dc;
-    font-size: 18px;
+    margin-top: 6px;
+    color: #11251a;
   }
 
-  .careInfo.highlight strong {
-    color: #d6b25e;
-  }
-
-  .whyBox {
-    padding: 16px;
+  .statusCard a {
+    display: flex;
+    justify-content: center;
     margin-top: 14px;
   }
 
-  .whyBox strong {
-    color: #fff8dc;
-  }
-
-  .whyBox p {
-    margin: 6px 0 0;
-    color: rgba(248,241,216,.67);
-    line-height: 1.55;
-  }
-
-  .buttonRow {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 16px;
-  }
-
-  .buttonRow a:nth-child(2) {
-    background: rgba(255,255,255,.09);
-    color: #fff8dc;
-    border: 1px solid rgba(214,178,94,.20);
-  }
-
-  .forestVisual {
-    position: relative;
-    min-height: 360px;
-    overflow: hidden;
-    border-radius: 24px;
-    background:
-      linear-gradient(180deg, rgba(7,31,24,.15), rgba(5,22,12,.96)),
-      radial-gradient(circle at 50% 20%, rgba(214,178,94,.25), transparent 18%),
-      linear-gradient(180deg, #143026, #0b2418);
-    border: 1px solid rgba(214,178,94,.14);
-  }
-
-  .orb {
-    position: absolute;
-    top: 42px;
-    left: 50%;
-    width: 130px;
-    height: 130px;
-    transform: translateX(-50%);
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,235,180,.68), rgba(214,178,94,.17) 55%, transparent 70%);
-  }
-
-  .hill {
-    position: absolute;
-    bottom: 92px;
-    width: 70%;
-    height: 180px;
-    background: linear-gradient(135deg, rgba(8,45,30,.92), rgba(3,16,11,.98));
-    clip-path: polygon(0 100%, 50% 12%, 100% 100%);
-  }
-
-  .h1 { left: -14%; }
-  .h2 { right: -18%; height: 140px; opacity: .74; }
-
-  .forestRows {
-    position: absolute;
-    inset: auto 0 0;
-    height: 170px;
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-around;
-  }
-
-  .forestRows span {
-    position: relative;
-    width: 10px;
-    height: 70px;
-    border-radius: 999px 999px 0 0;
-    background: #4b2f17;
-  }
-
-  .forestRows span:before,
-  .forestRows span:after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    border-radius: 50%;
-    background: linear-gradient(145deg, #3d7a43, #11351f);
-  }
-
-  .forestRows span:before {
-    top: -38px;
-    width: 50px;
-    height: 48px;
-  }
-
-  .forestRows span:after {
-    top: -62px;
-    width: 38px;
-    height: 38px;
-  }
-
-  .visualCard {
-    position: absolute;
-    left: 18px;
-    bottom: 18px;
-    border-radius: 20px;
-    padding: 16px;
-    min-width: 170px;
-    background: rgba(3,20,13,.72);
-    border: 1px solid rgba(214,178,94,.24);
-    backdrop-filter: blur(12px);
-  }
-
-  .visualCard small {
-    color: rgba(248,241,216,.55);
-    font-weight: 950;
-    text-transform: uppercase;
-    letter-spacing: .12em;
-  }
-
-  .visualCard strong {
-    display: block;
-    color: #fff8dc;
-    font-size: 44px;
-    line-height: 1;
-    margin-top: 8px;
-  }
-
-  .visualCard p {
-    margin: 8px 0 0;
-    color: #d6b25e;
-    font-weight: 950;
-  }
-
-  .treeGrid,
-  .actionGrid,
-  .timelineList,
-  .recentList {
+  .missionMiniList {
     display: grid;
-    gap: 12px;
+    gap: 10px;
+  }
+
+  .missionMiniList a {
+    color: inherit;
+    text-decoration: none;
+    border-radius: 20px;
+    padding: 13px;
+    background: #fffaf0;
+    border: 1px solid rgba(32,71,50,.07);
+  }
+
+  .missionMiniList strong,
+  .missionMiniList span {
+    display: block;
+  }
+
+  .missionMiniList strong {
+    color: #11251a;
+  }
+
+  .missionMiniList span {
+    margin-top: 4px;
+    color: #6c756c;
+    font-size: 12px;
+    font-weight: 850;
+  }
+
+  .softEmpty {
+    border-radius: 20px;
+    padding: 14px;
+    color: #748071;
+    background: #fffaf0;
+    font-weight: 850;
+  }
+
+  .treeScroller {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(246px, 1fr);
+    gap: 13px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-snap-type: x mandatory;
   }
 
   .treeCard {
     color: inherit;
     text-decoration: none;
-    padding: 14px;
-    display: grid;
-    grid-template-columns: 78px minmax(0, 1fr) auto;
-    gap: 14px;
-    align-items: center;
+    border-radius: 28px;
+    padding: 13px;
+    background: #fffaf0;
+    border: 1px solid rgba(32, 71, 50, .08);
+    scroll-snap-align: start;
   }
 
   .treeImage {
-    width: 78px;
-    height: 78px;
-    border-radius: 18px;
+    height: 176px;
+    border-radius: 24px;
+    overflow: hidden;
+    background: #edf5e9;
     display: grid;
     place-items: center;
-    color: #d6b25e;
-    background: rgba(214,178,94,.12);
-    overflow: hidden;
+    margin-bottom: 12px;
   }
 
   .treeImage img {
@@ -1569,360 +1661,216 @@ const styles = `
     object-fit: cover;
   }
 
+  .treeCard small,
   .treeCard span {
-    color: #d6b25e;
-    font-size: 12px;
-    font-weight: 950;
-  }
-
-  .treeCard h3 {
-    margin: 4px 0;
-    color: #fff8dc;
-    font-size: 18px;
-  }
-
-  .treeCard p,
-  .treeMeta small,
-  .timelineItem p,
-  .timelineItem small,
-  .actionCard p,
-  .recentRow p,
-  .recentRow span {
-    color: rgba(248,241,216,.58);
-  }
-
-  .treeCard p {
-    margin: 0;
-    font-size: 13px;
-  }
-
-  .treeMeta {
-    text-align: right;
-  }
-
-  .treeMeta b {
     display: block;
-    color: #fff8dc;
-    margin-bottom: 5px;
-  }
-
-  .treeMeta small {
-    display: block;
-    font-size: 12px;
-    margin-top: 3px;
-  }
-
-  .timelineItem,
-  .actionCard,
-  .recentRow {
-    color: inherit;
-    text-decoration: none;
-  }
-
-  .timelineItem,
-  .actionCard {
-    display: grid;
-    grid-template-columns: 46px minmax(0, 1fr);
-    gap: 12px;
-    padding: 14px;
-  }
-
-  .timelineItem strong,
-  .actionCard strong,
-  .recentRow strong {
-    color: #fff8dc;
-  }
-
-  .timelineItem p,
-  .actionCard p,
-  .recentRow p {
-    margin: 5px 0 0;
-    line-height: 1.45;
-    font-size: 13px;
-  }
-
-  .timelineItem small {
-    display: block;
-    margin-top: 5px;
-    font-weight: 800;
-  }
-
-  .actionGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .recentRow {
-    display: flex;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 14px;
-  }
-
-  .recentRow span {
-    white-space: nowrap;
-    font-size: 12px;
+    color: #758072;
     font-weight: 850;
   }
 
-  .emptyState {
-    border-radius: 20px;
-    padding: 22px;
-    color: rgba(248,241,216,.65);
-    font-weight: 850;
-    background: rgba(0,0,0,.22);
-  }
-
-
-  .missionSummaryPanel,
-  .financeSummaryPanel,
-  .statusSplitGrid {
-    margin-bottom: 18px;
-  }
-
-  .missionSummaryGrid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-  }
-
-  .missionLogsPanel {
-    min-height: 100%;
-  }
-
-  .missionLogTable {
-    display: grid;
-    gap: 0;
-    overflow: hidden;
-    border-radius: 20px;
-    border: 1px solid rgba(214,178,94,.12);
-    background: rgba(0,0,0,.18);
-  }
-
-  .missionLogHeader,
-  .missionRow {
-    display: grid;
-    grid-template-columns: 1.25fr 1.2fr .8fr .9fr .55fr;
-    gap: 12px;
-    align-items: center;
-    padding: 13px 14px;
-  }
-
-  .missionLogHeader {
-    color: rgba(248,241,216,.58);
-    font-size: 11px;
-    font-weight: 950;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    border-bottom: 1px solid rgba(214,178,94,.13);
-  }
-
-  .missionRow {
-    color: inherit;
-    text-decoration: none;
-    border-bottom: 1px solid rgba(214,178,94,.10);
-  }
-
-  .missionRow:last-child {
-    border-bottom: 0;
-  }
-
-  .missionRow strong {
-    color: #fff8dc;
-  }
-
-  .missionRow span {
-    color: rgba(248,241,216,.68);
-    font-size: 13px;
-    font-weight: 800;
-  }
-
-  .missionStatus {
-    width: fit-content;
-    border-radius: 999px;
-    padding: 6px 9px;
-    color: #ffe49a !important;
-    border: 1px solid rgba(214,178,94,.24);
-    background: rgba(214,178,94,.12);
-    font-size: 11px !important;
-    font-weight: 950 !important;
-  }
-
-  .missionStatus.completed {
-    color: #b7ff8a !important;
-    border-color: rgba(111,214,94,.24);
-    background: rgba(111,214,94,.12);
-  }
-
-  .missionStatus.assigned,
-  .missionStatus.in_progress {
-    color: #9edcff !important;
-    border-color: rgba(94,171,214,.24);
-    background: rgba(94,171,214,.12);
-  }
-
-  .missionStatus.cancelled {
-    color: #ffb2a4 !important;
-    border-color: rgba(214,94,94,.24);
-    background: rgba(214,94,94,.12);
-  }
-
-  .viewMission {
-    color: #d6b25e !important;
-    text-align: right;
-  }
-
-  .explorePanel {
-    margin-bottom: 18px;
+  .treeCard strong {
+    display: block;
+    margin: 5px 0;
+    color: #11251a;
+    font-size: 19px;
   }
 
   .exploreGrid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 14px;
   }
 
   .exploreCard {
-    display: grid;
-    min-height: 190px;
-    align-content: start;
-    gap: 10px;
     color: inherit;
     text-decoration: none;
-    border-radius: 22px;
-    padding: 12px;
-    border: 1px solid rgba(214,178,94,.14);
-    background: rgba(0,0,0,.22);
+    border-radius: 30px;
+    padding: 13px;
+    background: #fffaf0;
+    border: 1px solid rgba(32, 71, 50, .08);
+    box-shadow: 0 10px 25px rgba(31,57,38,.05);
   }
 
   .exploreImage {
     position: relative;
-    min-height: 98px;
-    display: grid;
-    place-items: center;
+    height: 150px;
+    border-radius: 25px;
     overflow: hidden;
-    border-radius: 17px;
-    background: rgba(214,178,94,.10);
+    background: #f8f4e8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    margin-bottom: 13px;
   }
 
   .exploreImage img {
-    display: block;
     width: 100%;
-    height: 118px;
-    object-fit: cover;
-    opacity: .92;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+    display: block;
   }
 
   .exploreImage span {
     position: absolute;
+    right: 13px;
+    bottom: 13px;
     width: 44px;
     height: 44px;
     display: grid;
     place-items: center;
-    border-radius: 16px;
-    color: #d6b25e;
-    background: rgba(3,20,13,.72);
-    border: 1px solid rgba(214,178,94,.22);
-    backdrop-filter: blur(10px);
+    border-radius: 17px;
+    color: #fff8dc;
+    background: rgba(23, 63, 42, .88);
+    border: 1px solid rgba(255,255,255,.18);
   }
 
   .exploreCard strong {
-    color: #fff8dc;
+    display: block;
+    color: #11251a;
     text-align: center;
+    font-size: 17px;
   }
 
   .exploreCard p {
-    margin: 0;
-    color: rgba(248,241,216,.62);
+    margin: 7px 0 0;
     text-align: center;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.45;
   }
 
-  @media (max-width: 1220px) {
-    .dashboardPage {
-      grid-template-columns: 1fr;
-    }
+  .emptyState {
+    border-radius: 24px;
+    padding: 20px;
+    color: #6c756c;
+    background: #fffaf0;
+    font-weight: 850;
+  }
 
-    .sideNav {
-      position: static;
-      min-height: auto;
-      border-right: 0;
-      border-bottom: 1px solid rgba(214,178,94,.14);
-    }
+  .loadingCard {
+    min-height: 76vh;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 10px;
+    border-radius: 34px;
+    text-align: center;
+    color: #173225;
+  }
 
-    .sideNav nav {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+  .loadingMark {
+    width: 62px;
+    height: 62px;
+    display: grid;
+    place-items: center;
+    border-radius: 22px;
+    color: #fff8dc;
+    background: linear-gradient(135deg, #214c34, #0d2b1b);
+    font-size: 30px;
+    font-weight: 950;
+  }
 
-    .logoutButton {
-      max-width: 220px;
-    }
+  .loadingCard strong {
+    font-size: 20px;
+  }
 
-    .hero,
-    .mainGrid,
-    .splitGrid {
-      grid-template-columns: 1fr;
-    }
+  .loadingCard span {
+    color: #6c756c;
+  }
 
-    .overviewGrid,
-    .missionSummaryGrid,
+  @media (max-width: 1160px) {
+    .quickActions,
+    .metricGrid,
     .exploreGrid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .missionLogHeader {
+    .missionSpotlight {
+      grid-template-columns: 1fr;
+    }
+
+    .missionStats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .contentGrid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .appPage {
+      padding: 12px;
+    }
+
+    .topBar {
+      position: static;
+      display: grid;
+    }
+
+    .topActions {
+      width: 100%;
+      justify-content: space-between;
+      align-items: stretch;
+    }
+
+    .walletMini {
       display: none;
     }
 
-    .missionRow {
+    .profilePill {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .walletHero {
+      min-height: 360px;
       grid-template-columns: 1fr;
-      gap: 8px;
+      border-radius: 32px;
+      padding: 26px;
     }
 
-    .viewMission {
-      text-align: left;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .contentShell {
-      padding: 16px;
+    .walletStatusStack {
+      grid-template-columns: 1fr 1fr;
     }
 
-    .sideNav {
-      padding: 16px;
-    }
-
-    .sideNav nav,
-    .overviewGrid,
-    .missionSummaryGrid,
-    .exploreGrid,
-    .actionGrid {
+    .quickActions,
+    .metricGrid,
+    .missionStats,
+    .exploreGrid {
       grid-template-columns: 1fr;
     }
 
-    .hero {
-      padding: 22px;
+    .quickActions a {
+      min-height: 76px;
     }
 
-    .panelTop,
-    .recentRow {
-      flex-direction: column;
+    .sectionHead {
+      display: grid;
+      grid-template-columns: 1fr;
     }
 
-    .treeCard {
-      grid-template-columns: 70px minmax(0, 1fr);
-    }
-
-    .treeMeta {
-      grid-column: 1 / -1;
-      text-align: left;
-    }
-
-    .buttonRow a,
-    .smallLink {
-      width: 100%;
+    .sectionHead a {
       text-align: center;
+    }
+
+    .feedItem {
+      grid-template-columns: 50px minmax(0, 1fr);
+    }
+
+    .feedItem b {
+      grid-column: 2;
+      justify-self: start;
+    }
+
+    .treeScroller {
+      grid-auto-columns: 86%;
+    }
+
+    .exploreImage {
+      height: 132px;
     }
   }
 `;
+

@@ -103,70 +103,37 @@ function getForestName(group: TreeGroup | null | undefined) {
   return group?.forest_name || group?.group_name || "Unnamed Forest";
 }
 
-function getProductImageUrl(product: MarketplaceProduct): string | undefined {
-  if (
-    typeof product.image_url === "string" &&
-    product.image_url.trim().length > 0
-  ) {
-    return product.image_url;
-  }
-
+function getMarketplaceImageFallback(product: MarketplaceProduct): string {
+  const type = normalize(product.product_type);
   const category = normalize(product.category);
   const name = normalize(product.name);
 
-  if (name.includes("young") && name.includes("seedling")) {
-    return "/products/agarwood-seedling.jpg";
+  if (type.includes("tree") || category.includes("tree") || name.includes("tree")) {
+    return "/images/arganwood-reference/tree-card-reference-1.png";
   }
 
-  if (name.includes("seedling")) {
-    return "/products/agarwood-seedling.jpg";
+  if (
+    type.includes("care") ||
+    category.includes("care") ||
+    category.includes("service") ||
+    name.includes("care")
+  ) {
+    return "/images/arganwood-reference/explore-tree-services.png";
   }
 
-  if (name.includes("100") && name.includes("seed")) {
-    return "/products/package-100.jpg";
+  if (type.includes("membership") || category.includes("membership")) {
+    return "/images/arganwood-reference/explore-membership.png";
   }
 
-  if (name.includes("50") && name.includes("seed")) {
-    return "/products/package-50.jpg";
+  return "/images/arganwood-reference/explore-marketplace.png";
+}
+
+function getProductImageUrl(product: MarketplaceProduct): string {
+  if (typeof product.image_url === "string" && product.image_url.trim().length > 0) {
+    return product.image_url;
   }
 
-  if (name.includes("10") && name.includes("seed")) {
-    return "/products/package-10.jpg";
-  }
-
-  if (name.includes("seed")) {
-    return "/products/agarwood-seeds.jpg";
-  }
-
-  if (category.includes("fertilizer") || name.includes("fertilizer")) {
-    return "/products/fertilizer.jpg";
-  }
-
-  if (category.includes("nutrient") || name.includes("nutrient") || name.includes("booster")) {
-    return "/products/nutrients.jpg";
-  }
-
-  if (category.includes("fungicide") || name.includes("fungicide")) {
-    return "/products/fungicide.jpg";
-  }
-
-  if (category.includes("pest") || name.includes("pest") || name.includes("insecticide")) {
-    return "/products/pest-control.jpg";
-  }
-
-  if (category.includes("soil") || name.includes("soil")) {
-    return "/products/soil.jpg";
-  }
-
-  if (category.includes("health") || name.includes("treatment") || name.includes("health")) {
-    return "/products/tree-health.jpg";
-  }
-
-  if (category.includes("care") || name.includes("care")) {
-    return "/products/care-package-logo.jpg";
-  }
-
-  return "/products/default-product.jpg";
+  return getMarketplaceImageFallback(product);
 }
 
 function getProductInitial(product: MarketplaceProduct): string {
@@ -489,35 +456,6 @@ function getInventoryUnit(product: MarketplaceProduct) {
   if (category === "Soil Products") return "Bag";
 
   return "Unit";
-}
-
-function getStarterInventoryRows(profileId: string, product: MarketplaceProduct) {
-  const qty = getStarterStockQty(product);
-
-  return [
-    {
-      profile_id: profileId,
-      tree_id: null,
-      item_name: "Starter Organic Fertilizer",
-      category: "Fertilizers",
-      unit: "Pack",
-      starting_qty: qty,
-      remaining_qty: qty,
-      low_stock_level: 1,
-      status: "AVAILABLE",
-    },
-    {
-      profile_id: profileId,
-      tree_id: null,
-      item_name: "Starter Tree Nutrients",
-      category: "Nutrients & Boosters",
-      unit: "Pack",
-      starting_qty: qty,
-      remaining_qty: qty,
-      low_stock_level: 1,
-      status: "AVAILABLE",
-    },
-  ];
 }
 
 export default function MarketplacePage() {
@@ -913,28 +851,6 @@ export default function MarketplacePage() {
     }
   }
 
-  async function addStarterStock(product: MarketplaceProduct) {
-    if (!profile) throw new Error("Profile not found.");
-
-    const starterRows = getStarterInventoryRows(profile.id, product);
-
-    const { error } = await supabase.from("inventory").insert(starterRows);
-
-    if (error) {
-      const fallbackRows = starterRows.map((row) => ({
-        profile_id: row.profile_id,
-        item_name: row.item_name,
-        category: row.category,
-        unit: row.unit,
-        remaining_qty: row.remaining_qty,
-        status: row.status,
-      }));
-
-      const { error: fallbackError } = await supabase.from("inventory").insert(fallbackRows);
-
-      if (fallbackError) throw fallbackError;
-    }
-  }
 
   async function buyTreesWithForest(product: MarketplaceProduct) {
     if (!profile) throw new Error("Profile not found.");
@@ -954,6 +870,9 @@ export default function MarketplacePage() {
       throw new Error("Please select an existing forest or create a new forest.");
     }
 
+    const isPackage = getProductType(product) === "PACKAGE";
+    const starterQty = isPackage ? getStarterStockQty(product) : 0;
+
     const { data, error } = await supabase.rpc("arganwood_buy_trees", {
       p_customer_profile_id: profile.id,
       p_quantity: quantity,
@@ -962,18 +881,13 @@ export default function MarketplacePage() {
       p_existing_group_id: forestMode === "EXISTING" ? selectedGroupId : null,
       p_platform_fee_amount: getSelectedPlatformFeeAmount(product),
       p_reference_no: referenceNo,
+      p_is_package: isPackage,
+      p_starter_fertilizer_qty: starterQty,
+      p_starter_nutrients_qty: starterQty,
     });
 
     if (error) {
       throw new Error(`Tree purchase failed: ${error.message}`);
-    }
-
-    if (getProductType(product) === "PACKAGE") {
-      try {
-        await addStarterStock(product);
-      } catch (starterError: any) {
-        console.warn("Starter stock insert skipped:", starterError?.message || starterError);
-      }
     }
 
     return data;
@@ -1009,12 +923,15 @@ export default function MarketplacePage() {
       if (isTreePurchase) {
         await buyTreesWithForest(product);
 
+        const starterNote =
+          getProductType(product) === "PACKAGE"
+            ? " Starter inventory was added atomically by arganwood_buy_trees RPC."
+            : "";
+
         setMessage(
           `${product.name || "Tree"} purchased. ${getSelectedTreeQuantity(
             product
-          )} tree(s) added to ${getSelectedForestLabel()}, wallet deducted, wallet transaction recorded, and platform fee ${peso(
-            getSelectedPlatformFeeAmount(product)
-          )} posted.`
+          )} tree(s) added to ${getSelectedForestLabel()}. Wallet deduction, wallet transaction, tree records, forest records, and platform fee posting are handled atomically by arganwood_buy_trees RPC.${starterNote}`
         );
       }
 
@@ -1201,17 +1118,18 @@ export default function MarketplacePage() {
                   const isProgram = category === "Tree Care Programs";
                   const treePurchase = isTreePurchaseProduct(product);
                   const productImageUrl = getProductImageUrl(product);
+                  const isTreeVisual = type === "TREE";
 
                   return (
                     <article className={isProgram ? "card programCard" : "card"} key={product.id}>
-                      <div className="productImage">
-                        {productImageUrl ? (
-                          <img src={productImageUrl} alt={product.name || "Marketplace product"} />
-                        ) : (
-                          <div className="productImageFallback">
-                            <span>{getProductInitial(product)}</span>
-                          </div>
-                        )}
+                      <div className={isTreeVisual ? "productImage treeImageProduct" : "productImage"}>
+                        <img
+                          src={productImageUrl}
+                          alt={product.name || "Marketplace product"}
+                          onError={(event) => {
+                            event.currentTarget.src = getMarketplaceImageFallback(product);
+                          }}
+                        />
                         <em>{product.stock_status || "AVAILABLE"}</em>
                       </div>
 
@@ -1272,14 +1190,14 @@ export default function MarketplacePage() {
               ×
             </button>
 
-            <div className="modalProductImage">
-              {selectedProductImageUrl ? (
-                <img src={selectedProductImageUrl} alt={selectedProduct.name || "Marketplace product"} />
-              ) : (
-                <div className="productImageFallback">
-                  <span>{getProductInitial(selectedProduct)}</span>
-                </div>
-              )}
+            <div className={selectedProductType === "TREE" ? "modalProductImage treeImageProduct" : "modalProductImage"}>
+              <img
+                src={selectedProductImageUrl}
+                alt={selectedProduct.name || "Marketplace product"}
+                onError={(event) => {
+                  event.currentTarget.src = getMarketplaceImageFallback(selectedProduct);
+                }}
+              />
             </div>
 
             <p className="eyebrow">Product Details</p>
@@ -1848,15 +1766,17 @@ export default function MarketplacePage() {
         .modalProductImage {
           position: relative;
           width: 100%;
-          aspect-ratio: 16 / 10;
+          height: 260px;
+          padding: 18px;
           border-radius: 22px;
           overflow: hidden;
-          background:
-            linear-gradient(135deg, rgba(244,213,139,.16), rgba(34,80,52,.28)),
-            rgba(255,255,255,.06);
-          border: 1px solid rgba(232,190,103,.16);
+          background: #f8f4e8;
+          border: 1px solid rgba(92,70,35,.10);
           margin-bottom: 16px;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.60);
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .modalProductImage {
@@ -1868,8 +1788,13 @@ export default function MarketplacePage() {
         .modalProductImage img {
           width: 100%;
           height: 100%;
-          object-fit: cover;
+          object-fit: contain;
+          object-position: center;
           display: block;
+        }
+
+        .treeImageProduct img {
+          object-fit: cover;
         }
 
         .productImageFallback {

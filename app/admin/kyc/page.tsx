@@ -213,8 +213,8 @@ export default function AdminKYCPage() {
 
     const confirmed = window.confirm(
       nextStatus === "APPROVED"
-        ? "Approve this KYC submission?"
-        : "Reject this KYC submission?"
+        ? "Approve this KYC submission through review_kyc_record RPC?"
+        : "Reject this KYC submission through review_kyc_record RPC?"
     );
 
     if (!confirmed) return;
@@ -222,46 +222,31 @@ export default function AdminKYCPage() {
     setWorkingId(record.id);
     setMessage("");
 
-    const reviewedAt = new Date().toISOString();
     const finalNote =
       reviewNotes.trim() ||
       (nextStatus === "APPROVED"
         ? "KYC approved by admin after document and selfie review."
         : "KYC rejected by admin.");
 
-    const { error: kycError } = await supabase
-      .from("kyc_records")
-      .update({
-        status: nextStatus,
-        review_notes: finalNote,
-        reviewed_at: reviewedAt,
-      })
-      .eq("id", record.id);
+    try {
+      const { error } = await supabase.rpc("review_kyc_record", {
+        p_kyc_record_id: record.id,
+        p_profile_id: record.profile_id,
+        p_status: nextStatus,
+        p_review_notes: finalNote,
+      });
 
-    if (kycError) {
-      setMessage(kycError.message);
+      if (error) throw error;
+
+      setMessage(`KYC ${nextStatus}. Record and profile were synced by RPC.`);
+      closeReview();
+      await loadKYC();
+      setTab("PENDING");
+    } catch (error: any) {
+      setMessage(error?.message || `KYC ${nextStatus} failed.`);
+    } finally {
       setWorkingId("");
-      return;
     }
-
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
-        kyc_status: nextStatus,
-      })
-      .eq("id", record.profile_id);
-
-    if (profileError) {
-      setMessage(profileError.message);
-      setWorkingId("");
-      return;
-    }
-
-    setMessage(`KYC ${nextStatus}. Record moved to KYC History.`);
-    setWorkingId("");
-    closeReview();
-    await loadKYC();
-    setTab("PENDING");
   }
 
   return (
